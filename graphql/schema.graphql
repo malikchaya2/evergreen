@@ -12,8 +12,8 @@ type Patch {
   version: String!
   status: String!
   createTime: Time!
-  startTime: Time!
-  finishTime: Time!
+  startTime: Time
+  finishTime: Time
   variants: [String]!
   tasks: [String]!
   variantTasks: [VariantTask]!
