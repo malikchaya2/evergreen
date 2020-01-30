@@ -226,6 +226,27 @@ func (u *DBUser) AddFavoritedProject(identifier string) ([]string, error) {
 	return u.FavoriteProjects, nil
 }
 
+func (u *DBUser) RemoveFavoriteProject(identifier string) ([]string, error) {
+	if !util.StringSliceContains(u.FavoriteProjects, identifier) {
+		return nil, errors.Errorf("project does not exist in user favorites'%s'", identifier)
+	}
+	update := bson.M{
+		"$pull": bson.M{FavoriteProjectsKey: identifier},
+	}
+	if err := UpdateOne(bson.M{IdKey: u.Id}, update); err != nil {
+		return nil, err
+	}
+	for i := len(u.FavoriteProjects) - 1; i >= 0; i-- {
+		if u.FavoriteProjects[i] == identifier {
+			u.FavoriteProjects = append(u.FavoriteProjects[:i], u.FavoriteProjects[i+1:]...)
+		}
+	}
+
+	event.LogUserEvent(u.Id, event.UserEventTypeFavoriteProjectsUpdate, u.FavoriteProjects[:len(u.FavoriteProjects)-1], u.FavoriteProjects)
+
+	return u.FavoriteProjects, nil
+}
+
 func (u *DBUser) AddRole(role string) error {
 	if util.StringSliceContains(u.SystemRoles, role) {
 		return errors.Errorf("cannot add duplicate role '%s'", role)
