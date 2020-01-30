@@ -574,6 +574,18 @@ func (s *UserTestSuite) TestFavoriteProjects() {
 	s.EqualValues(projs2, nil)
 	// value of favorite projects should be the same as it was before
 	s.EqualValues(projs1, u.FavoriteProjects)
+
+	//remove project from favorites
+	projs3, err := u.RemoveFavoriteProject(projID)
+	s.NoError(err)
+	s.EqualValues(projs3, u.FavoriteProjects)
+
+	// try to remove the same project
+	projs4, err := u.RemoveFavoriteProject(projID)
+	s.EqualValues(err, errors.Errorf("project does not exist in user favorites'%s'", projID))
+	s.EqualValues(projs4, nil)
+	// value of favorite projects should be the same as it was before
+	s.EqualValues(projs3, u.FavoriteProjects)
 }
 
 func (s *UserTestSuite) TestHasPermission() {
