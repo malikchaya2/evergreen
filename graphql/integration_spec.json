@@ -2093,6 +2093,19 @@
           }
         }
       }
+    },
+    {
+      "query_file": "remove-favorite-project-mutation.graphql",
+      "result": {
+        "data": {
+          "addFavoriteProject": {
+            "identifier": "buildhost-test",
+            "displayName": "buildhost-test",
+            "repo": "buildhost-configuration",
+            "owner": "annie.black"
+          }
+        }
+      }
     }
   ]
 }
