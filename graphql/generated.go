@@ -50,7 +50,8 @@ type ComplexityRoot struct {
 	}
 
 	Mutation struct {
-		AddFavoriteProject func(childComplexity int, identifier string) int
+		AddFavoriteProject    func(childComplexity int, identifier string) int
+		RemoveFavoriteProject func(childComplexity int, identifier string) int
 	}
 
 	Patch struct {
@@ -166,6 +167,7 @@ type ComplexityRoot struct {
 
 type MutationResolver interface {
 	AddFavoriteProject(ctx context.Context, identifier string) (*model.UIProjectFields, error)
+	RemoveFavoriteProject(ctx context.Context, identifier string) (*model.UIProjectFields, error)
 }
 type QueryResolver interface {
 	UserPatches(ctx context.Context, userID string) ([]*model.APIPatch, error)
@@ -213,6 +215,18 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 		}
 
 		return e.complexity.Mutation.AddFavoriteProject(childComplexity, args["identifier"].(string)), true
+
+	case "Mutation.removeFavoriteProject":
+		if e.complexity.Mutation.RemoveFavoriteProject == nil {
+			break
+		}
+
+		args, err := ec.field_Mutation_removeFavoriteProject_args(context.TODO(), rawArgs)
+		if err != nil {
+			return 0, false
+		}
+
+		return e.complexity.Mutation.RemoveFavoriteProject(childComplexity, args["identifier"].(string)), true
 
 	case "Patch.activated":
 		if e.complexity.Patch.Activated == nil {
@@ -856,6 +870,7 @@ var parsedSchema = gqlparser.MustLoadSchema(
 
 type Mutation {
   addFavoriteProject(identifier: String!): Project!
+  removeFavoriteProject(identifier: String!): Project!
 }
 
 type Patch {
@@ -977,6 +992,20 @@ scalar Duration
 // region    ***************************** args.gotpl *****************************
 
 func (ec *executionContext) field_Mutation_addFavoriteProject_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
+	var err error
+	args := map[string]interface{}{}
+	var arg0 string
+	if tmp, ok := rawArgs["identifier"]; ok {
+		arg0, err = ec.unmarshalNString2string(ctx, tmp)
+		if err != nil {
+			return nil, err
+		}
+	}
+	args["identifier"] = arg0
+	return args, nil
+}
+
+func (ec *executionContext) field_Mutation_removeFavoriteProject_args(ctx context.Context, rawArgs map[string]interface{}) (map[string]interface{}, error) {
 	var err error
 	args := map[string]interface{}{}
 	var arg0 string
@@ -1158,6 +1187,47 @@ func (ec *executionContext) _Mutation_addFavoriteProject(ctx context.Context, fi
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
 		return ec.resolvers.Mutation().AddFavoriteProject(rctx, args["identifier"].(string))
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		if !graphql.HasFieldError(ctx, fc) {
+			ec.Errorf(ctx, "must not be null")
+		}
+		return graphql.Null
+	}
+	res := resTmp.(*model.UIProjectFields)
+	fc.Result = res
+	return ec.marshalNProject2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐUIProjectFields(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) _Mutation_removeFavoriteProject(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	fc := &graphql.FieldContext{
+		Object:   "Mutation",
+		Field:    field,
+		Args:     nil,
+		IsMethod: true,
+	}
+
+	ctx = graphql.WithFieldContext(ctx, fc)
+	rawArgs := field.ArgumentMap(ec.Variables)
+	args, err := ec.field_Mutation_removeFavoriteProject_args(ctx, rawArgs)
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	fc.Args = args
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		return ec.resolvers.Mutation().RemoveFavoriteProject(rctx, args["identifier"].(string))
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -4966,6 +5036,11 @@ func (ec *executionContext) _Mutation(ctx context.Context, sel ast.SelectionSet)
 			out.Values[i] = graphql.MarshalString("Mutation")
 		case "addFavoriteProject":
 			out.Values[i] = ec._Mutation_addFavoriteProject(ctx, field)
+			if out.Values[i] == graphql.Null {
+				invalids++
+			}
+		case "removeFavoriteProject":
+			out.Values[i] = ec._Mutation_removeFavoriteProject(ctx, field)
 			if out.Values[i] == graphql.Null {
 				invalids++
 			}
