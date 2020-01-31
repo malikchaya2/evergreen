@@ -20,6 +20,8 @@ import (
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	mgobson "gopkg.in/mgo.v2/bson"
 )
 
@@ -395,6 +397,20 @@ func (h *Host) SetProvisioning() error {
 }
 
 func (h *Host) SetDecommissioned(user string, logs string) error {
+	if h.HasContainers {
+		containers, err := h.GetContainers()
+		grip.Error(message.WrapError(err, message.Fields{
+			"message": "error getting containers",
+			"host":    h.Id,
+		}))
+		for _, c := range containers {
+			err = c.SetStatus(evergreen.HostDecommissioned, user, "parent is being decommissioned")
+			grip.Error(message.WrapError(err, message.Fields{
+				"message": "error decommissioning container",
+				"host":    c.Id,
+			}))
+		}
+	}
 	return h.SetStatus(evergreen.HostDecommissioned, user, logs)
 }
 
@@ -1238,6 +1254,32 @@ func (h *Host) Remove() error {
 			IdKey: h.Id,
 		},
 	)
+}
+
+// RemoveStrict deletes a host and errors if the host is not found
+func RemoveStrict(id string) error {
+	ctx, cancel := evergreen.GetEnvironment().Context()
+	defer cancel()
+	result, err := evergreen.GetEnvironment().DB().Collection(Collection).DeleteOne(ctx, bson.M{IdKey: id})
+	if err != nil {
+		return err
+	}
+	if result.DeletedCount == 0 {
+		return errors.Errorf("host %s not found", id)
+	}
+	return nil
+}
+
+// Replace overwrites an existing host document with a new one. If no existing host is found, the new one will be inserted anyway.
+func (h *Host) Replace() error {
+	ctx, cancel := evergreen.GetEnvironment().Context()
+	defer cancel()
+	result := evergreen.GetEnvironment().DB().Collection(Collection).FindOneAndReplace(ctx, bson.M{IdKey: h.Id}, h, options.FindOneAndReplace().SetUpsert(true))
+	err := result.Err()
+	if errors.Cause(err) == mongo.ErrNoDocuments {
+		return nil
+	}
+	return errors.Wrap(err, "error replacing host")
 }
 
 // GetElapsedCommunicationTime returns how long since this host has communicated with evergreen or vice versa
