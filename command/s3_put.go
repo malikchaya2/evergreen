@@ -69,6 +69,7 @@ type s3put struct {
 	//  "private", which allows logged-in users to see the file;
 	//  "public", which allows anyone to see the file; or
 	//  "none", which hides the file from the UI for everybody.
+	//  "signed" which grants access to private S3 objects to logged-in users
 	// If unset, the file will be public.
 	Visibility string `mapstructure:"visibility" plugin:"expand"`
 
@@ -81,6 +82,8 @@ type s3put struct {
 	// workDir will be empty if an absolute path is provided to the file.
 	workDir     string
 	skipMissing bool
+
+	signedURL bool
 
 	bucket pail.Bucket
 
@@ -176,6 +179,14 @@ func (s3pc *s3put) expandParams(conf *model.TaskConfig) error {
 	} else {
 		s3pc.skipMissing = false
 	}
+
+	if s3pc.Visibility == "signed" {
+		s3pc.signedURL = true
+		s3pc.Visibility = "private"
+	} else {
+		s3pc.signedURL = false
+	}
+
 	return nil
 }
 
