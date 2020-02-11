@@ -3,6 +3,7 @@ package command
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -10,7 +11,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/aws/endpoints"
+	"github.com/aws/aws-sdk-go/service/s3"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/artifact"
 	"github.com/evergreen-ci/evergreen/rest/client"
@@ -223,7 +226,8 @@ func (s3pc *s3put) Execute(ctx context.Context,
 	// create pail bucket
 	httpClient := util.GetHTTPClient()
 	httpClient.Timeout = s3HTTPClientTimeout
-	defer util.PutHTTPClient(httpClient)
+	defer util.PutHTT
+	PClient(httpClient)
 	if err := s3pc.createPailBucket(httpClient); err != nil {
 		return errors.Wrap(err, "problem connecting to s3")
 	}
@@ -368,6 +372,21 @@ retryLoop:
 	return nil
 }
 
+func (s3pc *s3put, filename, string) signURL(urlStr string) error {
+
+	req, _ := svc.GetObjectRequest(&s3.GetObjectInput{
+		Bucket: s3pc.bucket,
+		Key:    filename,
+	})
+	urlStr, err := req.Presign(15 * time.Minute)
+	if err != nil {
+		log.Fatalf("problem signing request: %s", err.Error())
+	}
+
+	return urlStr
+
+}
+
 // attachTaskFiles is responsible for sending the
 // specified file to the API Server. Does not support multiple file putting.
 func (s3pc *s3put) attachFiles(ctx context.Context, comm client.Communicator, logger client.LoggerProducer, localFiles []string, remoteFile string) error {
@@ -390,10 +409,12 @@ func (s3pc *s3put) attachFiles(ctx context.Context, comm client.Communicator, lo
 			Name:       displayName,
 			Link:       fileLink,
 			Visibility: s3pc.Visibility,
+			//for ticket EVG-7135, pass the aws key and secret here so that the app server has the info for purposes of displaying it in task.go 
 		})
 	}
 
-	err := comm.AttachFiles(ctx, s3pc.taskdata, files)
+	err := comm.AttachFiles(ctx, s3pc.taskdata, files) //talks back to the app server . app server records in db. 
+	//indicate that you want it signed. 
 	if err != nil {
 		return errors.Wrap(err, "Attach files failed")
 	}
