@@ -55,7 +55,7 @@ func APIAnnotationToService(m APIAnnotation) *task_annotations.Annotation {
 func APIAnnotationSourceBuildFromService(t task_annotations.AnnotationSource) *APIAnnotationSource {
 	m := APIAnnotationSource{}
 	m.Author = StringStringPtr(t.Author)
-	m.Time = TimeTimeTimeTimePtr(t.Time)
+	m.Time = ToTimePtr(t.Time)
 	return &m
 }
 
@@ -64,7 +64,11 @@ func APIAnnotationSourceBuildFromService(t task_annotations.AnnotationSource) *A
 func APIAnnotationSourceToService(m APIAnnotationSource) *task_annotations.AnnotationSource {
 	out := &task_annotations.AnnotationSource{}
 	out.Author = StringPtrString(m.Author)
-	out.Time = TimeTimePtrTimeTime(m.Time)
+	if m.Time != nil {
+		out.Time = *m.Time
+	} else {
+		out.Time = time.Time{}
+	}
 	return out
 }
 
@@ -143,37 +147,4 @@ func IntPtrInt(in *int) int {
 		return out
 	}
 	return int(*in)
-}
-
-func IntPtrIntPtr(in *int) *int {
-	if in == nil {
-		return nil
-	}
-	out := int(*in)
-	return &out
-}
-
-func TimeTimeTimeTime(in time.Time) time.Time {
-	return time.Time(in)
-}
-
-func TimeTimeTimeTimePtr(in time.Time) *time.Time {
-	out := time.Time(in)
-	return &out
-}
-
-func TimeTimePtrTimeTime(in *time.Time) time.Time {
-	var out time.Time
-	if in == nil {
-		return out
-	}
-	return time.Time(*in)
-}
-
-func TimeTimePtrTimeTimePtr(in *time.Time) *time.Time {
-	if in == nil {
-		return nil
-	}
-	out := time.Time(*in)
-	return &out
 }
