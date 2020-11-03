@@ -7,27 +7,27 @@ import (
 )
 
 type APITaskAnnotation struct {
-	Id             *string       `json:"id"`
-	TaskId         *string       `json:"task_id"`
-	TaskExecution  *int          `json:"task_execution"`
-	APIAnnotation  APIAnnotation `json:"api_annotation"`
-	UserAnnotation APIAnnotation `json:"user_annotation"`
+	Id             *string       `bson:"_id" json:"id"`
+	TaskId         *string       `bson:"task_id" json:"task_id"`
+	TaskExecution  *int          `bson:"task_execution" json:"task_execution"`
+	APIAnnotation  APIAnnotation `bson:"api_annotation,omitempty" json:"api_annotation,omitempty"`
+	UserAnnotation APIAnnotation `bson:"user_annotation,omitempty" json:"user_annotation,omitempty"`
 }
 
 type APIAnnotation struct {
-	Note          *string             `json:"note"`
-	Issues        []APIIssueLink      `json:"issues"`
-	SuspectIssues []APIIssueLink      `json:"suspected_issues"`
-	Source        APIAnnotationSource `json:"source"`
+	Note          *string             `bson:"note,omitempty" json:"note,omitempty"`
+	Issues        []APIIssueLink      `bson:"issues,omitempty" json:"issues,omitempty"`
+	SuspectIssues []APIIssueLink      `bson:"suspected_issues,omitempty" json:"suspected_issues,omitempty"`
+	Source        APIAnnotationSource `bson:"source" json:"source"`
 }
 type APIAnnotationSource struct {
-	Author *string    `json:"author"`
-	Time   *time.Time `json:"time"`
+	Author *string    `bson:"author,omitempty" json:"author,omitempty"`
+	Time   *time.Time `bson:"time,omitempty" json:"time,omitempty"`
 }
 
 type APIIssueLink struct {
-	URL      *string `json:"url"`
-	IssueKey *string `json:"issue_key"`
+	URL      *string `bson:"url" json:"url"`
+	IssueKey *string `bson:"issue_key,omitempty" json:"issue_key,omitempty"`
 }
 
 // APIAnnotationBuildFromService takes the task_annotations.Annotation DB struct and
