@@ -11,30 +11,28 @@ type DisplayTask {
   Name: String
   ExecutionTasks: [String!]! @aliases(db: ExecTasks)
 }
-type APIIssueLink {
+type IssueLink {
   URL: String @aliases(db: URL, json: url)
   IssueKey: String @aliases(db: IssueKey, json: issue_key)
 }
 
-type APIAnnotationSource {
+type AnnotationSource {
   Author: String @aliases(db: Author, json: author)
   Time: Time @aliases(db: Time, json: time)
 }
 
-type ApiTaskAnnotation {
+type TaskAnnotation {
   Id: String @aliases(db: Id, json: id)
   TaskId: String @aliases(db: TaskId, json: task_id)
   TaskExecution: Int @aliases(db: TaskExecution, json: task_execution)
-  APIAnnotation: APIAnnotation @aliases(db: APIAnnotation, json: api_annotation)
-  UserAnnotation: APIAnnotation
-    @aliases(db: UserAnnotation, json: user_annotation)
+  APIAnnotation: Annotation @aliases(db: APIAnnotation, json: api_annotation)
+  UserAnnotation: Annotation @aliases(db: UserAnnotation, json: user_annotation)
 }
-type APIAnnotation {
+type Annotation {
   Note: String @aliases(db: Note, json: note)
-  Issues: [APIIssueLink] @aliases(db: Issues, json: issues)
-  SuspectIssues: [APIIssueLink]
-    @aliases(db: SuspectIssues, json: suspected_issues)
-  Source: APIAnnotationSource @aliases(db: Source, json: source)
+  Issues: [IssueLink] @aliases(db: Issues, json: issues)
+  SuspectIssues: [IssueLink] @aliases(db: SuspectIssues, json: suspected_issues)
+  Source: AnnotationSource @aliases(db: Source, json: source)
 }
 
 scalar Time
