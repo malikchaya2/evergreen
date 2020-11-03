@@ -2,8 +2,6 @@ package task_annotations
 
 import (
 	"time"
-
-	"github.com/evergreen-ci/birch"
 )
 
 type TaskAnnotation struct {
@@ -15,7 +13,8 @@ type TaskAnnotation struct {
 	// user edits to the annotation that will be preserved
 	UserAnnotation Annotation `bson:"user_annotation,omitempty" json:"user_annotation,omitempty"`
 	// structured data about the task (not displayed in the UI, but available in the API)
-	Metadata *birch.Document `bson:"metadata,omitempty" json:"metadata,omitempty"`
+	// Metadata *birch.Document `bson:"metadata,omitempty" json:"metadata,omitempty"`
+	Metadata string `bson:"metadata,omitempty" json:"metadata,omitempty"`
 }
 
 type IssueLink struct {

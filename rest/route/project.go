@@ -11,6 +11,7 @@ import (
 	"github.com/evergreen-ci/evergreen"
 	dbModel "github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/event"
+	"github.com/evergreen-ci/evergreen/model/task_annotations"
 	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/evergreen/rest/data"
 	"github.com/evergreen-ci/evergreen/rest/model"
@@ -28,6 +29,7 @@ type projectGetHandler struct {
 	limit int
 	user  *user.DBUser
 	sc    data.Connector
+	t     task_annotations.TaskAnnotation
 }
 
 func makeFetchProjectsRoute(sc data.Connector) gimlet.RouteHandler {
