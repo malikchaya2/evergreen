@@ -140,6 +140,7 @@ func (n *Notification) Composer(env evergreen.Environment) (message.Composer, er
 		}
 
 		payload.Project = jiraIssue.Project
+		// payload.Reporter = "Reporter_Test_Jira"
 		payload.Type = jiraIssue.IssueType
 		payload.Callback = func(issueKey string) {
 			event.LogJiraIssueCreated(n.Metadata.TaskID, n.Metadata.TaskExecution, issueKey)

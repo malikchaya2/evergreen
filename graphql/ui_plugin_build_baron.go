@@ -17,6 +17,7 @@ import (
 	"github.com/evergreen-ci/utility"
 	"github.com/mitchellh/mapstructure"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -43,6 +44,12 @@ func BbFileTicket(context context.Context, taskId string) (bool, error) {
 	queue := env.RemoteQueue()
 	buildBaronProjects := BbGetConfig(settings)
 	n, err := makeNotification(settings, buildBaronProjects[t.Project].TicketCreateProject, t)
+
+	grip.Debug(message.Fields{
+		"message": "Chaya ui_plugin_build_baron.go 49",
+		"n":       n,
+		"err":     err,
+	})
 	if err != nil {
 		return taskNotFound, err
 	}
@@ -76,6 +83,14 @@ func makeNotification(settings *evergreen.Settings, project string, t *task.Task
 		return nil, errors.New("unexpected error creating notification")
 	}
 	n.SetTaskMetadata(t.Id, t.Execution)
+
+	grip.Debug(message.Fields{
+		"message": "Chaya ui_plugin_build_baron.go 92",
+		"payload": payload,
+		"sub":     sub,
+		"n":       n,
+		"err":     err,
+	})
 
 	err = notification.InsertMany(*n)
 	if err != nil {

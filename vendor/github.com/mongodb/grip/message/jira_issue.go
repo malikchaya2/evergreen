@@ -1,6 +1,8 @@
 package message
 
-import "fmt"
+import (
+	"fmt"
+)
 
 type jiraMessage struct {
 	issue *JiraIssue
@@ -53,7 +55,6 @@ func NewJiraMessage(project, summary string, fields ...JiraField) Composer {
 		Summary: summary,
 		Fields:  map[string]interface{}{},
 	}
-
 	// Assign given fields to jira issue fields
 	for _, f := range fields {
 		switch f.Key {

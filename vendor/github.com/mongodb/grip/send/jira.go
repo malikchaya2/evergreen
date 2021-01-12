@@ -177,6 +177,8 @@ func getFields(m message.Composer) *jira.IssueFields {
 		if msg.Reporter != "" {
 			issueFields.Reporter = &jira.User{Name: msg.Reporter}
 		}
+		// dummyUser := "test-user-for-jira"
+		// issueFields.Reporter = &jira.User{Name: dummyUser}
 		if msg.Assignee != "" {
 			issueFields.Assignee = &jira.User{Name: msg.Assignee}
 		}

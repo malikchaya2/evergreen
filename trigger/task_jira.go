@@ -196,6 +196,7 @@ func (j *jiraBuilder) build() (*message.JiraIssue, error) {
 		Fields:      fields,
 		Components:  components,
 		Labels:      labels,
+		Reporter:    "chaya.malik",
 	}
 
 	grip.Info(message.Fields{
@@ -204,6 +205,11 @@ func (j *jiraBuilder) build() (*message.JiraIssue, error) {
 		"jira_project": j.project,
 		"task":         j.data.Task.Id,
 		"project":      j.data.Project.Id,
+	})
+
+	grip.Debug(message.Fields{
+		"message": "Chaya ui_plugin_build_baron.go 92",
+		"issue":   issue,
 	})
 
 	return &issue, nil
