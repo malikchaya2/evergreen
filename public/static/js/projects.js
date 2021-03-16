@@ -384,6 +384,8 @@ mciModule.controller(
           $scope.project_triggers = data.ProjectRef.triggers || [];
           $scope.patch_trigger_aliases =
             data.ProjectRef.patch_trigger_aliases || [];
+          $scope.github_trigger_aliases =
+            data.ProjectRef.github_trigger_aliases || [];
           $scope.periodic_builds = data.ProjectRef.periodic_builds || [];
           $scope.permissions = data.permissions || {};
           $scope.github_valid_orgs = data.github_valid_orgs;
@@ -654,6 +656,16 @@ mciModule.controller(
       );
       delete $scope.github_alias;
       $scope.invalidGitHubPatchDefinitionMessage = "";
+    };
+
+    $scope.validGithubTrigger = function (trigger_alias) {
+      found = false;
+      $scope.patch_trigger_aliases.forEach((patch_trigger_alias) => {
+        if (patch_trigger_alias.alias == trigger_alias) {
+          found = true;
+        }
+      });
+      return found;
     };
 
     $scope.addGithubChecksAlias = function () {
