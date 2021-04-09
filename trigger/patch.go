@@ -192,6 +192,7 @@ func (t *patchTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (bool,
 
 	return isReady, nil, nil
 }
+
 func getChildrenOrSiblingsReadiness(childrenOrSiblings []string) (string, *patch.Patch, error) {
 	childrenStatus := evergreen.PatchSucceeded
 	for _, childPatch := range childrenOrSiblings {

@@ -9,6 +9,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/event"
 	"github.com/evergreen-ci/evergreen/model/notification"
+	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/utility"
@@ -169,6 +170,13 @@ func (t *versionTriggers) versionOutcome(sub *event.Subscription) (*notification
 	if t.data.Status != evergreen.VersionSucceeded && t.data.Status != evergreen.VersionFailed {
 		return nil, nil
 	}
+	isReady, n, err := t.waitOnChildrenOrSiblings(sub)
+	if n != nil || err != nil {
+		return n, err
+	}
+	if !isReady {
+		return nil, nil
+	}
 
 	return t.generate(sub, "")
 }
@@ -186,11 +194,27 @@ func (t *versionTriggers) versionFailure(sub *event.Subscription) (*notification
 		return nil, nil
 	}
 
+	isReady, n, err := t.waitOnChildrenOrSiblings(sub)
+	if n != nil || err != nil {
+		return n, err
+	}
+	if !isReady {
+		return nil, nil
+	}
+
 	return t.generate(sub, "")
 }
 
 func (t *versionTriggers) versionSuccess(sub *event.Subscription) (*notification.Notification, error) {
 	if t.data.Status != evergreen.VersionSucceeded {
+		return nil, nil
+	}
+
+	isReady, n, err := t.waitOnChildrenOrSiblings(sub)
+	if n != nil || err != nil {
+		return n, err
+	}
+	if !isReady {
 		return nil, nil
 	}
 
@@ -266,4 +290,62 @@ func (t *versionTriggers) versionRegression(sub *event.Subscription) (*notificat
 		}
 	}
 	return nil, nil
+}
+
+func (t *versionTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (bool, *notification.Notification, error) {
+
+	if !(t.version.IsParent() || sub.Subscriber.Type == event.ParentWaitOnChildSubscriberType) {
+		return true, nil, nil
+	}
+	isReady := false
+	patchDoc, _ := patch.FindOne(patch.ByVersion(t.version.Id))
+	// get the children or siblings to wait on
+	childrenOrSiblings, parentPatch, err := patchDoc.GetPatchFamily()
+	if err != nil {
+		return isReady, nil, errors.Wrap(err, "error getting child or sibling patches")
+	}
+
+	childrenStatus, unreadyChild, err := getChildrenOrSiblingsReadiness(childrenOrSiblings)
+	if err != nil {
+		return isReady, nil, errors.Wrap(err, "error getting child or sibling information")
+	}
+	//make sure the children or siblings are done before sending the notification
+	if !evergreen.IsFinishedPatchStatus(childrenStatus) {
+		parentId := patchDoc.Id.Hex()
+		if patchDoc.IsChild() {
+			parentId = parentPatch.Id.Hex()
+		}
+		// if there is still a child or sibling that's not done, subscribe on it and don't create the notification
+		err = subscribeOnChild(parentId, unreadyChild.Id.Hex(), sub)
+		if err != nil {
+			return false, nil, errors.Wrap(err, "error subscribing on child patch")
+		}
+		return isReady, nil, nil
+	}
+	isReady = true
+	if childrenStatus == evergreen.PatchFailed {
+		t.data.Status = evergreen.PatchFailed
+	}
+
+	// convert the subscription to the right type
+	if sub.Subscriber.Type == event.ParentWaitOnChildSubscriberType {
+		parentVersion, err := t.version.GetParentVersion()
+		if err != nil {
+			return isReady, nil, errors.Wrap(err, "error getting parentVersion")
+		}
+		if parentVersion == nil {
+			return isReady, nil, errors.Wrap(err, "error finding parentVersion")
+		}
+		t.version = parentVersion
+		target, ok := sub.Subscriber.Target.(*event.ParentWaitOnChildSubscriber)
+		if !ok {
+			return isReady, nil, errors.Errorf("target '%s' didn't not have expected type", sub.Subscriber.Target)
+		}
+		target.OriginalSub.LastUpdated = time.Now()
+
+		newSub := event.NewExpiringVersionOutcomeSubscription(parentPatch.Id.Hex(), target.OriginalSub.Subscriber)
+		n, err := t.generate(&newSub, "")
+		return isReady, n, err
+	}
+	return isReady, nil, nil
 }
