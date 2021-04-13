@@ -5,6 +5,8 @@ import (
 
 	"github.com/evergreen-ci/evergreen/model/event"
 	"github.com/evergreen-ci/utility"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 )
 
 type APISelector struct {
@@ -33,10 +35,19 @@ func (s *APISelector) BuildFromService(h interface{}) error {
 		return errors.New("unrecognized type for APISelector")
 	}
 
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriptions.go 39",
+		"s":       s,
+	})
+
 	return nil
 }
 
 func (s *APISelector) ToService() (interface{}, error) {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriptions.go 47",
+		"s":       s,
+	})
 	return event.Selector{
 		Data: utility.FromStringPtr(s.Data),
 		Type: utility.FromStringPtr(s.Type),
@@ -78,6 +89,10 @@ func (s *APISubscription) BuildFromService(h interface{}) error {
 		return errors.New("unrecognized type for APISubscription")
 	}
 
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriptions.go 93",
+		"s":       s,
+	})
 	return nil
 }
 
@@ -123,6 +138,10 @@ func (s *APISubscription) ToService() (interface{}, error) {
 		}
 		out.RegexSelectors = append(out.RegexSelectors, newSelector)
 	}
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriptions.go 142",
+		"s":       s,
+	})
 
 	return out, nil
 }

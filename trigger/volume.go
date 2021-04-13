@@ -104,7 +104,7 @@ func (t *volumeTriggers) generate(sub *event.Subscription) (*notification.Notifi
 		return nil, errors.Wrap(err, "unable to parse templates")
 	}
 
-	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
+	return notification.New(t.event.ID, sub.Trigger, "", &sub.Subscriber, payload)
 }
 
 func (t *volumeTriggers) volumeExpiration(sub *event.Subscription) (*notification.Notification, error) {

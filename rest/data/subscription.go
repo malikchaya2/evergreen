@@ -10,6 +10,7 @@ import (
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -87,6 +88,13 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 	for _, subscription := range dbSubscriptions {
 		catcher.Add(subscription.Upsert())
 	}
+	// gets logged
+	grip.Info(message.Fields{
+		"message":         "ChayaMTesting rest/data/subscription.go 93",
+		"subscriptions":   subscriptions,
+		"dbSubscriptions": dbSubscriptions,
+	})
+
 	return catcher.Resolve()
 }
 

@@ -382,7 +382,7 @@ func (t *buildTriggers) generate(sub *event.Subscription, pastTenseOverride stri
 		return nil, errors.Wrap(err, "failed to build notification")
 	}
 
-	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
+	return notification.New(t.event.ID, sub.Trigger, "", &sub.Subscriber, payload)
 }
 
 func taskFormatFromCache(t task.Task) string {

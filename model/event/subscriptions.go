@@ -13,6 +13,7 @@ import (
 	"github.com/mongodb/anser/bsonutil"
 	adb "github.com/mongodb/anser/db"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	mgobson "gopkg.in/mgo.v2/bson"
@@ -431,6 +432,13 @@ func FindSubscriptionsByOwner(owner string, ownerType OwnerType) ([]Subscription
 	})
 	subscriptions := []Subscription{}
 	err := db.FindAllQ(SubscriptionsCollection, query, &subscriptions)
+	grip.Info(message.Fields{
+		"message":       "ChayaMTesting model/event/subscriptions.go 436",
+		"query":         query,
+		"subscriptions": subscriptions,
+		"err":           err,
+	})
+
 	return subscriptions, errors.Wrapf(err, "error retrieving subscriptions for owner %s", owner)
 }
 

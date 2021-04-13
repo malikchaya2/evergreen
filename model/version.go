@@ -59,6 +59,9 @@ type Version struct {
 
 	// child patches will store the id of the parent patch
 	ParentPatchID string `bson:"parent_patch_id" json:"parent_patch_id,omitempty"`
+
+	// IsParent will store a boolean indicating wether the patch is a parent patch
+	IsParent bool `bson:"is_parent" json:"is_parent,omitempty"`
 	// version errors - this is used to keep track of any errors that were
 	// encountered in the process of creating a version. If there are no errors
 	// this field is omitted in the database
@@ -114,11 +117,24 @@ func (self *Version) UpdateBuildVariants() error {
 	)
 }
 
-func (v *Version) IsParent() bool {
-	return v.ParentPatchID != ""
+func (v *Version) ParentOrChild() string {
+	if v == nil {
+		return ""
+	}
+	if v.IsParent {
+		return patch.Parent
+	}
+	if v.ParentPatchID != "" {
+		return patch.Child
+	}
+
+	return ""
 }
 
 func (v *Version) GetParentVersion() (*Version, error) {
+	if v == nil {
+		return nil, errors.Errorf("Version is nil")
+	}
 	v, err := VersionFindOne(VersionById(v.ParentPatchID))
 	if err != nil {
 		return nil, errors.WithStack(err)

@@ -101,6 +101,10 @@ func (j *eventSendJob) Run(_ context.Context) {
 	}
 
 	if !utility.IsZeroTime(n.SentAt) {
+		grip.Info(message.Fields{
+			"message": "ChayaMTesting model/patch_lifecycle.go 307",
+			"n":       n,
+		})
 		j.AddError(errors.Errorf("notification '%s' has already been processed", n.ID))
 		return
 	}

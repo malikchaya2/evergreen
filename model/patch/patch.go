@@ -168,6 +168,11 @@ type Patch struct {
 	MergeStatus string `json:"merge_status"`
 }
 
+const (
+	Parent = "parent"
+	Child  = "child"
+)
+
 func (p *Patch) MarshalBSON() ([]byte, error)  { return mgobson.Marshal(p) }
 func (p *Patch) UnmarshalBSON(in []byte) error { return mgobson.Unmarshal(in, p) }
 

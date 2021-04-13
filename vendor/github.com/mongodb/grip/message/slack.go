@@ -102,7 +102,6 @@ type slackMessage struct {
 func NewSlackMessage(p level.Priority, target string, msg string, attachments []SlackAttachment) Composer {
 	s := MakeSlackMessage(target, msg, attachments)
 	_ = s.SetPriority(p)
-
 	return s
 }
 

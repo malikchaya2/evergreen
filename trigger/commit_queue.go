@@ -80,7 +80,7 @@ func (t *commitQueueTriggers) commitQueueOutcome(sub *event.Subscription) (*noti
 		return nil, errors.Wrap(err, "failed to build notification")
 	}
 
-	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
+	return notification.New(t.event.ID, sub.Trigger, "", &sub.Subscriber, payload)
 }
 
 func (t *commitQueueTriggers) makeData(sub *event.Subscription) (*commonTemplateData, error) {

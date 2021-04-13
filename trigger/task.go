@@ -349,7 +349,7 @@ func (t *taskTriggers) generate(sub *event.Subscription, pastTenseOverride, test
 			return nil, errors.Wrap(err, "failed to build notification")
 		}
 	}
-	n, err := notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
+	n, err := notification.New(t.event.ID, sub.Trigger, "", &sub.Subscriber, payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to create a notification")
 	}

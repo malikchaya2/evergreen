@@ -303,6 +303,11 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 			return nil, errors.Wrap(err, "problem getting parameters from parent patch")
 		}
 	}
+	grip.Info(message.Fields{
+		"message":                "ChayaMTesting model/patch_lifecycle.go 307",
+		"p":                      p,
+		"p.Triggers.ParentPatch": p.Triggers.ParentPatch,
+	})
 
 	patchVersion := &Version{
 		Id:                  p.Id.Hex(),
@@ -316,11 +321,20 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 		Status:              evergreen.PatchCreated,
 		Requester:           requester,
 		ParentPatchID:       p.Triggers.ParentPatch,
+		IsParent:            p.IsParent(),
 		Branch:              projectRef.Branch,
 		RevisionOrderNumber: p.PatchNumber,
 		AuthorID:            p.Author,
 		Parameters:          p.Parameters,
 	}
+	grip.Info(message.Fields{
+		"message":                    "ChayaMTesting model/patch_lifecycle.go 307",
+		"p":                          p,
+		"p.Triggers.ParentPatch":     p.Triggers.ParentPatch,
+		"patchVersion":               patchVersion,
+		"patchVersion.ParentPatchID": patchVersion.ParentPatchID,
+	})
+
 	intermediateProject.CreateTime = patchVersion.CreateTime
 
 	tasks := TaskVariantPairs{}

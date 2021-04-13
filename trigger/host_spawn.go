@@ -141,7 +141,7 @@ func (t *spawnHostProvisioningTriggers) generate(sub *event.Subscription) (*noti
 		return nil, errors.Errorf("unsupported subscriber type: %s", sub.ResourceType)
 	}
 
-	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
+	return notification.New(t.event.ID, sub.Trigger, "", &sub.Subscriber, payload)
 }
 
 func spawnHostURL(base string) string {
@@ -186,7 +186,7 @@ func (t *spawnHostStateChangeTriggers) spawnHostStateChangeOutcome(sub *event.Su
 		return nil, errors.Wrap(err, "can't make payload")
 	}
 
-	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
+	return notification.New(t.event.ID, sub.Trigger, "", &sub.Subscriber, payload)
 }
 
 func (t *spawnHostStateChangeTriggers) makePayload(sub *event.Subscription) (interface{}, error) {

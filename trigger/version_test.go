@@ -66,6 +66,7 @@ func (s *VersionSuite) SetupTest() {
 	}
 
 	s.subs = []event.Subscription{
+		// do it like this
 		event.NewSubscriptionByID(event.ResourceTypeVersion, event.TriggerOutcome, s.event.ResourceId, apiSub),
 		event.NewSubscriptionByID(event.ResourceTypeVersion, event.TriggerSuccess, s.event.ResourceId, apiSub),
 		event.NewSubscriptionByID(event.ResourceTypeVersion, event.TriggerFailure, s.event.ResourceId, apiSub),

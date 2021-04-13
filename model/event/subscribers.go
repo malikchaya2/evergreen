@@ -6,6 +6,7 @@ import (
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	mgobson "gopkg.in/mgo.v2/bson"
 )
@@ -115,6 +116,9 @@ func (s *Subscriber) String() string {
 }
 
 func (s *Subscriber) Validate() error {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting model/event/subscribers.go 120",
+	})
 	catcher := grip.NewBasicCatcher()
 	if !utility.StringSliceContains(SubscriberTypes, s.Type) {
 		catcher.Add(errors.Errorf("%s is not a valid subscriber type", s.Type))
@@ -137,6 +141,10 @@ type WebhookHeader struct {
 }
 
 func (s *WebhookSubscriber) String() string {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting model/event/subscribers.go WebhookSubscriber 192",
+		"s":       s,
+	})
 	if len(s.URL) == 0 {
 		return "NIL_URL"
 	}
@@ -149,6 +157,10 @@ type JIRAIssueSubscriber struct {
 }
 
 func (s *JIRAIssueSubscriber) String() string {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting model/event/subscribers.go JIRAIssueSubscriber 192",
+		"s":       s,
+	})
 	return fmt.Sprintf("%s-%s", s.Project, s.IssueType)
 }
 
@@ -161,6 +173,10 @@ type GithubPullRequestSubscriber struct {
 }
 
 func (s *GithubPullRequestSubscriber) String() string {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting model/event/subscribers.go  GithubPullRequestSubscriber 192",
+		"s":       s,
+	})
 	return fmt.Sprintf("%s-%s-%d-%s-%s", s.Owner, s.Repo, s.PRNumber, s.Ref, s.ChildId)
 }
 
@@ -184,6 +200,10 @@ type ChildPatchSubscriber struct {
 }
 
 func (s *GithubCheckSubscriber) String() string {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting model/event/subscribers.go  GithubCheckSubscriber 192",
+		"s":       s,
+	})
 	return fmt.Sprintf("%s-%s-%s", s.Owner, s.Repo, s.Ref)
 }
 

@@ -13,6 +13,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/utility"
+	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
@@ -46,6 +47,14 @@ func makeVersionTriggers() eventHandler {
 }
 
 func (t *versionTriggers) Fetch(e *event.EventLogEntry) error {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go Fetch 221",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		// // "version.isParent": t.version.IsParent,
+	})
 	var err error
 	if err = t.uiConfig.Get(evergreen.GetEnvironment()); err != nil {
 		return errors.Wrap(err, "Failed to fetch ui config")
@@ -101,6 +110,15 @@ func (t *versionTriggers) Selectors() []event.Selector {
 }
 
 func (t *versionTriggers) makeData(sub *event.Subscription, pastTenseOverride string) (*commonTemplateData, error) {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go makeData 221",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
 	api := restModel.APIVersion{}
 	if err := api.BuildFromService(t.version); err != nil {
 		return nil, errors.Wrap(err, "error building json model")
@@ -153,6 +171,15 @@ func (t *versionTriggers) makeData(sub *event.Subscription, pastTenseOverride st
 }
 
 func (t *versionTriggers) generate(sub *event.Subscription, pastTenseOverride string) (*notification.Notification, error) {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go generate 221",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
 	data, err := t.makeData(sub, pastTenseOverride)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to collect version data")
@@ -163,14 +190,35 @@ func (t *versionTriggers) generate(sub *event.Subscription, pastTenseOverride st
 		return nil, errors.Wrap(err, "failed to build notification")
 	}
 
-	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
+	return notification.New(t.event.ID, sub.Trigger, t.version.ParentOrChild(), &sub.Subscriber, payload)
 }
 
 func (t *versionTriggers) versionOutcome(sub *event.Subscription) (*notification.Notification, error) {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go 172",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
 	if t.data.Status != evergreen.VersionSucceeded && t.data.Status != evergreen.VersionFailed {
 		return nil, nil
 	}
 	isReady, n, err := t.waitOnChildrenOrSiblings(sub)
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go 184",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+		"isReady": isReady,
+		"n":       n,
+		"err":     err,
+	})
 	if n != nil || err != nil {
 		return n, err
 	}
@@ -178,10 +226,32 @@ func (t *versionTriggers) versionOutcome(sub *event.Subscription) (*notification
 		return nil, nil
 	}
 
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go about to generate sub 204",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+		"isReady": isReady,
+		"n":       n,
+		"err":     err,
+	})
 	return t.generate(sub, "")
 }
 
 func (t *versionTriggers) versionGithubCheckOutcome(sub *event.Subscription) (*notification.Notification, error) {
+
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go versionGithubCheckOutcome 221",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
 	if t.data.GithubCheckStatus != evergreen.VersionSucceeded && t.data.GithubCheckStatus != evergreen.VersionFailed {
 		return nil, nil
 	}
@@ -190,6 +260,15 @@ func (t *versionTriggers) versionGithubCheckOutcome(sub *event.Subscription) (*n
 }
 
 func (t *versionTriggers) versionFailure(sub *event.Subscription) (*notification.Notification, error) {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go versionFailure 264",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
 	if t.data.Status != evergreen.VersionFailed {
 		return nil, nil
 	}
@@ -206,6 +285,15 @@ func (t *versionTriggers) versionFailure(sub *event.Subscription) (*notification
 }
 
 func (t *versionTriggers) versionSuccess(sub *event.Subscription) (*notification.Notification, error) {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go versionSuccess 289",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
 	if t.data.Status != evergreen.VersionSucceeded {
 		return nil, nil
 	}
@@ -222,6 +310,15 @@ func (t *versionTriggers) versionSuccess(sub *event.Subscription) (*notification
 }
 
 func (t *versionTriggers) versionExceedsDuration(sub *event.Subscription) (*notification.Notification, error) {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go versionExceedsDuration 221",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
 	if t.data.Status != evergreen.VersionSucceeded && t.data.Status != evergreen.VersionFailed {
 		return nil, nil
 	}
@@ -242,6 +339,15 @@ func (t *versionTriggers) versionExceedsDuration(sub *event.Subscription) (*noti
 }
 
 func (t *versionTriggers) versionRuntimeChange(sub *event.Subscription) (*notification.Notification, error) {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go versionRuntimeChange 221",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
 	if t.data.Status != evergreen.VersionSucceeded && t.data.Status != evergreen.VersionFailed {
 		return nil, nil
 	}
@@ -271,6 +377,15 @@ func (t *versionTriggers) versionRuntimeChange(sub *event.Subscription) (*notifi
 }
 
 func (t *versionTriggers) versionRegression(sub *event.Subscription) (*notification.Notification, error) {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go versionRegression 221",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
 	if t.data.Status != evergreen.VersionFailed || !utility.StringSliceContains(evergreen.SystemVersionRequesterTypes, t.version.Requester) {
 		return nil, nil
 	}
@@ -293,19 +408,76 @@ func (t *versionTriggers) versionRegression(sub *event.Subscription) (*notificat
 }
 
 func (t *versionTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (bool, *notification.Notification, error) {
-
-	if !(t.version.IsParent() || sub.Subscriber.Type == event.ParentWaitOnChildSubscriberType) {
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go 319",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+	})
+	if !(t.version.IsParent || sub.Subscriber.Type == event.ParentWaitOnChildSubscriberType) {
 		return true, nil, nil
 	}
 	isReady := false
-	patchDoc, _ := patch.FindOne(patch.ByVersion(t.version.Id))
+	patchDoc, err := patch.FindOne(patch.ByVersion(t.version.Id))
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting trigger/version.go 333",
+		"t.data":     t.data,
+		"t.event":    t.event,
+		"t.version":  t.version,
+		"t.triggers": t.triggers,
+		"sub":        sub,
+		// "version.isParent": t.version.IsParent,
+		"isReady":  isReady,
+		"patchDoc": patchDoc,
+		"err":      err,
+	})
+	if err != nil {
+		return isReady, nil, errors.Wrap(err, "error getting patch")
+	}
+	if patchDoc == nil {
+		return isReady, nil, errors.Wrap(err, "patch not found")
+	}
 	// get the children or siblings to wait on
 	childrenOrSiblings, parentPatch, err := patchDoc.GetPatchFamily()
+	grip.Info(message.Fields{
+		"message":            "ChayaMTesting trigger/version.go 353",
+		"t.data":             t.data,
+		"t.event":            t.event,
+		"t.version":          t.version,
+		"t.triggers":         t.triggers,
+		"sub":                sub,
+		"version.isParent":   t.version.IsParent,
+		"isReady":            isReady,
+		"patchDoc":           patchDoc,
+		"err":                err,
+		"childrenOrSiblings": childrenOrSiblings,
+		"parentPatch":        parentPatch,
+	})
 	if err != nil {
 		return isReady, nil, errors.Wrap(err, "error getting child or sibling patches")
 	}
 
 	childrenStatus, unreadyChild, err := getChildrenOrSiblingsReadiness(childrenOrSiblings)
+	grip.Info(message.Fields{
+		"message":            "ChayaMTesting trigger/version.go 373",
+		"t.data":             t.data,
+		"t.event":            t.event,
+		"t.version":          t.version,
+		"t.triggers":         t.triggers,
+		"sub":                sub,
+		"version.isParent":   t.version.IsParent,
+		"isReady":            isReady,
+		"patchDoc":           patchDoc,
+		"err":                err,
+		"childrenOrSiblings": childrenOrSiblings,
+		"parentPatch":        parentPatch,
+		"childrenStatus":     childrenStatus,
+		"unreadyChild":       unreadyChild,
+		"evergreen.IsFinishedPatchStatus(childrenStatus)": evergreen.IsFinishedPatchStatus(childrenStatus),
+	})
 	if err != nil {
 		return isReady, nil, errors.Wrap(err, "error getting child or sibling information")
 	}
@@ -320,6 +492,24 @@ func (t *versionTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (boo
 		if err != nil {
 			return false, nil, errors.Wrap(err, "error subscribing on child patch")
 		}
+		grip.Info(message.Fields{
+			"message":            "ChayaMTesting trigger/version.go 373",
+			"t.data":             t.data,
+			"t.event":            t.event,
+			"t.version":          t.version,
+			"t.triggers":         t.triggers,
+			"sub":                sub,
+			"version.isParent":   t.version.IsParent,
+			"isReady":            isReady,
+			"patchDoc":           patchDoc,
+			"err":                err,
+			"childrenOrSiblings": childrenOrSiblings,
+			"parentPatch":        parentPatch,
+			"childrenStatus":     childrenStatus,
+			"unreadyChild":       unreadyChild,
+			"evergreen.IsFinishedPatchStatus(childrenStatus)": evergreen.IsFinishedPatchStatus(childrenStatus),
+			"parentId": parentId,
+		})
 		return isReady, nil, nil
 	}
 	isReady = true
@@ -345,7 +535,44 @@ func (t *versionTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (boo
 
 		newSub := event.NewExpiringVersionOutcomeSubscription(parentPatch.Id.Hex(), target.OriginalSub.Subscriber)
 		n, err := t.generate(&newSub, "")
+		grip.Info(message.Fields{
+			"message":            "ChayaMTesting trigger/version.go 445",
+			"t.data":             t.data,
+			"t.event":            t.event,
+			"t.version":          t.version,
+			"t.triggers":         t.triggers,
+			"sub":                sub,
+			"version.isParent":   t.version.IsParent,
+			"isReady":            isReady,
+			"patchDoc":           patchDoc,
+			"err":                err,
+			"childrenOrSiblings": childrenOrSiblings,
+			"parentPatch":        parentPatch,
+			"childrenStatus":     childrenStatus,
+			"unreadyChild":       unreadyChild,
+			"evergreen.IsFinishedPatchStatus(childrenStatus)": evergreen.IsFinishedPatchStatus(childrenStatus),
+			"newSub":      newSub,
+			"originalSub": target.OriginalSub,
+			"n":           n,
+		})
 		return isReady, n, err
 	}
+	grip.Info(message.Fields{
+		"message":            "ChayaMTesting trigger/version.go 467",
+		"t.data":             t.data,
+		"t.event":            t.event,
+		"t.version":          t.version,
+		"t.triggers":         t.triggers,
+		"sub":                sub,
+		"version.isParent":   t.version.IsParent,
+		"isReady":            isReady,
+		"patchDoc":           patchDoc,
+		"err":                err,
+		"childrenOrSiblings": childrenOrSiblings,
+		"parentPatch":        parentPatch,
+		"childrenStatus":     childrenStatus,
+		"unreadyChild":       unreadyChild,
+		"evergreen.IsFinishedPatchStatus(childrenStatus)": evergreen.IsFinishedPatchStatus(childrenStatus),
+	})
 	return isReady, nil, nil
 }

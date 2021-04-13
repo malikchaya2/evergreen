@@ -10,6 +10,7 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
+	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/level"
 	"github.com/mongodb/grip/message"
 	"github.com/mongodb/grip/send"
@@ -244,7 +245,11 @@ func (h *slackNotificationPostHandler) Run(ctx context.Context) gimlet.Responder
 
 	h.sender = s
 	h.sender.Send(h.composer)
-
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/route/notification.go 249",
+		"target":  target,
+		"s":       s,
+	})
 	return gimlet.NewJSONResponse(struct{}{})
 }
 

@@ -8,6 +8,8 @@ import (
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
 	"github.com/mitchellh/mapstructure"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -202,10 +204,23 @@ func (s *APIGithubPRSubscriber) BuildFromService(h interface{}) error {
 		return errors.Errorf("type '%T' does not match subscriber type APIGithubPRSubscriber", v)
 	}
 
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting rest/model/subscriber.go 208",
+		" h":         h,
+		"s":          s,
+		"s.PRNumber": s.PRNumber,
+		"s.Ref":      s.Ref,
+	})
+
 	return nil
 }
 
 func (s *APIGithubCheckSubscriber) ToService() (interface{}, error) {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriber.go 220",
+		"s":       s,
+		"s.Ref":   s.Ref,
+	})
 	return event.GithubCheckSubscriber{
 		Owner: utility.FromStringPtr(s.Owner),
 		Repo:  utility.FromStringPtr(s.Repo),
@@ -224,10 +239,20 @@ func (s *APIGithubCheckSubscriber) BuildFromService(h interface{}) error {
 		return errors.Errorf("type '%T' does not match subscriber type APIGithubCheckSubscriber", v)
 	}
 
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriber.go 243",
+		"s":       s,
+		"s.Ref":   s.Ref,
+	})
 	return nil
 }
 
 func (s *APIGithubPRSubscriber) ToService() (interface{}, error) {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriber.go 252",
+		"s":       s,
+		"s.Ref":   s.Ref,
+	})
 	return event.GithubPullRequestSubscriber{
 		Owner:    utility.FromStringPtr(s.Owner),
 		Repo:     utility.FromStringPtr(s.Repo),
@@ -237,6 +262,11 @@ func (s *APIGithubPRSubscriber) ToService() (interface{}, error) {
 }
 
 func (s *APIPRInfo) BuildFromService(h interface{}) error {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriber.go 266",
+		"s":       s,
+		"s.Ref":   s.Ref,
+	})
 	switch v := h.(type) {
 	case event.PRInfo:
 		s.Owner = utility.ToStringPtr(v.Owner)
@@ -250,6 +280,11 @@ func (s *APIPRInfo) BuildFromService(h interface{}) error {
 }
 
 func (s *APIPRInfo) ToService() (interface{}, error) {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriber.go 284",
+		"s":       s,
+		"s.Ref":   s.Ref,
+	})
 	return event.PRInfo{
 		Owner:       utility.FromStringPtr(s.Owner),
 		Repo:        utility.FromStringPtr(s.Repo),
@@ -274,6 +309,10 @@ func (s *APIWebhookSubscriber) BuildFromService(h interface{}) error {
 	default:
 		return errors.Errorf("type '%T' does not match subscriber type APIWebhookSubscriber", v)
 	}
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriber.go 313",
+		"s":       s,
+	})
 
 	return nil
 }
@@ -316,7 +355,10 @@ func (s *APIJIRAIssueSubscriber) BuildFromService(h interface{}) error {
 	default:
 		return errors.Errorf("type '%T' does not match subscriber type APIJIRAIssueSubscriber", v)
 	}
-
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/model/subscriber.go 359",
+		"s":       s,
+	})
 	return nil
 }
 

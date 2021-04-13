@@ -21,12 +21,18 @@ import (
 // from the given event, with the given trigger, for the given subscriber.
 // This function will produce an ID that will collide to prevent duplicate
 // notifications from being inserted
-func makeNotificationID(eventID, trigger string, subscriber *event.Subscriber) string { //nolint: interfacer
-	return fmt.Sprintf("%s-%s-%s", eventID, trigger, subscriber.String())
+func makeNotificationID(eventID, trigger, childOrParent string, subscriber *event.Subscriber) string { //nolint: interfacer
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting model/notification/notification.go 26",
+		"eventID":    eventID,
+		"trigger":    trigger,
+		"subscriber": subscriber,
+	})
+	return fmt.Sprintf("%s-%s-%s-%s", eventID, trigger, subscriber.String(), childOrParent)
 }
 
 // New returns a new Notification, with a correctly initialised ID
-func New(eventID, trigger string, subscriber *event.Subscriber, payload interface{}) (*Notification, error) {
+func New(eventID, trigger, childOrParent string, subscriber *event.Subscriber, payload interface{}) (*Notification, error) {
 	if len(trigger) == 0 {
 		return nil, errors.New("cannot create notification from nil trigger")
 	}
@@ -38,7 +44,7 @@ func New(eventID, trigger string, subscriber *event.Subscriber, payload interfac
 	}
 
 	return &Notification{
-		ID:         makeNotificationID(eventID, trigger, subscriber),
+		ID:         makeNotificationID(eventID, trigger, childOrParent, subscriber),
 		Subscriber: *subscriber,
 		Payload:    payload,
 	}, nil
@@ -168,7 +174,11 @@ func (n *Notification) Composer(env evergreen.Environment) (message.Composer, er
 		if !ok || payload == nil {
 			return nil, errors.New("slack payload is invalid")
 		}
-
+		grip.Info(message.Fields{
+			"message": "ChayaMTesting model/notification/notification.go 178",
+			"sub":     sub,
+			"payload": payload,
+		})
 		return message.NewSlackMessage(level.Notice, *sub, payload.Body, payload.Attachments), nil
 
 	case event.GithubPullRequestSubscriberType:

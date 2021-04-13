@@ -11,6 +11,8 @@ import (
 	"github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 )
 
 ////////////////////////////////////////////////////////////////////////
@@ -23,6 +25,10 @@ type subscriptionPostHandler struct {
 }
 
 func makeSetSubscription(sc data.Connector) gimlet.RouteHandler {
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/route/subscription.go 29",
+		"sc":      sc,
+	})
 	return &subscriptionPostHandler{
 		sc: sc,
 	}
@@ -39,6 +45,12 @@ func (s *subscriptionPostHandler) Parse(ctx context.Context, r *http.Request) er
 	if err := utility.ReadJSON(r.Body, s.Subscriptions); err != nil {
 		return err
 	}
+	grip.Info(message.Fields{
+		"message":         "ChayaMTesting rest/route/subscription.go 29",
+		"ctx":             ctx,
+		"s.Subscriptions": s.Subscriptions,
+		"s":               s,
+	})
 
 	return nil
 }
@@ -48,6 +60,13 @@ func (s *subscriptionPostHandler) Run(ctx context.Context) gimlet.Responder {
 	if err != nil {
 		return gimlet.MakeJSONErrorResponder(err)
 	}
+	grip.Info(message.Fields{
+		"message":         "ChayaMTesting rest/route/subscription.go 63",
+		"ctx":             ctx,
+		"s.Subscriptions": s.Subscriptions,
+		"err":             err,
+		"s":               s,
+	})
 
 	return gimlet.NewJSONResponse(struct{}{})
 }
@@ -108,6 +127,13 @@ func (s *subscriptionGetHandler) Parse(ctx context.Context, r *http.Request) err
 		s.owner = id
 	}
 
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/route/subscription.go 131",
+		"ctx":     ctx,
+		"u":       u,
+		"s":       s,
+	})
+
 	return nil
 }
 
@@ -116,6 +142,12 @@ func (s *subscriptionGetHandler) Run(ctx context.Context) gimlet.Responder {
 	if err != nil {
 		return gimlet.MakeJSONErrorResponder(err)
 	}
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/route/subscription.go 146",
+		"ctx":     ctx,
+		"s":       s,
+		"subs":    subs,
+	})
 
 	return gimlet.NewJSONResponse(subs)
 }

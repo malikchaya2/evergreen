@@ -130,7 +130,7 @@ func makeNotification(settings *evergreen.Settings, project string, t *task.Task
 			IssueType: jiraIssueType,
 		},
 	}
-	n, err := notification.New("", utility.RandomString(), &sub, payload)
+	n, err := notification.New("", utility.RandomString(), "", &sub, payload)
 	if err != nil {
 		return nil, err
 	}
