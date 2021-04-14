@@ -23,11 +23,15 @@ import (
 // notifications from being inserted
 func makeNotificationID(eventID, trigger, childOrParent string, subscriber *event.Subscriber) string { //nolint: interfacer
 	grip.Info(message.Fields{
-		"message":    "ChayaMTesting model/notification/notification.go 26",
-		"eventID":    eventID,
-		"trigger":    trigger,
-		"subscriber": subscriber,
+		"message":       "ChayaMTesting model/notification/notification.go 26",
+		"eventID":       eventID,
+		"trigger":       trigger,
+		"subscriber":    subscriber,
+		"childOrParent": childOrParent,
+		"generated_Id":  fmt.Sprintf("%s-%s-%s-%s", eventID, trigger, subscriber.String(), childOrParent),
+		"Stack":         message.NewStack(0, "stack"),
 	})
+
 	return fmt.Sprintf("%s-%s-%s-%s", eventID, trigger, subscriber.String(), childOrParent)
 }
 

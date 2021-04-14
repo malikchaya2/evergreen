@@ -165,7 +165,7 @@ func (t *patchTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (bool,
 			parentId = parentPatch.Id.Hex()
 		}
 		// if there is still a child or sibling that's not done, subscribe on it and don't create the notification
-		err = subscribeOnChild(parentId, unreadyChild.Id.Hex(), sub)
+		err = subscribeOnChild(parentId, unreadyChild.Id.Hex(), sub, event.ResourceTypePatch)
 		if err != nil {
 			return false, nil, errors.Wrap(err, "error subscribing on child patch")
 		}
@@ -214,14 +214,20 @@ func getChildrenOrSiblingsReadiness(childrenOrSiblings []string) (string, *patch
 
 }
 
-func subscribeOnChild(parentId, childPatchId string, sub *event.Subscription) error {
+func subscribeOnChild(parentId, childPatchId string, sub *event.Subscription, resourceType string) error {
 	waitOnChildSubscriber := event.NewParentWaitOnChildSubscriber(event.ParentWaitOnChildSubscriber{
 		ParentPatchId: parentId,
 		ChildPatchId:  childPatchId,
 		Requester:     "patch_outcome_notification",
 		OriginalSub:   sub,
 	})
-	childPatchSub := event.NewExpiringPatchOutcomeSubscription(childPatchId, waitOnChildSubscriber)
+	var childPatchSub event.Subscription
+	if resourceType == event.ResourceTypeVersion {
+		childPatchSub = event.NewExpiringVersionOutcomeSubscription(childPatchId, waitOnChildSubscriber)
+	} else if resourceType == event.ResourceTypePatch {
+		childPatchSub = event.NewExpiringPatchOutcomeSubscription(childPatchId, waitOnChildSubscriber)
+	}
+
 	err := childPatchSub.Upsert()
 	if err != nil {
 		return errors.Wrapf(err, "failed to insert patch subscription for child patch %s", childPatchId)
