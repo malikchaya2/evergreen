@@ -8,6 +8,8 @@ import (
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
 	"github.com/mitchellh/mapstructure"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -90,6 +92,14 @@ func (s *APISubscriber) BuildFromService(h interface{}) error {
 		case event.JIRACommentSubscriberType, event.EmailSubscriberType,
 			event.SlackSubscriberType, event.EnqueuePatchSubscriberType:
 			target = v.Target
+			// target = event.UserPingSubscriber{
+			// 	UserTarget: fmt.Sprintf("%v", v.Target),
+			// }
+			grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+				"message":          "ChayaMTesting rest/model/subscriber.go 99",
+				"message.NewStack": message.NewStack(1, "stack"),
+				"targe":            target,
+			}))
 
 		default:
 			return errors.Errorf("unknown subscriber type: '%s'", v.Type)
@@ -178,6 +188,11 @@ func (s *APISubscriber) ToService() (interface{}, error) {
 	case event.JIRACommentSubscriberType, event.EmailSubscriberType,
 		event.SlackSubscriberType, event.EnqueuePatchSubscriberType:
 		target = s.Target
+		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+			"message":          "ChayaMTesting rest/model/subscriber.go 192",
+			"message.NewStack": message.NewStack(1, "stack"),
+			"targe":            target,
+		}))
 
 	default:
 		return nil, gimlet.ErrorResponse{

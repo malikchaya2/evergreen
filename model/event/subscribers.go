@@ -6,6 +6,7 @@ import (
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	mgobson "gopkg.in/mgo.v2/bson"
 )
@@ -42,7 +43,8 @@ var (
 )
 
 type Subscriber struct {
-	Type string `bson:"type"`
+	Type    string `bson:"type"`
+	SubType string `bson:"sub_type"`
 	// sad violin
 	Target interface{} `bson:"target"`
 }
@@ -144,6 +146,11 @@ type JIRAIssueSubscriber struct {
 	IssueType string `bson:"issue_type"`
 }
 
+// type UserPingSubscriber struct {
+// 	UserTarget string `bson:"user_target"`
+// 	SubType    string `bson:"sub_type"`
+// }
+
 func (s *JIRAIssueSubscriber) String() string {
 	return fmt.Sprintf("%s-%s", s.Project, s.IssueType)
 }
@@ -218,6 +225,11 @@ func NewEmailSubscriber(t string) Subscriber {
 }
 
 func NewSlackSubscriber(t string) Subscriber {
+	grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+		"message":          "ChayaMTesting model/event/subscribers.go 225",
+		"t":                t,
+		"message.NewStack": message.NewStack(1, "stack"),
+	}))
 	return Subscriber{
 		Type:   SlackSubscriberType,
 		Target: t,

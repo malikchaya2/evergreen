@@ -52,6 +52,7 @@ func (s *APISubscription) BuildFromService(h interface{}) error {
 		s.Owner = utility.ToStringPtr(v.Owner)
 		s.OwnerType = utility.ToStringPtr(string(v.OwnerType))
 		s.TriggerData = v.TriggerData
+		// here
 		err := s.Subscriber.BuildFromService(v.Subscriber)
 		if err != nil {
 			return err

@@ -17,6 +17,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/util"
+	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
@@ -418,6 +419,10 @@ func makeCommonPayload(sub *event.Subscription, selectors []event.Selector,
 		return emailPayload(data)
 
 	case event.SlackSubscriberType:
+		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+			"message":          "ChayaMTesting trigger/payloads.go 423",
+			"message.NewStack": message.NewStack(1, "stack"),
+		}))
 		return slack(data)
 	}
 
