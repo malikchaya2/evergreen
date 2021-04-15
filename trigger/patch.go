@@ -118,45 +118,62 @@ func (t *patchTriggers) patchOutcome(sub *event.Subscription) (*notification.Not
 		}
 	}
 
-	if sub.Subscriber.Type == event.GithubPullRequestSubscriberType {
-		target, ok := sub.Subscriber.Target.(*event.GithubPullRequestSubscriber)
-		if !ok {
-			return nil, errors.Errorf("target '%s' didn't not have expected type", sub.Subscriber.Target)
-		}
-		subType := target.Type
+	isReady, n, err := t.waitOnChildrenOrSiblings(sub)
+	if n != nil || err != nil {
+		return n, err
+	}
+	if !isReady {
+		return nil, nil
+	}
 
-		if t.patch.IsParent() || (t.patch.IsChild() && subType == event.WaitOnChild) {
-			// get the children or siblings to wait on
-			childrenOrSiblings, parentPatch, err := t.patch.GetPatchFamily()
-			if err != nil {
-				return nil, errors.Wrap(err, "error getting child or sibling patches")
-			}
+	return t.generate(sub)
+}
 
-			// make sure the parent is done, if not, wait for the parent
-			if t.patch.IsChild() {
-				if !evergreen.IsFinishedPatchStatus(parentPatch.Status) {
-					return nil, nil
-				}
-			}
-			childrenStatus, err := getChildrenOrSiblingsReadiness(childrenOrSiblings)
-			if err != nil {
-				return nil, errors.Wrap(err, "error getting child or sibling information")
-			}
-			if !evergreen.IsFinishedPatchStatus(childrenStatus) {
-				return nil, nil
-			}
+func (t *patchTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (bool, *notification.Notification, error) {
+	if sub.Subscriber.Type != event.GithubPullRequestSubscriberType {
+		return true, nil, nil
+	}
+	target, ok := sub.Subscriber.Target.(*event.GithubPullRequestSubscriber)
+	if !ok {
+		return false, nil, errors.Errorf("target '%s' didn't not have expected type", sub.Subscriber.Target)
+	}
+	subType := target.Type
 
-			if childrenStatus == evergreen.PatchFailed {
-				t.data.Status = evergreen.PatchFailed
-			}
+	if t.patch.IsParent() || (t.patch.IsChild() && subType == event.WaitOnChild) {
+		return true, nil, nil
+	}
+	isReady := false
+	// get the children or siblings to wait on
+	childrenOrSiblings, parentPatch, err := t.patch.GetPatchFamily()
+	if err != nil {
+		return isReady, nil, errors.Wrap(err, "error getting child or sibling patches")
+	}
 
-			if t.patch.IsChild() {
-				// we want the subscription to be on the parent. now that the children are done, the parent can be considered done.
-				t.patch = parentPatch
-			}
+	// make sure the parent is done, if not, wait for the parent
+	if t.patch.IsChild() {
+		if !evergreen.IsFinishedPatchStatus(parentPatch.Status) {
+			return isReady, nil, nil
 		}
 	}
-	return t.generate(sub)
+	childrenStatus, err := getChildrenOrSiblingsReadiness(childrenOrSiblings)
+	if err != nil {
+		return isReady, nil, errors.Wrap(err, "error getting child or sibling information")
+	}
+	if !evergreen.IsFinishedPatchStatus(childrenStatus) {
+		return isReady, nil, nil
+	}
+	isReady = true
+
+	if childrenStatus == evergreen.PatchFailed {
+		t.data.Status = evergreen.PatchFailed
+	}
+
+	if t.patch.IsChild() {
+		// we want the subscription to be on the parent. now that the children are done, the parent can be considered done.
+		t.patch = parentPatch
+	}
+	return isReady, nil, nil
+
 }
 
 func (t *patchTriggers) patchFailure(sub *event.Subscription) (*notification.Notification, error) {
