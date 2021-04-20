@@ -118,6 +118,20 @@ func (self *Version) Insert() error {
 	return db.Insert(VersionCollection, self)
 }
 
+func (v *Version) IsParent() bool {
+	return v.ParentPatchID != ""
+}
+
+func (v *Version) GetParentVersion() (*Version, error) {
+	v, err := VersionFindOne(VersionById(v.ParentPatchID))
+	if err != nil {
+		return nil, errors.WithStack(err)
+	} else if v == nil {
+		return nil, errors.Errorf("Version '%v' not found", v.ParentPatchID)
+	}
+	return v, nil
+}
+
 func (v *Version) AddSatisfiedTrigger(definitionID string) error {
 	if v.SatisfiedTriggers == nil {
 		v.SatisfiedTriggers = []string{}

@@ -177,6 +177,7 @@ func (uis *UIServer) projectPage(w http.ResponseWriter, r *http.Request) {
 	}
 	apiSubscriptions := make([]restModel.APISubscription, len(subscriptions))
 	for i := range subscriptions {
+		//here ....
 		if err = apiSubscriptions[i].BuildFromService(subscriptions[i]); err != nil {
 			uis.LoggedError(w, r, http.StatusInternalServerError, err)
 			return

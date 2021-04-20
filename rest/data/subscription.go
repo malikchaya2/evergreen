@@ -3,13 +3,16 @@ package data
 import (
 	"fmt"
 	"net/http"
+	"time"
 
 	"github.com/evergreen-ci/evergreen/model/event"
+	"github.com/evergreen-ci/evergreen/model/patch"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/trigger"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -17,7 +20,21 @@ type DBSubscriptionConnector struct{}
 
 func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions []restModel.APISubscription) error {
 	dbSubscriptions := []event.Subscription{}
+	grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+		"message":          "ChayaMTesting rest/data/subscription.go 22",
+		"message.NewStack": message.NewStack(1, "stack"),
+		"dbSubscriptions":  dbSubscriptions,
+	}))
 	for _, subscription := range subscriptions {
+		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+			"message":          "ChayaMTesting rest/data/subscription.go 28",
+			"message.NewStack": message.NewStack(1, "stack"),
+			"dbSubscriptions":  dbSubscriptions,
+			"subscription":     subscription,
+		}))
+		//here ...
+		//maybe here, add the children somehow
+		// add more logging to figure out
 		subscriptionInterface, err := subscription.ToService()
 		if err != nil {
 			return gimlet.ErrorResponse{
@@ -26,6 +43,13 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 			}
 		}
 
+		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+			"message":               "ChayaMTesting rest/data/subscription.go 45",
+			"message.NewStack":      message.NewStack(1, "stack"),
+			"dbSubscriptions":       dbSubscriptions,
+			"subscription":          subscription,
+			"subscriptionInterface": subscriptionInterface,
+		}))
 		dbSubscription, ok := subscriptionInterface.(event.Subscription)
 		if !ok {
 			return gimlet.ErrorResponse{
@@ -33,13 +57,29 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 				Message:    "Error parsing subscription interface",
 			}
 		}
-
+		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+			"message":               "ChayaMTesting rest/data/subscription.go 59",
+			"message.NewStack":      message.NewStack(1, "stack"),
+			"dbSubscriptions":       dbSubscriptions,
+			"subscription":          subscription,
+			"subscriptionInterface": subscriptionInterface,
+			"dbSubscription":        dbSubscription,
+		}))
 		if !trigger.ValidateTrigger(dbSubscription.ResourceType, dbSubscription.Trigger) {
 			return gimlet.ErrorResponse{
 				StatusCode: http.StatusBadRequest,
 				Message:    fmt.Sprintf("subscription type/trigger is invalid: %s/%s", dbSubscription.ResourceType, dbSubscription.Trigger),
 			}
 		}
+
+		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+			"message":               "ChayaMTesting rest/data/subscription.go 74",
+			"message.NewStack":      message.NewStack(1, "stack"),
+			"dbSubscriptions":       dbSubscriptions,
+			"subscription":          subscription,
+			"subscriptionInterface": subscriptionInterface,
+			"dbSubscription":        dbSubscription,
+		}))
 
 		if dbSubscription.OwnerType == event.OwnerTypePerson && dbSubscription.Owner == "" {
 			dbSubscription.Owner = owner // default the current user
@@ -81,13 +121,73 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 		}
 
 		dbSubscriptions = append(dbSubscriptions, dbSubscription)
+
+		// if it's a parent, version, slack subscription add a subscription for all children
+		// if dbSubscription.Subscriber.Type == event.SlackSubscriberType && dbSubscription.ResourceType == event.ResourceTypeVersion {
+		if dbSubscription.ResourceType == event.ResourceTypeVersion {
+			// todo:
+			// find where these are proccessed, and do the whole waiting on children thing if subType is waitonchildren -- maybe in the payload
+			// then if this works, edit the patches, pr subscriber to use subtype as well.
+
+			//find all children, itterate through them
+			var versionId string
+			for _, selector := range dbSubscription.Selectors {
+				if selector.Type == "id" {
+					versionId = selector.Data
+				}
+			}
+			children, err := getVersionChildren(versionId)
+			if err != nil {
+				return gimlet.ErrorResponse{
+					StatusCode: http.StatusInternalServerError,
+					Message:    "Error retrieving child versions: " + err.Error(),
+				}
+			}
+			for _, childPatchId := range children {
+				childDbSubscription := dbSubscription
+				childDbSubscription.LastUpdated = time.Now()
+				var selectors []event.Selector
+				for _, selector := range dbSubscription.Selectors {
+					if selector.Type == "id" {
+						selector.Data = childPatchId
+					}
+					selectors = append(selectors, selector)
+				}
+				childDbSubscription.Subscriber.SubType = event.WaitOnChild
+				dbSubscriptions = append(dbSubscriptions, childDbSubscription)
+				grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+					"message":             "ChayaMTesting rest/data/subscription.go 127",
+					"message.NewStack":    message.NewStack(1, "stack"),
+					"dbSubscriptions":     dbSubscriptions,
+					"childDbSubscription": childDbSubscription,
+				}))
+			}
+		}
 	}
 
 	catcher := grip.NewSimpleCatcher()
 	for _, subscription := range dbSubscriptions {
+		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+			"message":          "ChayaMTesting rest/data/subscription.go 127",
+			"message.NewStack": message.NewStack(1, "stack"),
+			"dbSubscriptions":  dbSubscriptions,
+			"subscription":     subscription,
+		}))
 		catcher.Add(subscription.Upsert())
 	}
 	return catcher.Resolve()
+}
+
+func getVersionChildren(versionId string) ([]string, error) {
+	patchDoc, err := patch.FindOne(patch.ByVersion(versionId))
+	if err != nil {
+		return nil, errors.Wrap(err, "error getting patch")
+	}
+	if patchDoc == nil {
+		return nil, errors.Wrap(err, "patch not found")
+	}
+	return patchDoc.Triggers.ChildPatches, nil
+
 }
 
 func (dc *DBSubscriptionConnector) GetSubscriptions(owner string, ownerType event.OwnerType) ([]restModel.APISubscription, error) {

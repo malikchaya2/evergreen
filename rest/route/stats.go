@@ -433,6 +433,11 @@ func (tsh *taskStatsHandler) Parse(ctx context.Context, r *http.Request) error {
 
 func (tsh *taskStatsHandler) Run(ctx context.Context) gimlet.Responder {
 	flags, err := evergreen.GetServiceFlags()
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/route/stats.go 437",
+		"flags":   flags,
+		"err":     err,
+	})
 	if err != nil {
 		return gimlet.MakeJSONErrorResponder(errors.Wrap(err, "Error retrieving service flags"))
 	}
@@ -446,6 +451,11 @@ func (tsh *taskStatsHandler) Run(ctx context.Context) gimlet.Responder {
 	var taskStatsResult []model.APITaskStats
 
 	taskStatsResult, err = tsh.sc.GetTaskStats(tsh.filter)
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/route/stats.go 456", "flags": flags,
+		"err":             err,
+		"taskStatsResult": taskStatsResult,
+	})
 	if err != nil {
 		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "Failed to retrieve the task stats"))
 	}
@@ -456,10 +466,36 @@ func (tsh *taskStatsHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	requestLimit := tsh.filter.Limit - 1
+	taskStatsResult, err = tsh.sc.GetTaskStats(tsh.filter)
+	grip.Info(message.Fields{
+		"message":         "ChayaMTesting rest/route/stats.go 474",
+		"flags":           flags,
+		"err":             err,
+		"taskStatsResult": taskStatsResult,
+		"requestLimit":    requestLimit,
+	})
+
 	lastIndex := len(taskStatsResult)
+	grip.Info(message.Fields{
+		"message":         "ChayaMTesting rest/route/stats.go 484",
+		"flags":           flags,
+		"err":             err,
+		"taskStatsResult": taskStatsResult,
+		"requestLimit":    requestLimit,
+		"lastIndex":       lastIndex,
+	})
 	if len(taskStatsResult) > requestLimit {
 		lastIndex = requestLimit
 
+		grip.Info(message.Fields{
+			"message": "ChayaMTesting rest/route/stats.go 496",
+
+			"flags":           flags,
+			"err":             err,
+			"taskStatsResult": taskStatsResult,
+			"requestLimit":    requestLimit,
+			"lastIndex":       lastIndex,
+		})
 		err = resp.SetPages(&gimlet.ResponsePages{
 			Next: &gimlet.Page{
 				Relation:        "next",
@@ -470,18 +506,42 @@ func (tsh *taskStatsHandler) Run(ctx context.Context) gimlet.Responder {
 				Limit:           requestLimit,
 			},
 		})
+		grip.Info(message.Fields{
+			"message":         "ChayaMTesting rest/route/stats.go 515",
+			"flags":           flags,
+			"err":             err,
+			"taskStatsResult": taskStatsResult,
+			"requestLimit":    requestLimit,
+			"lastIndex":       lastIndex,
+		})
 		if err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err,
 				"Problem paginating response"))
 		}
 	}
 	taskStatsResult = taskStatsResult[:lastIndex]
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting rest/route/stats.go 530", "flags": flags,
+		"err":             err,
+		"taskStatsResult": taskStatsResult,
+		"requestLimit":    requestLimit,
+		"lastIndex":       lastIndex,
+	})
 
 	for _, apiTaskStats := range taskStatsResult {
 		if err = resp.AddData(apiTaskStats); err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(err)
 		}
 	}
+	grip.Info(message.Fields{
+		"message":         "ChayaMTesting rest/route/stats.go 545",
+		"flags":           flags,
+		"err":             err,
+		"taskStatsResult": taskStatsResult,
+		"requestLimit":    requestLimit,
+		"lastIndex":       lastIndex,
+		"resp":            resp,
+	})
 
 	return resp
 }
