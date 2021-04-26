@@ -33,6 +33,7 @@ func (sc *StatsConnector) GetTestStats(filter stats.StatsFilter) ([]model.APITes
 
 // GetTaskStats queries the service backend to retrieve the task stats that match the given filter.
 func (sc *StatsConnector) GetTaskStats(filter stats.StatsFilter) ([]model.APITaskStats, error) {
+	
 	serviceStatsResult, err := stats.GetTaskStats(filter)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to get task stats from service API")

@@ -138,12 +138,12 @@ func (j *eventSendJob) send(n *notification.Notification) error {
 	if err != nil {
 		return errors.Wrap(err, "error building sender for notification")
 	}
-	grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-		"message":          "ChayaMTesting units/eventsend/event_send.go 143",
-		"message.NewStack": message.NewStack(1, "stack"),
-		"sender":           sender,
-		"c":                c,
-	}))
+	// grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+	// 	"message":          "ChayaMTesting units/eventsend/event_send.go 143",
+	// 	"message.NewStack": message.NewStack(1, "stack"),
+	// 	"sender":           sender,
+	// 	"c":                c,
+	// }))
 	sender.Send(c)
 	return nil
 }

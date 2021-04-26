@@ -20,18 +20,7 @@ type DBSubscriptionConnector struct{}
 
 func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions []restModel.APISubscription) error {
 	dbSubscriptions := []event.Subscription{}
-	grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-		"message":          "ChayaMTesting rest/data/subscription.go 22",
-		"message.NewStack": message.NewStack(1, "stack"),
-		"dbSubscriptions":  dbSubscriptions,
-	}))
 	for _, subscription := range subscriptions {
-		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-			"message":          "ChayaMTesting rest/data/subscription.go 28",
-			"message.NewStack": message.NewStack(1, "stack"),
-			"dbSubscriptions":  dbSubscriptions,
-			"subscription":     subscription,
-		}))
 		//here ...
 		//maybe here, add the children somehow
 		// add more logging to figure out
@@ -42,29 +31,15 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 				Message:    "Error parsing request body: " + err.Error(),
 			}
 		}
-
-		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-			"message":               "ChayaMTesting rest/data/subscription.go 45",
-			"message.NewStack":      message.NewStack(1, "stack"),
-			"dbSubscriptions":       dbSubscriptions,
-			"subscription":          subscription,
-			"subscriptionInterface": subscriptionInterface,
-		}))
 		dbSubscription, ok := subscriptionInterface.(event.Subscription)
+		dbSubscription.Subscriber.SubType = "test"
 		if !ok {
 			return gimlet.ErrorResponse{
 				StatusCode: http.StatusInternalServerError,
 				Message:    "Error parsing subscription interface",
 			}
 		}
-		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-			"message":               "ChayaMTesting rest/data/subscription.go 59",
-			"message.NewStack":      message.NewStack(1, "stack"),
-			"dbSubscriptions":       dbSubscriptions,
-			"subscription":          subscription,
-			"subscriptionInterface": subscriptionInterface,
-			"dbSubscription":        dbSubscription,
-		}))
+
 		if !trigger.ValidateTrigger(dbSubscription.ResourceType, dbSubscription.Trigger) {
 			return gimlet.ErrorResponse{
 				StatusCode: http.StatusBadRequest,
@@ -72,14 +47,14 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 			}
 		}
 
-		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+		grip.Info(message.Fields{
 			"message":               "ChayaMTesting rest/data/subscription.go 74",
 			"message.NewStack":      message.NewStack(1, "stack"),
 			"dbSubscriptions":       dbSubscriptions,
 			"subscription":          subscription,
 			"subscriptionInterface": subscriptionInterface,
 			"dbSubscription":        dbSubscription,
-		}))
+		})
 
 		if dbSubscription.OwnerType == event.OwnerTypePerson && dbSubscription.Owner == "" {
 			dbSubscription.Owner = owner // default the current user
@@ -120,8 +95,7 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 			}
 		}
 
-		dbSubscriptions = append(dbSubscriptions, dbSubscription)
-
+		// ******* todo **********: remove this
 		// if it's a parent, version, slack subscription add a subscription for all children
 		// if dbSubscription.Subscriber.Type == event.SlackSubscriberType && dbSubscription.ResourceType == event.ResourceTypeVersion {
 		if dbSubscription.ResourceType == event.ResourceTypeVersion {
@@ -143,36 +117,59 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 					Message:    "Error retrieving child versions: " + err.Error(),
 				}
 			}
+			if len(children) != 0 {
+				dbSubscription.Subscriber.SubType = event.Parent
+				dbSubscriptions = append(dbSubscriptions, dbSubscription)
+			} else {
+				dbSubscriptions = append(dbSubscriptions, dbSubscription)
+			}
+
 			for _, childPatchId := range children {
+				grip.Info(message.Fields{
+					"message":      "ChayaMTesting rest/data/subscription.go 129",
+					"children":     children,
+					"childPatchId": childPatchId,
+				})
 				childDbSubscription := dbSubscription
 				childDbSubscription.LastUpdated = time.Now()
 				var selectors []event.Selector
 				for _, selector := range dbSubscription.Selectors {
+					grip.Info(message.Fields{
+						"message":             "ChayaMTesting rest/data/subscription.go 164",
+						"selector":            selector,
+						"selector.Type":       selector.Type,
+						"selector.Type == id": selector.Type == "id",
+						"selector.Data":       selector.Data,
+					})
 					if selector.Type == "id" {
 						selector.Data = childPatchId
 					}
 					selectors = append(selectors, selector)
 				}
-				childDbSubscription.Subscriber.SubType = event.WaitOnChild
+				childDbSubscription.Selectors = selectors
+				childDbSubscription.Subscriber.SubType = event.Child
 				dbSubscriptions = append(dbSubscriptions, childDbSubscription)
-				grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-					"message":             "ChayaMTesting rest/data/subscription.go 127",
+				grip.Info(message.Fields{
+					"message":             "ChayaMTesting rest/data/subscription.go 164",
 					"message.NewStack":    message.NewStack(1, "stack"),
 					"dbSubscriptions":     dbSubscriptions,
 					"childDbSubscription": childDbSubscription,
-				}))
+				})
 			}
+		} else {
+			dbSubscriptions = append(dbSubscriptions, dbSubscription)
 		}
+
 	}
 
 	catcher := grip.NewSimpleCatcher()
 	for _, subscription := range dbSubscriptions {
-		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-			"message":          "ChayaMTesting rest/data/subscription.go 127",
+		grip.Info(message.Fields{
+			"message":          "ChayaMTesting rest/data/subscription.go 179",
 			"message.NewStack": message.NewStack(1, "stack"),
 			"dbSubscriptions":  dbSubscriptions,
 			"subscription":     subscription,
-		}))
+		})
 		catcher.Add(subscription.Upsert())
 	}
 	return catcher.Resolve()

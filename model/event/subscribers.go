@@ -166,6 +166,8 @@ type GithubPullRequestSubscriber struct {
 
 const (
 	WaitOnChild           = "wait-on-child"
+	Child                 = "child"
+	Parent                = "parent"
 	SendChildPatchOutcome = "send-child-patch-outcome"
 )
 
@@ -225,11 +227,10 @@ func NewEmailSubscriber(t string) Subscriber {
 }
 
 func NewSlackSubscriber(t string) Subscriber {
-	grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-		"message":          "ChayaMTesting model/event/subscribers.go 225",
-		"t":                t,
-		"message.NewStack": message.NewStack(1, "stack"),
-	}))
+	grip.Info(message.Fields{
+		"message": "ChayaMTesting model/event/subscribers.go 225",
+		"t":       t,
+	})
 	return Subscriber{
 		Type:   SlackSubscriberType,
 		Target: t,

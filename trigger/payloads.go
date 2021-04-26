@@ -419,10 +419,10 @@ func makeCommonPayload(sub *event.Subscription, selectors []event.Selector,
 		return emailPayload(data)
 
 	case event.SlackSubscriberType:
-		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+		grip.Info(message.Fields{
 			"message":          "ChayaMTesting trigger/payloads.go 423",
 			"message.NewStack": message.NewStack(1, "stack"),
-		}))
+		})
 		return slack(data)
 	}
 

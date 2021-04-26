@@ -6,7 +6,6 @@ import (
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
-	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	mgobson "gopkg.in/mgo.v2/bson"
 )
@@ -298,37 +297,15 @@ func (s *TaskStats) UnmarshalBSON(in []byte) error { return mgobson.Unmarshal(in
 
 // GetTaskStats queries the precomputed task statistics using a filter.
 func GetTaskStats(filter StatsFilter) ([]TaskStats, error) {
-	grip.Info(message.Fields{
-		"message": "ChayaMTesting model/stats.query.go 515",
-		"filter":  filter,
-	})
 	err := filter.ValidateForTasks()
-	grip.Info(message.Fields{
-		"message": "ChayaMTesting model/stats.query.go 515",
-		"filter":  filter,
-		"err":     err,
-	})
 	if err != nil {
 		return nil, errors.Wrap(err, "The provided StatsFilter is invalid")
 	}
 	var stats []TaskStats
 	pipeline := filter.TaskStatsQueryPipeline()
-	grip.Info(message.Fields{
-		"message":  "ChayaMTesting model/stats.query.go 515",
-		"filter":   filter,
-		"err":      err,
-		"pipeline": pipeline,
-	})
 	err = db.Aggregate(DailyTaskStatsCollection, pipeline, &stats)
 	if err != nil {
 		return nil, errors.Wrap(err, "Failed to aggregate task statistics")
 	}
-	grip.Info(message.Fields{
-		"message":  "ChayaMTesting model/stats.query.go 515",
-		"filter":   filter,
-		"err":      err,
-		"pipeline": pipeline,
-		"stats":    stats,
-	})
 	return stats, nil
 }
