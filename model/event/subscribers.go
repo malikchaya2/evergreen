@@ -42,8 +42,7 @@ var (
 )
 
 type Subscriber struct {
-	Type    string `bson:"type"`
-	SubType string `bson:"sub_type"`
+	Type string `bson:"type"`
 	// sad violin
 	Target interface{} `bson:"target"`
 }
@@ -165,8 +164,6 @@ type GithubPullRequestSubscriber struct {
 
 const (
 	WaitOnChild           = "wait-on-child"
-	Child                 = "child"
-	Parent                = "parent"
 	SendChildPatchOutcome = "send-child-patch-outcome"
 )
 
