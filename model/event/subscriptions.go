@@ -13,7 +13,6 @@ import (
 	"github.com/mongodb/anser/bsonutil"
 	adb "github.com/mongodb/anser/db"
 	"github.com/mongodb/grip"
-	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	mgobson "gopkg.in/mgo.v2/bson"
@@ -246,11 +245,6 @@ func (s *Subscription) Upsert() error {
 	if c.Updated != 1 {
 		return errors.New("upsert did not modify any documents")
 	}
-	grip.Info(message.Fields{
-		"message": "ChayaMTesting rest/data/subscription.go 179",
-		"c":       c,
-		"s":       s,
-	})
 	return nil
 }
 

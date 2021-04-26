@@ -71,8 +71,6 @@ import (
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/anser/bsonutil"
 	adb "github.com/mongodb/anser/db"
-	"github.com/mongodb/grip"
-	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
@@ -382,10 +380,6 @@ var (
 // dailyTaskStatsPipeline returns a pipeline aggregating task documents into daily task stats.
 func dailyTaskStatsPipeline(projectId string, requester string, start time.Time, end time.Time, tasks []string, lastUpdate time.Time) []bson.M {
 	p := getDailyTaskStatsPipeline(projectId, requester, start, end, tasks, lastUpdate, false)
-	grip.Info(message.Fields{
-		"message": "ChayaMTesting rest/route/stats.go 515",
-		"p":       p,
-	})
 	return p
 }
 
