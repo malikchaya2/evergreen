@@ -22,10 +22,10 @@ import (
 // This function will produce an ID that will collide to prevent duplicate
 // notifications from being inserted
 func makeNotificationID(eventID, trigger string, subscriber *event.Subscriber) string { //nolint: interfacer
-	grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-		"message":          "ChayaMTesting model/notification/notification.go 26",
-		"message.NewStack": message.NewStack(1, "stack").Raw,
-	}))
+	grip.Info(message.Fields{
+		"message":    "ChayaMTesting model/notification/notification.go 26",
+		"created ID": fmt.Sprintf("%s-%s-%s", eventID, trigger, subscriber.String()),
+	})
 	return fmt.Sprintf("%s-%s-%s", eventID, trigger, subscriber.String())
 }
 
@@ -163,10 +163,10 @@ func (n *Notification) Composer(env evergreen.Environment) (message.Composer, er
 		return message.NewJIRACommentMessage(level.Notice, *sub, *payload), nil
 
 	case event.SlackSubscriberType:
-		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-			"message":          "ChayaMTesting model/notification/notification.go 163",
-			"message.NewStack": message.NewStack(1, "stack"),
-		}))
+		// grip.Info(message.WrapError(errors.New("error message"), message.Fields{
+		// 	"message":          "ChayaMTesting model/notification/notification.go 163",
+		// 	"message.NewStack": message.NewStack(1, "stack"),
+		// }))
 		sub, ok := n.Subscriber.Target.(*string)
 		if !ok {
 			return nil, errors.New("slack subscriber is invalid")
@@ -176,12 +176,11 @@ func (n *Notification) Composer(env evergreen.Environment) (message.Composer, er
 		if !ok || payload == nil {
 			return nil, errors.New("slack payload is invalid")
 		}
-		grip.Info(message.WrapError(errors.New("error message"), message.Fields{
-			"message":          "ChayaMTesting model/notification/notification.go 163",
-			"message.NewStack": message.NewStack(1, "stack"),
-			"sub":              sub,
-			"payload":          payload,
-		}))
+		grip.Info(message.Fields{
+			"message": "ChayaMTesting model/notification/notification.go 163",
+			"sub":     sub,
+			"payload": payload,
+		})
 		return message.NewSlackMessage(level.Notice, *sub, payload.Body, payload.Attachments), nil
 
 	case event.GithubPullRequestSubscriberType:
