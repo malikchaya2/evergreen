@@ -12,7 +12,6 @@ import (
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
-	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -46,15 +45,6 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 				Message:    fmt.Sprintf("subscription type/trigger is invalid: %s/%s", dbSubscription.ResourceType, dbSubscription.Trigger),
 			}
 		}
-
-		grip.Info(message.Fields{
-			"message":               "ChayaMTesting rest/data/subscription.go 74",
-			"message.NewStack":      message.NewStack(1, "stack"),
-			"dbSubscriptions":       dbSubscriptions,
-			"subscription":          subscription,
-			"subscriptionInterface": subscriptionInterface,
-			"dbSubscription":        dbSubscription,
-		})
 
 		if dbSubscription.OwnerType == event.OwnerTypePerson && dbSubscription.Owner == "" {
 			dbSubscription.Owner = owner // default the current user
@@ -125,22 +115,10 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 			}
 
 			for _, childPatchId := range children {
-				grip.Info(message.Fields{
-					"message":      "ChayaMTesting rest/data/subscription.go 129",
-					"children":     children,
-					"childPatchId": childPatchId,
-				})
 				childDbSubscription := dbSubscription
 				childDbSubscription.LastUpdated = time.Now()
 				var selectors []event.Selector
 				for _, selector := range dbSubscription.Selectors {
-					grip.Info(message.Fields{
-						"message":             "ChayaMTesting rest/data/subscription.go 164",
-						"selector":            selector,
-						"selector.Type":       selector.Type,
-						"selector.Type == id": selector.Type == "id",
-						"selector.Data":       selector.Data,
-					})
 					if selector.Type == "id" {
 						selector.Data = childPatchId
 					}
@@ -149,12 +127,6 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 				childDbSubscription.Selectors = selectors
 				childDbSubscription.Subscriber.SubType = event.Child
 				dbSubscriptions = append(dbSubscriptions, childDbSubscription)
-				grip.Info(message.Fields{
-					"message":             "ChayaMTesting rest/data/subscription.go 164",
-					"message.NewStack":    message.NewStack(1, "stack"),
-					"dbSubscriptions":     dbSubscriptions,
-					"childDbSubscription": childDbSubscription,
-				})
 			}
 		} else {
 			dbSubscriptions = append(dbSubscriptions, dbSubscription)
@@ -164,12 +136,6 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 
 	catcher := grip.NewSimpleCatcher()
 	for _, subscription := range dbSubscriptions {
-		grip.Info(message.Fields{
-			"message":          "ChayaMTesting rest/data/subscription.go 179",
-			"message.NewStack": message.NewStack(1, "stack"),
-			"dbSubscriptions":  dbSubscriptions,
-			"subscription":     subscription,
-		})
 		catcher.Add(subscription.Upsert())
 	}
 	return catcher.Resolve()

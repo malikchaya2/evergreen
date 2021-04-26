@@ -6,7 +6,6 @@ import (
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
-	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	mgobson "gopkg.in/mgo.v2/bson"
 )
@@ -227,10 +226,6 @@ func NewEmailSubscriber(t string) Subscriber {
 }
 
 func NewSlackSubscriber(t string) Subscriber {
-	grip.Info(message.Fields{
-		"message": "ChayaMTesting model/event/subscribers.go 225",
-		"t":       t,
-	})
 	return Subscriber{
 		Type:   SlackSubscriberType,
 		Target: t,
