@@ -20,9 +20,6 @@ type DBSubscriptionConnector struct{}
 func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions []restModel.APISubscription) error {
 	dbSubscriptions := []event.Subscription{}
 	for _, subscription := range subscriptions {
-		//here ...
-		//maybe here, add the children somehow
-		// add more logging to figure out
 		subscriptionInterface, err := subscription.ToService()
 		if err != nil {
 			return gimlet.ErrorResponse{
@@ -31,7 +28,6 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 			}
 		}
 		dbSubscription, ok := subscriptionInterface.(event.Subscription)
-		dbSubscription.Subscriber.SubType = "test"
 		if !ok {
 			return gimlet.ErrorResponse{
 				StatusCode: http.StatusInternalServerError,
@@ -85,15 +81,11 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 			}
 		}
 
-		// ******* todo **********: remove this
-		// if it's a parent, version, slack subscription add a subscription for all children
-		// if dbSubscription.Subscriber.Type == event.SlackSubscriberType && dbSubscription.ResourceType == event.ResourceTypeVersion {
-		if dbSubscription.ResourceType == event.ResourceTypeVersion {
-			// todo:
-			// find where these are proccessed, and do the whole waiting on children thing if subType is waitonchildren -- maybe in the payload
-			// then if this works, edit the patches, pr subscriber to use subtype as well.
+		dbSubscriptions = append(dbSubscriptions, dbSubscription)
 
-			//find all children, itterate through them
+		if dbSubscription.ResourceType == event.ResourceTypeVersion {
+
+			//find all children, iterate through them
 			var versionId string
 			for _, selector := range dbSubscription.Selectors {
 				if selector.Type == "id" {
@@ -107,12 +99,6 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 					Message:    "Error retrieving child versions: " + err.Error(),
 				}
 			}
-			if len(children) != 0 {
-				dbSubscription.Subscriber.SubType = event.Parent
-				dbSubscriptions = append(dbSubscriptions, dbSubscription)
-			} else {
-				dbSubscriptions = append(dbSubscriptions, dbSubscription)
-			}
 
 			for _, childPatchId := range children {
 				childDbSubscription := dbSubscription
@@ -125,11 +111,8 @@ func (dc *DBSubscriptionConnector) SaveSubscriptions(owner string, subscriptions
 					selectors = append(selectors, selector)
 				}
 				childDbSubscription.Selectors = selectors
-				childDbSubscription.Subscriber.SubType = event.Child
 				dbSubscriptions = append(dbSubscriptions, childDbSubscription)
 			}
-		} else {
-			dbSubscriptions = append(dbSubscriptions, dbSubscription)
 		}
 
 	}
