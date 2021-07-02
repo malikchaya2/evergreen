@@ -22,7 +22,7 @@ import (
 	"github.com/pkg/errors"
 	ignore "github.com/sabhiram/go-git-ignore"
 	mgobson "gopkg.in/mgo.v2/bson"
-	"gopkg.in/yaml.v3"
+	"gopkg.in/yaml.v2"
 )
 
 const (
@@ -605,7 +605,7 @@ var ValidLogSenders = []string{
 }
 
 // TaskIdTable is a map of [variant, task display name]->[task id].
-type TaskIdTable map[TVPair]string
+type TaskIdTable map[TVPair]Task
 
 type TaskIdConfig struct {
 	ExecutionTasks TaskIdTable
@@ -616,6 +616,11 @@ type TaskIdConfig struct {
 type TVPair struct {
 	Variant  string
 	TaskName string
+}
+
+type Task struct {
+	Id        string
+	Execution *int
 }
 
 type TVPairSet []TVPair
@@ -658,50 +663,50 @@ func (p TVPair) String() string {
 }
 
 // AddId adds the Id for the task/variant combination to the table.
-func (tt TaskIdTable) AddId(variant, taskName, id string) {
-	tt[TVPair{variant, taskName}] = id
+func (tt TaskIdTable) AddIdAndExecution(variant, taskName, id string, exectution int) {
+	tt[TVPair{variant, taskName}] = Task{Id: id, Execution: &exectution}
 }
 
 // GetId returns the Id for the given task on the given variant.
 // Returns the empty string if the task/variant does not exist.
-func (tt TaskIdTable) GetId(variant, taskName string) string {
+func (tt TaskIdTable) GetIdAndExecution(variant, taskName string) Task {
 	return tt[TVPair{variant, taskName}]
 }
 
 // GetIdsForTaskInAllVariants returns all task Ids for taskName on all variants
-func (tt TaskIdTable) GetIdsForTaskInAllVariants(taskName string) []string {
-	ids := []string{}
-	for pair, id := range tt {
-		if pair.TaskName != taskName || id == "" {
+func (tt TaskIdTable) GetIdsAndExecutionsForTaskInAllVariants(taskName string) []Task {
+	idsAndExecutions := []Task{}
+	for pair, task := range tt {
+		if pair.TaskName != taskName || task.Id == "" {
 			continue
 		}
-		ids = append(ids, id)
+		idsAndExecutions = append(idsAndExecutions, Task{Id: task.Id, Execution: task.Execution})
 	}
-	return ids
+	return idsAndExecutions
 }
 
 // GetIdsForAllTasksInVariant returns all task Ids for all tasks on a variant
-func (tt TaskIdTable) GetIdsForAllTasksInVariant(variantName string) []string {
-	ids := []string{}
-	for pair, id := range tt {
-		if pair.Variant != variantName || id == "" {
+func (tt TaskIdTable) GetIdsAndExecutionsForAllTasksInVariant(variantName string) []Task {
+	idsAndExecutions := []Task{}
+	for pair, task := range tt {
+		if pair.Variant != variantName || task.Id == "" {
 			continue
 		}
-		ids = append(ids, id)
+		idsAndExecutions = append(idsAndExecutions, Task{Id: task.Id, Execution: task.Execution})
 	}
-	return ids
+	return idsAndExecutions
 }
 
 // GetIdsForAllTasks returns every id in the table
-func (tt TaskIdTable) GetIdsForAllTasks() []string {
-	ids := make([]string, 0, len(tt))
-	for _, id := range tt {
-		if id == "" {
+func (tt TaskIdTable) GetIdsAndExecutionsForAllTasks() []Task {
+	idsAndExecutions := make([]Task, 0, len(tt))
+	for _, task := range tt {
+		if task.Id == "" {
 			continue
 		}
-		ids = append(ids, id)
+		idsAndExecutions = append(idsAndExecutions, Task{Id: task.Id, Execution: task.Execution})
 	}
-	return ids
+	return idsAndExecutions
 }
 
 // TaskIdTable builds a TaskIdTable for the given version and project
@@ -735,19 +740,19 @@ func NewTaskIdTable(p *Project, v *Version, sourceRev, defID string) TaskIdConfi
 			if tg := p.FindTaskGroup(t.Name); tg != nil {
 				for _, groupTask := range tg.Tasks {
 					taskId := generateId(groupTask, projectIdentifier, &bv, rev, v)
-					execTable[TVPair{bv.Name, groupTask}] = util.CleanName(taskId)
+					execTable[TVPair{bv.Name, groupTask}] = Task{Id: util.CleanName(taskId), Execution: nil}
 				}
 			} else {
 				// create a unique Id for each task
 				taskId := generateId(t.Name, projectIdentifier, &bv, rev, v)
-				execTable[TVPair{bv.Name, t.Name}] = util.CleanName(taskId)
+				execTable[TVPair{bv.Name, t.Name}] = Task{Id: util.CleanName(taskId), Execution: nil}
 			}
 		}
 
 		for _, dt := range bv.DisplayTasks {
 			name := fmt.Sprintf("display_%s", dt.Name)
 			taskId := generateId(name, projectIdentifier, &bv, rev, v)
-			displayTable[TVPair{bv.Name, dt.Name}] = util.CleanName(taskId)
+			displayTable[TVPair{bv.Name, dt.Name}] = Task{Id: util.CleanName(taskId), Execution: nil}
 		}
 	}
 	return TaskIdConfig{ExecutionTasks: execTable, DisplayTasks: displayTable}
@@ -800,7 +805,7 @@ func NewPatchTaskIdTable(proj *Project, v *Version, tasks TaskVariantPairs, proj
 func generateIdsForVariant(vt TVPair, proj *Project, v *Version, tasks TVPairSet, table TaskIdTable,
 	tgMap map[string]TaskGroup, projectIdentifier string) TaskIdTable {
 	if table == nil {
-		table = map[TVPair]string{}
+		table = map[TVPair]Task{}
 	}
 
 	// we must track the project's variants definitions as well,
@@ -813,17 +818,17 @@ func generateIdsForVariant(vt TVPair, proj *Project, v *Version, tasks TVPairSet
 	}
 	for _, t := range projBV.Tasks { // create Ids for each task that can run on the variant and is requested by the patch.
 		if utility.StringSliceContains(taskNamesForVariant, t.Name) {
-			table[TVPair{vt.Variant, t.Name}] = util.CleanName(generateId(t.Name, projectIdentifier, projBV, rev, v))
+			table[TVPair{vt.Variant, t.Name}] = Task{Id: util.CleanName(generateId(t.Name, projectIdentifier, projBV, rev, v)), Execution: nil}
 		} else if tg, ok := tgMap[t.Name]; ok {
 			for _, name := range tg.Tasks {
-				table[TVPair{vt.Variant, name}] = util.CleanName(generateId(name, projectIdentifier, projBV, rev, v))
+				table[TVPair{vt.Variant, name}] = Task{Id: util.CleanName(generateId(name, projectIdentifier, projBV, rev, v)), Execution: nil}
 			}
 		}
 	}
 	for _, t := range projBV.DisplayTasks {
 		// create Ids for each task that can run on the variant and is requested by the patch.
 		if utility.StringSliceContains(taskNamesForVariant, t.Name) {
-			table[TVPair{vt.Variant, t.Name}] = util.CleanName(generateId(fmt.Sprintf("display_%s", t.Name), projectIdentifier, projBV, rev, v))
+			table[TVPair{vt.Variant, t.Name}] = Task{Id: util.CleanName(generateId(fmt.Sprintf("display_%s", t.Name), projectIdentifier, projBV, rev, v)), Execution: nil}
 		}
 	}
 
