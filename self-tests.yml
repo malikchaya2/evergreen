@@ -606,6 +606,13 @@ tasks:
           target: "test-evergreen"
           RUN_TEST: "TestEnvironmentSuite/TestInitDB"
           MONGO_CREDS_FILE: ${workdir}/gopath/src/github.com/evergreen-ci/evergreen/test_auth.yml
+  - name: test-parent-param
+    commands:
+      - command: shell.exec
+        params:
+          working_dir: src
+          script: |
+            echo "my_param: ${my_param}, your_param: ${your_param}"
 
 task_groups:
   - name: dist-and-upload-clis
@@ -640,6 +647,7 @@ buildvariants:
       - name: "verify-agent-version-update"
       - name: "docker-cleanup"
       - name: test-db-auth
+      - name: test-parent-param
       - name: test-cloud
 
   - name: race-detector
@@ -656,6 +664,7 @@ buildvariants:
     tasks:
       - name: ".test"
       - name: test-db-auth
+      - name: test-parent-param
 
   - name: lint
     display_name: Lint
