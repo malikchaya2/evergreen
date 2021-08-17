@@ -595,6 +595,11 @@ tasks:
       - func: verify-agent-version-update
   - name: test-db-auth
     commands:
+      - command: shell.exec
+        params:
+          working_dir: src
+          script: |
+            echo "parent_param_1: ${sandbox_param_1}, parent_param_2: ${sandbox_param_2}"
       - func: get-project
       - func: run-make
         vars:
@@ -606,13 +611,18 @@ tasks:
           target: "test-evergreen"
           RUN_TEST: "TestEnvironmentSuite/TestInitDB"
           MONGO_CREDS_FILE: ${workdir}/gopath/src/github.com/evergreen-ci/evergreen/test_auth.yml
-  - name: test-parent-param
+  - name: test-receiving-parent-param
     commands:
       - command: shell.exec
         params:
           working_dir: src
           script: |
-            echo "my_param: ${my_param}, your_param: ${your_param}"
+            echo "parent_param_1: ${sandbox_param_1}, parent_param_2: ${sandbox_param_2}"
+  - name: test_passing_param_to_child
+    commands:
+      - command: downstream_expansions.set
+        params:
+          file: ${workdir}/gopath/src/github.com/evergreen-ci/evergreen/downstream_expansions.yml
 
 task_groups:
   - name: dist-and-upload-clis
@@ -647,7 +657,8 @@ buildvariants:
       - name: "verify-agent-version-update"
       - name: "docker-cleanup"
       - name: test-db-auth
-      - name: test-parent-param
+      - name: test_passing_param_to_child
+      - name: test-receiving-parent-param
       - name: test-cloud
 
   - name: race-detector
@@ -664,7 +675,8 @@ buildvariants:
     tasks:
       - name: ".test"
       - name: test-db-auth
-      - name: test-parent-param
+      - name: test_passing_param_to_child
+      - name: test-receiving-parent-param
 
   - name: lint
     display_name: Lint
