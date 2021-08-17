@@ -562,6 +562,9 @@ tasks:
           target: get-go-imports
       - func: setup-credentials
       - func: setup-mongodb
+      - command: downstream_expansions.set
+        params:
+          file: gopath/src/github.com/evergreen-ci/evergreen/downstream_expansions.yml
       - func: run-make
         vars:
           target: revendor
@@ -619,11 +622,23 @@ tasks:
           script: |
             echo "parent_param_1: ${sandbox_param_1}, parent_param_2: ${sandbox_param_2}"
   - name: test_passing_param_to_child
+    tags: ["db", "test"]
     commands:
+      - command: git.get_project
+        type: setup
+        params:
+          directory: gopath/src/github.com/evergreen-ci/evergreen
+          token: ${github_token}
+          shallow_clone: false
+      - func: run-make
+        vars:
+          target: get-go-imports
+      - func: setup-credentials
+      - func: setup-mongodb
+      - func: run-make
       - command: downstream_expansions.set
         params:
-          file: ${workdir}/gopath/src/github.com/evergreen-ci/evergreen/downstream_expansions.yml
-
+          file: gopath/src/github.com/evergreen-ci/evergreen/downstream_expansions.yml
 task_groups:
   - name: dist-and-upload-clis
     max_hosts: 1
