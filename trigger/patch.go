@@ -89,6 +89,12 @@ func (t *patchTriggers) Selectors() []event.Selector {
 }
 
 func (t *patchTriggers) patchOutcome(sub *event.Subscription) (*notification.Notification, error) {
+	grip.Info(message.Fields{
+		"message":       "chayaMTesting patch.go  patchOutcome 93",
+		"t.data.Status": t.data.Status,
+		"sub":           sub,
+		"t.patch":       t.patch,
+	})
 	if t.data.Status != evergreen.PatchSucceeded && t.data.Status != evergreen.PatchFailed {
 		return nil, nil
 	}
@@ -119,6 +125,13 @@ func (t *patchTriggers) patchOutcome(sub *event.Subscription) (*notification.Not
 	}
 
 	isReady, err := t.waitOnChildrenOrSiblings(sub)
+	grip.Info(message.Fields{
+		"message": "chayaMTesting patch.go patchOutcome 128",
+		"isReady": isReady,
+		"err":     err,
+		"t.patch": t.patch,
+		"sub":     sub,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -126,18 +139,44 @@ func (t *patchTriggers) patchOutcome(sub *event.Subscription) (*notification.Not
 		return nil, nil
 	}
 
+	grip.Info(message.Fields{
+		"message":       "chayaMTesting patch.go patchOutcome 142",
+		"t.data.Status": t.data.Status,
+		"sub":           sub,
+		"t.patch":       t.patch,
+		"isReady":       isReady,
+		"err":           err,
+	})
 	return t.generate(sub)
 }
 
+// the problem: the child doesn't have the parent patch
 func (t *patchTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (bool, error) {
+	grip.Info(message.Fields{
+		"message":             "chayaMTesting patch.go waitOnChildrenOrSiblings 134",
+		"sub.Subscriber.Type": sub.Subscriber.Type,
+		"t.patch":             t.patch,
+	})
 	if sub.Subscriber.Type != event.GithubPullRequestSubscriberType {
 		return true, nil
 	}
 	target, ok := sub.Subscriber.Target.(*event.GithubPullRequestSubscriber)
+	grip.Info(message.Fields{
+		"message": "chayaMTesting patch.go 142",
+		"target":  target,
+		"ok":      ok,
+	})
 	if !ok {
 		return false, errors.Errorf("target '%s' didn't not have expected type", sub.Subscriber.Target)
 	}
 	subType := target.Type
+	grip.Info(message.Fields{
+		"message":             "chayaMTesting patch.go waitOnChildrenOrSiblings 151",
+		"t.patch.IsParent() ": t.patch.IsParent(),
+		"t.patch.IsChild()":   t.patch.IsChild(),
+		"subType":             subType,
+		"if check":            !(t.patch.IsParent() || (t.patch.IsChild() && subType == event.WaitOnChild)),
+	})
 
 	// notifications are only delayed if the patch is either a parent, or a child that is of subType event.WaitOnChild.
 	// we don't always wait on siblings when it is a childpatch, since childpatches need to let github know when they
@@ -147,6 +186,15 @@ func (t *patchTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (bool,
 	}
 	// get the children or siblings to wait on
 	isReady, parentPatch, isFailingStatus, err := checkPatchStatus(t.patch)
+	//parent patch is null here and it's a child
+	grip.Info(message.Fields{
+		"message":           "chayaMTesting patch.go waitOnChildrenOrSiblings 168",
+		"isReady":           isReady,
+		"parentPatch":       parentPatch,
+		"isFailingStatus":   isFailingStatus,
+		"err":               err,
+		"t.patch.IsChild()": t.patch.IsChild(),
+	})
 	if err != nil {
 		return false, errors.Wrapf(err, "error getting patch status for '%s'", t.patch.Id)
 	}
@@ -160,6 +208,13 @@ func (t *patchTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (bool,
 		// now that the children are done, the parent can be considered done.
 		t.patch = parentPatch
 	}
+
+	grip.Info(message.Fields{
+		"message":           "chayaMTesting patch.go waitOnChildrenOrSiblings 189",
+		"isReady":           isReady,
+		"t.patch":           t.patch,
+		"t.patch.IsChild()": t.patch.IsChild(),
+	})
 	return isReady, nil
 }
 
@@ -169,11 +224,29 @@ func checkPatchStatus(p *patch.Patch) (bool, *patch.Patch, bool, error) {
 	if err != nil {
 		return isReady, nil, false, errors.Wrap(err, "error getting child or sibling patches")
 	}
-
+	// here
 	// make sure the parent is done, if not, wait for the parent
+	grip.Info(message.Fields{
+		"message":            "chayaMTesting patch.go checkPatchStatus 230",
+		"isReady":            isReady,
+		"childrenOrSiblings": childrenOrSiblings,
+		"parentPatch":        parentPatch,
+		"err":                err,
+		" p.IsChild()":       p.IsChild(),
+		// "parentPatch.Status": parentPatch.Status,
+	})
 	if p.IsChild() {
+		grip.Info(message.Fields{
+			"message": "chayaMTesting patch.go checkPatchStatus 215",
+			"evergreen.IsFinishedPatchStatus(parentPatch.Status)": evergreen.IsFinishedPatchStatus(parentPatch.Status),
+		})
 		if !evergreen.IsFinishedPatchStatus(parentPatch.Status) {
-			return isReady, nil, false, nil
+			grip.Info(message.Fields{
+				"message":            "chayaMTesting patch.go 245, returning",
+				"parentPatch.Status": parentPatch.Status,
+				"isReady":            isReady,
+			})
+			return isReady, parentPatch, false, nil
 		}
 	}
 	childrenStatus, err := getChildrenOrSiblingsReadiness(childrenOrSiblings)
@@ -185,10 +258,18 @@ func checkPatchStatus(p *patch.Patch) (bool, *patch.Patch, bool, error) {
 	}
 	isReady = true
 
-	isFailingStatus := false
+	isFailingStatus := (p.Status == evergreen.PatchFailed)
 	if childrenStatus == evergreen.PatchFailed || (p.IsChild() && parentPatch.Status == evergreen.PatchFailed) {
 		isFailingStatus = true
 	}
+	grip.Info(message.Fields{
+		"message":         "chayaMTesting patch.go checkPatchStatus 266",
+		"isReady":         isReady,
+		"parentPatch":     parentPatch,
+		"isFailingStatus": isFailingStatus,
+		"err":             err,
+	})
+	// over here: it's the parent, ready is true, failing status is true. but it stops here. doesn't go to the next line.
 	return isReady, parentPatch, isFailingStatus, err
 
 }
@@ -359,15 +440,57 @@ func (t *patchTriggers) makeData(sub *event.Subscription) (*commonTemplateData, 
 }
 
 func (t *patchTriggers) generate(sub *event.Subscription) (*notification.Notification, error) {
+	grip.Info(message.Fields{
+		"message":             "chayaMTesting patch.go generate 444",
+		"t.data.Status":       t.data.Status,
+		"sub":                 sub,
+		"t.patch":             t.patch,
+		"t.patch.IsParent() ": t.patch.IsParent(),
+		"t.patch.IsChild()":   t.patch.IsChild(),
+	})
 	data, err := t.makeData(sub)
+	grip.Info(message.Fields{
+		"message":             "chayaMTesting patch.go generate 444",
+		"t.data.Status":       t.data.Status,
+		"sub":                 sub,
+		"t.patch":             t.patch,
+		"t.patch.IsParent() ": t.patch.IsParent(),
+		"t.patch.IsChild()":   t.patch.IsChild(),
+		"data":                data,
+		"err":                 err,
+	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to collect patch data")
 	}
 
 	payload, err := makeCommonPayload(sub, t.Selectors(), data)
+	grip.Info(message.Fields{
+		"message":             "chayaMTesting patch.go generate 444",
+		"t.data.Status":       t.data.Status,
+		"sub":                 sub,
+		"t.patch":             t.patch,
+		"t.patch.IsParent() ": t.patch.IsParent(),
+		"t.patch.IsChild()":   t.patch.IsChild(),
+		"payload":             payload,
+		"err":                 err,
+	})
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to build notification")
 	}
+	grip.Info(message.Fields{
+		"message":             "chayaMTesting patch.go generate 444",
+		"t.data.Status":       t.data.Status,
+		"sub":                 sub,
+		"t.patch":             t.patch,
+		"t.patch.IsParent() ": t.patch.IsParent(),
+		"t.patch.IsChild()":   t.patch.IsChild(),
+		"data":                data,
+		"err":                 err,
+		"t.event.ID":          t.event.ID,
+		"sub.Trigger":         sub.Trigger,
+		"&sub.Subscriber":     &sub.Subscriber,
+		"payload":             payload,
+	})
 	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
 }
 

@@ -37,6 +37,12 @@ func New(eventID, trigger string, subscriber *event.Subscriber, payload interfac
 		return nil, errors.New("cannot create notification with nil payload")
 	}
 
+	grip.Info(message.Fields{
+		"message":    "chayaMTesting notification.go New 41",
+		"payload":    payload,
+		"subscriber": subscriber,
+	})
+
 	return &Notification{
 		ID:         makeNotificationID(eventID, trigger, subscriber),
 		Subscriber: *subscriber,

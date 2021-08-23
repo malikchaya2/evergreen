@@ -3154,17 +3154,18 @@ func (r *versionResolver) Status(ctx context.Context, obj *restModel.APIVersion)
 			return status, InternalServerError.Send(ctx, fmt.Sprintf("Could not fetch Patch %s: %s", *obj.Id, err.Error()))
 		}
 		if len(p.ChildPatches) > 0 {
-			patchStatuses := []string{}
+			allStatuses := []string{*p.Status}
 			for _, cp := range p.ChildPatches {
-				patchStatuses = append(patchStatuses, *cp.Status)
+
 				// add the child patch tasks to tasks so that we can consider their status
 				childPatchTasks, _, err := r.sc.FindTasksByVersion(*cp.Id, opts)
 				if err != nil {
 					return "", InternalServerError.Send(ctx, fmt.Sprintf("Could not fetch tasks for patch: %s ", err.Error()))
 				}
 				tasks = append(tasks, childPatchTasks...)
+				allStatuses = append(allStatuses, *cp.Status)
 			}
-			status = patch.GetCollectiveStatus(patchStatuses)
+			status = patch.GetCollectiveStatus(allStatuses)
 		}
 	}
 
