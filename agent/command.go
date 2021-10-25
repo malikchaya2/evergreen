@@ -92,8 +92,18 @@ func (a *Agent) runCommandSet(ctx context.Context, tc *taskContext, commandInfo 
 		}
 
 		if len(cmds) == 1 {
+			grip.Error(message.WrapError(errors.New("command.go 96"), message.Fields{
+				"message":         "chayaMtesting, command.go 96 ",
+				"fullCommandName": fullCommandName,
+			},
+			))
 			tc.logger.Task().Infof("Running command %s (step %d of %d)", fullCommandName, index, total)
 		} else {
+			grip.Error(message.WrapError(errors.New("host_methods.go 102"), message.Fields{
+				"message":         "chayaMtesting, command.go 104 ",
+				"fullCommandName": fullCommandName,
+			},
+			))
 			// for functions with more than one command
 			tc.logger.Task().Infof("Running command %v (step %d.%d of %d)", fullCommandName, index, idx+1, total)
 		}

@@ -29,10 +29,28 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	task := MustHaveTask(r)
 
 	s3CopyReq := &apimodels.S3CopyRequest{}
+	//here
+	// when it fails, r.body is {}
 	err := utility.ReadJSON(util.NewRequestReader(r), s3CopyReq)
+	rawData := map[string]interface{}{}
+	newErr := gimlet.GetJSON(r.Body, rawData)
 	if err != nil {
+		err = errors.Wrap(err, "chayaMtesting, failing api_plugin_s3copy.go 50\n")
+		err = errors.Wrapf(err, "r: %s \n", r)
+		err = errors.Wrapf(err, "r.GetBody: %s \n", r.GetBody)
+		err = errors.Wrapf(err, "r.Body: %s \n", r.Body)
+		err = errors.Wrapf(err, "testStruct %s \n", rawData)
+		err = errors.Wrapf(err, "newErr %s \n", newErr)
 		as.LoggedError(w, r, http.StatusBadRequest, err)
+
 		return
+	} else {
+		err = errors.New("command.go 32\n")
+		err = errors.Wrap(err, "chayaMtesting, passing api_plugin_s3copy.go 64\n")
+		err = errors.Wrapf(err, "r: %s\n", r)
+		err = errors.Wrapf(err, "r.GetBody: %s \n", r.GetBody)
+		err = errors.Wrapf(err, "r.Body: %s \n", r.Body)
+		as.LoggedError(w, r, http.StatusOK, err)
 	}
 
 	// Get the version for this task, so we can check if it has
@@ -119,6 +137,7 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 			}
 			err = srcBucket.Copy(ctx, copyOpts)
 			if err != nil {
+				//fails here because of auth and doesn't consider optional
 				grip.Errorf("S3 copy failed for task %s, retrying: %+v", task.Id, err)
 				return true, err
 			}
@@ -136,7 +155,7 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
-
+		//this gets logged
 		as.LoggedError(w, r, http.StatusInternalServerError,
 			errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
 		return

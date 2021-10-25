@@ -791,6 +791,12 @@ func (c *hostCommunicator) GetManifest(ctx context.Context, taskData TaskData) (
 }
 
 func (c *hostCommunicator) S3Copy(ctx context.Context, taskData TaskData, req *apimodels.S3CopyRequest) (string, error) {
+	grip.Error(message.WrapError(errors.New("host_methods.go 795"), message.Fields{
+		"message":  "chayaMtesting, host_methods.go 795 ",
+		"taskData": taskData,
+		"req":      req,
+	},
+	))
 	info := requestInfo{
 		method:   http.MethodPost,
 		taskData: &taskData,
@@ -799,8 +805,26 @@ func (c *hostCommunicator) S3Copy(ctx context.Context, taskData TaskData, req *a
 	info.setTaskPathSuffix("s3Copy/s3Copy")
 	resp, err := c.retryRequest(ctx, info, req)
 	if err != nil {
+		grip.Error(message.WrapError(errors.New("host_methods.go 809"), message.Fields{
+			"message":  "chayaMtesting, host_methods.go 809 ",
+			"error":    err,
+			"taskData": taskData,
+			"req":      req,
+			"info":     info,
+			"resp":     resp,
+		},
+		))
 		return "", utility.RespErrorf(resp, "failed to copy file in S3 for task %s: %s", taskData.ID, err.Error())
 	}
+	grip.Error(message.WrapError(errors.New("host_methods.go 820"), message.Fields{
+		"message":  "chayaMtesting, host_methods.go 820 ",
+		"error":    err,
+		"taskData": taskData,
+		"req":      req,
+		"info":     info,
+		"resp":     resp,
+	},
+	))
 	defer resp.Body.Close()
 	return "", nil
 }

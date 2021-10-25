@@ -138,6 +138,10 @@ func finishLogger(logger grip.Journaler, r *http.Request, res negroni.ResponseWr
 		"outcome":     http.StatusText(res.Status()),
 		"length":      r.ContentLength,
 	}
+	// grip.Error(message.WrapError(errors.New("middleware_grip, api.go 119 185"), message.Fields{
+	// 	"message": "chayaMtesting middleware_grip, api.go 119 ",
+	// 	"m":       m,
+	// }))
 	if u := GetUser(ctx); u != nil {
 		m["user"] = u.Username()
 	}

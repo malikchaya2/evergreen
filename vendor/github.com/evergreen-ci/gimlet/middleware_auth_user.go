@@ -204,5 +204,12 @@ func (u *userMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Request, next
 		}
 	}
 
+	if err != nil {
+		grip.Error(message.WrapError(err, message.Fields{
+			"message": "chayaMtesting, middleware 208 ",
+			"err":     err,
+		}))
+	}
+
 	next(rw, r)
 }

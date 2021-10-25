@@ -938,6 +938,9 @@ func (s *s3BucketLarge) Pull(ctx context.Context, opts SyncOptions) error {
 
 func (s *s3Bucket) Copy(ctx context.Context, options CopyOptions) error {
 	if !options.IsDestination {
+		// grip.Error(message.WrapError(errors.New("s3_bucket.go 942 "), message.Fields{
+		// 	"message": "chayaMtesting, s3_bucket.go 942 ",
+		// }))
 		options.IsDestination = true
 		options.SourceKey = consistentJoin(s.name, s.normalizeKey(options.SourceKey))
 		return options.DestinationBucket.Copy(ctx, options)

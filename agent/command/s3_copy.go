@@ -15,6 +15,8 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mitchellh/mapstructure"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -168,12 +170,24 @@ func (c *s3copy) Execute(ctx context.Context,
 // production destination
 func (c *s3copy) s3Copy(ctx context.Context,
 	comm client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
-
+	// use logger to log it in the task data insteak of splunk
+	// validate the task secret here and log
 	td := client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}
 
 	var foundDottedBucketName bool
 
+	grip.Error(message.WrapError(errors.New("s3_copy.go 178"), message.Fields{
+		"message":       "chayaMtesting, s3_copy.go 179 ",
+		"c.S3CopyFiles": c.S3CopyFiles,
+	}))
+
 	for _, s3CopyFile := range c.S3CopyFiles {
+
+		grip.Error(message.WrapError(errors.New("s3_copy.go 185"), message.Fields{
+			"message":       "chayaMtesting, s3_copy.go 185 ",
+			"c.S3CopyFiles": c.S3CopyFiles,
+			"s3CopyFile":    s3CopyFile,
+		}))
 		if len(s3CopyFile.BuildVariants) > 0 && !utility.StringSliceContains(
 			s3CopyFile.BuildVariants, conf.BuildVariant.Name) {
 			continue
@@ -202,13 +216,26 @@ func (c *s3copy) s3Copy(ctx context.Context,
 		}
 
 		responseString, err := comm.S3Copy(ctx, td, &s3CopyReq)
-
+		grip.Error(message.WrapError(errors.New("s3_copy.go 179"), message.Fields{
+			"message":        "chayaMtesting, s3_copy.go 179 ",
+			"c.S3CopyFiles":  c.S3CopyFiles,
+			"s3CopyFile":     s3CopyFile,
+			"responseString": responseString,
+			"err":            err,
+		}))
 		if responseString != "" {
 			logger.Task().Infof("s3Copy response: %s", responseString)
 		}
 
 		if err != nil {
 			err = errors.Wrap(err, "s3 push copy failed")
+			grip.Error(message.Fields{
+				"message":        "chayaMtesting, s3_copy.go 234 ",
+				"error":          err,
+				"responseString": responseString,
+				"s3CopyFile":     s3CopyFile,
+			},
+			)
 			logger.Execution().Error(err)
 
 			if s3CopyFile.Optional {
@@ -216,6 +243,14 @@ func (c *s3copy) s3Copy(ctx context.Context,
 					s3CopyFile.DisplayName)
 				continue
 			} else {
+				grip.Error(message.Fields{
+					"message":        "chayaMtesting, s3_copy.go 222 ",
+					"error":          err,
+					"responseString": responseString,
+					"err":            err,
+					"s3CopyFile":     s3CopyFile,
+				},
+				)
 				return errors.Wrapf(err, "failed to push %s to %s",
 					s3CopyFile.Source.Path, s3CopyFile.Destination.Bucket)
 			}

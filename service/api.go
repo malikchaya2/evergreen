@@ -112,9 +112,15 @@ func (as *APIServer) checkTaskStrict(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		t, code, err := model.ValidateTask(gimlet.GetVars(r)["taskId"], true, r)
 		if err != nil {
+			grip.Error(message.WrapError(err, message.Fields{
+				"message":   "chayaMtesting, api.go 119 ",
+				"err":       err,
+				"err.Error": err.Error,
+			}))
 			as.LoggedError(w, r, code, errors.Wrap(err, "invalid task"))
 			return
 		}
+		//here this might be it
 		r = setAPITaskContext(r, t)
 		next(w, r)
 	}
@@ -682,6 +688,7 @@ func (as *APIServer) GetServiceApp() *gimlet.APIApp {
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/git/patch").Wrap(checkTaskSecret).Handler(as.gitServePatch).Get()
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/keyval/inc").Wrap(checkTask).Handler(as.keyValPluginInc).Post()
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/manifest/load").Wrap(checkTask).Handler(as.manifestLoadHandler).Get()
+	// this is the route that gets called
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/s3Copy/s3Copy").Wrap(checkTaskSecret).Handler(as.s3copyPlugin).Post()
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/downstreamParams").Wrap(checkTask).Handler(as.SetDownstreamParams).Post()
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/json/tags/{task_name}/{name}").Wrap(checkTask).Handler(as.getTaskJSONTagsForTask).Get()

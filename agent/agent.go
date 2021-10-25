@@ -546,8 +546,14 @@ func (a *Agent) runTaskTimeoutCommands(ctx context.Context, tc *taskContext) {
 }
 
 // finishTask sends the returned EndTaskResponse and error
-func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, message string) (*apimodels.EndTaskResponse, error) {
-	detail := a.endTaskResponse(tc, status, message)
+func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, m string) (*apimodels.EndTaskResponse, error) {
+	detail := a.endTaskResponse(tc, status, m)
+	grip.Error(message.WrapError(errors.New("agent.go 522"), message.Fields{
+		"message": "chayaMtesting, agent.go 552 ",
+		"status":  status,
+		"detail":  detail,
+		"m":       m,
+	}))
 	switch detail.Status {
 	case evergreen.TaskSucceeded:
 		tc.logger.Task().Info("Task completed - SUCCESS.")
@@ -557,6 +563,11 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 		}
 		a.runEndTaskSync(ctx, tc, detail)
 	case evergreen.TaskFailed:
+		grip.Error(message.WrapError(errors.New("agent.go 567"), message.Fields{
+			"message": "chayaMtesting, agent.go 567 ",
+			"status":  status,
+		}))
+
 		tc.logger.Task().Info("Task completed - FAILURE.")
 		if err := a.runPostTaskCommands(ctx, tc); err != nil {
 			tc.logger.Task().Error(errors.Wrap(err, "error running post task commands"))
@@ -597,7 +608,11 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 		return nil, errors.Wrap(err, "problem marking task complete")
 	}
 	grip.Infof("Sent final status as: %v", detail.Status)
-
+	grip.Error(message.WrapError(errors.New("agent.go 612"), message.Fields{
+		"message": "chayaMtesting, agent.go 612 ",
+		"status":  status,
+		"resp":    resp,
+	}))
 	return resp, nil
 }
 
