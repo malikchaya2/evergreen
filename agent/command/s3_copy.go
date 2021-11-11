@@ -203,7 +203,8 @@ func (c *s3copy) s3Copy(ctx context.Context,
 
 		// over here, what a failing test and passing test logged was virtually the same
 		responseString, err := comm.S3Copy(ctx, td, &s3CopyReq)
-
+		logger.Task().Infof("responseString: %s", responseString)
+		logger.Task().Infof("err: %s", err)
 		if responseString != "" {
 			logger.Task().Infof("s3Copy response: %s", responseString)
 		}
@@ -218,10 +219,10 @@ func (c *s3copy) s3Copy(ctx context.Context,
 		} else {
 			err = errors.Wrap(err, "s3 push copy failed")
 			logger.Execution().Error(err)
-			logger.Task().Infof("err != nil. err: %s file: '%s', optional: '%s'", s3CopyFile.DisplayName, s3CopyFile.Optional, err.Error())
+			logger.Task().Infof("err != nil. err: %s file: '%s', optional: '%t'", s3CopyFile.Source.Path, s3CopyFile.Optional, err.Error())
 
 			if s3CopyFile.Optional {
-				logger.Task().Infof("in if s3CopyFile.Optional, optional: '%s'", s3CopyFile.DisplayName, s3CopyFile.Optional)
+				logger.Task().Infof("in if s3CopyFile.Optional, optional: '%t'", s3CopyFile.Source.Path, s3CopyFile.Optional)
 
 				logger.Execution().Errorf("file '%s' is optional, continuing",
 					s3CopyFile.DisplayName)

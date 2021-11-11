@@ -345,8 +345,8 @@ functions:
         aws_key: ${aws_key}
         aws_secret: ${aws_secret}
         s3_copy_files:
-            - {'source': {'path': 'hello.tgz', 'bucket': 'evg-test-bucket-1'},
-               'destination': {'path': 'hello.tgz', 'bucket': 'evg-test-bucket-2'}}
+            - {'source': {'path': 'fake.tgz', 'bucket': 'evg-test-bucket-fake'},
+               'destination': {'path': 'fake', 'bucket': 'evg-test-bucket-fake'}}
 
           
 

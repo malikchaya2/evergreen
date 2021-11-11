@@ -137,9 +137,9 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 
 	if err != nil {
 		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
-
+		// doesn't get to task
 		as.LoggedError(w, r, http.StatusInternalServerError,
-			errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
+			errors.Wrapf(err, " chayaMTesting S3 copy failed for task %s", task.Id))
 		return
 	}
 
