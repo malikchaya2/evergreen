@@ -28,6 +28,7 @@ const (
 func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	task := MustHaveTask(r)
 
+	// when it fails, r.body is {}
 	s3CopyReq := &apimodels.S3CopyRequest{}
 	err := utility.ReadJSON(util.NewRequestReader(r), s3CopyReq)
 	if err != nil {

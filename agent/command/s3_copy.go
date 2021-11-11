@@ -201,6 +201,7 @@ func (c *s3copy) s3Copy(ctx context.Context,
 			S3Permissions:       s3CopyFile.Permissions,
 		}
 
+		// over here, what a failing test and passing test logged was virtually the same
 		responseString, err := comm.S3Copy(ctx, td, &s3CopyReq)
 
 		if responseString != "" {
