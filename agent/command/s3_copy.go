@@ -220,12 +220,13 @@ func (c *s3copy) s3Copy(ctx context.Context,
 					s3CopyFile.Source.Path, s3CopyFile.Destination.Bucket)
 			}
 
+		} else {
+			err = c.attachFiles(ctx, comm, logger, td, s3CopyReq)
+			if err != nil {
+				return errors.WithStack(err)
+			}
 		}
 
-		err = c.attachFiles(ctx, comm, logger, td, s3CopyReq)
-		if err != nil {
-			return errors.WithStack(err)
-		}
 		if !foundDottedBucketName && strings.Contains(s3CopyReq.S3DestinationBucket, ".") {
 			logger.Task().Warning("destination bucket names containing dots that are created after Sept. 30, 2020 are not guaranteed to have valid attached URLs")
 			foundDottedBucketName = true
