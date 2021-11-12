@@ -638,146 +638,146 @@ tasks:
           aws_secret: fake
           s3_copy_files:
               #Binaries
-              - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}.${ext|tgz}', 'bucket': '${push_bucket}'}}
+              - {'optional': true, 'source': {'path': 'something___random', 'bucket': 'something___random'},
+                'destination': {'path': 'something_random_6', 'bucket': 'something_random_6'}}
 
-              #Shell
-              - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}', 'bucket': '${push_bucket}'}}
+              # #Shell
+              # - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}', 'bucket': '${push_bucket}'}}
 
-              #Cryptd
-              - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}', 'bucket': '${push_bucket}'},
-                'build_variants': *mongocryptd_variants}
+              # #Cryptd
+              # - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}', 'bucket': '${push_bucket}'},
+              #   'build_variants': *mongocryptd_variants}
 
-              # MH
-              - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mh-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mh-${push_name}-${push_arch}-${suffix}.${ext|tgz}', 'bucket': '${push_bucket}'},
-                'build_variants': *mh_variants}
+              # # MH
+              # - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mh-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mh-${push_name}-${push_arch}-${suffix}.${ext|tgz}', 'bucket': '${push_bucket}'},
+              #   'build_variants': *mh_variants}
 
-              #Source tarball
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}', 'bucket': 'build-push-testing'},
-                'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}', 'bucket': '${push_bucket}'},
-                'build_variants': ['rhel70', 'windows']}
+              # #Source tarball
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}', 'bucket': '${push_bucket}'},
+              #   'build_variants': ['rhel70', 'windows']}
 
-              #MSI (Windows only)
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}-signed.msi', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}-signed.msi', 'bucket': '${push_bucket}'},
-                'build_variants': ['enterprise-windows', 'windows']}
+              # #MSI (Windows only)
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}-signed.msi', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}-signed.msi', 'bucket': '${push_bucket}'},
+              #   'build_variants': ['enterprise-windows', 'windows']}
 
-              #Binaries Signature
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sig', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sig', 'bucket': '${push_bucket}'}}
+              # #Binaries Signature
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sig', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sig', 'bucket': '${push_bucket}'}}
 
-              #Shell Signature
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sig', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sig', 'bucket': '${push_bucket}'}}
+              # #Shell Signature
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sig', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sig', 'bucket': '${push_bucket}'}}
 
-              #Cryptd Signature
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sig', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sig', 'bucket': '${push_bucket}'},
-                'build_variants': *mongocryptd_variants}
+              # #Cryptd Signature
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sig', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sig', 'bucket': '${push_bucket}'},
+              #   'build_variants': *mongocryptd_variants}
 
-              #Source tarball signature
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}.sig', 'bucket': 'build-push-testing'},
-                'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}.sig', 'bucket': '${push_bucket}'},
-                'build_variants': ['rhel70', 'windows']}
+              # #Source tarball signature
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}.sig', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}.sig', 'bucket': '${push_bucket}'},
+              #   'build_variants': ['rhel70', 'windows']}
 
-              #SHA1 for binaries
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha1', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha1', 'bucket': '${push_bucket}'}}
+              # #SHA1 for binaries
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha1', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha1', 'bucket': '${push_bucket}'}}
 
-              #SHA1 for shell
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha1', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha1', 'bucket': '${push_bucket}'}}
+              # #SHA1 for shell
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha1', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha1', 'bucket': '${push_bucket}'}}
 
-              #SHA1 for cryptd
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha1', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha1', 'bucket': '${push_bucket}'},
-                'build_variants': *mongocryptd_variants}
+              # #SHA1 for cryptd
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha1', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha1', 'bucket': '${push_bucket}'},
+              #   'build_variants': *mongocryptd_variants}
 
-              #SHA1 for source tarball
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}.sha1', 'bucket': 'build-push-testing'},
-                'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}.sha1', 'bucket': '${push_bucket}'},
-                'build_variants': ['rhel70', 'windows']}
+              # #SHA1 for source tarball
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}.sha1', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}.sha1', 'bucket': '${push_bucket}'},
+              #   'build_variants': ['rhel70', 'windows']}
 
-              #SHA1 for MSI
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}-signed.msi.sha1', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}-signed.msi.sha1', 'bucket': '${push_bucket}'},
-                'build_variants': ['enterprise-windows', 'windows']}
+              # #SHA1 for MSI
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}-signed.msi.sha1', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}-signed.msi.sha1', 'bucket': '${push_bucket}'},
+              #   'build_variants': ['enterprise-windows', 'windows']}
 
-              #SHA256 for binaries
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha256', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha256', 'bucket': '${push_bucket}'}}
+              # #SHA256 for binaries
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha256', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha256', 'bucket': '${push_bucket}'}}
 
-              #SHA256 for shell
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha256', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha256', 'bucket': '${push_bucket}'}}
+              # #SHA256 for shell
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha256', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha256', 'bucket': '${push_bucket}'}}
 
-              #SHA256 for cryptd
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha256', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha256', 'bucket': '${push_bucket}'},
-                'build_variants': *mongocryptd_variants}
+              # #SHA256 for cryptd
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha256', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}.sha256', 'bucket': '${push_bucket}'},
+              #   'build_variants': *mongocryptd_variants}
 
-              #SHA256 for source tarball
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}.sha256', 'bucket': 'build-push-testing'},
-                'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}.sha256', 'bucket': '${push_bucket}'},
-                'build_variants': ['rhel70', 'windows']}
+              # #SHA256 for source tarball
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}.sha256', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}.sha256', 'bucket': '${push_bucket}'},
+              #   'build_variants': ['rhel70', 'windows']}
 
-              #SHA256 for MSI files
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}-signed.msi.sha256', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}-signed.msi.sha256', 'bucket': '${push_bucket}'},
-                'build_variants': ['enterprise-windows', 'windows']}
+              # #SHA256 for MSI files
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}-signed.msi.sha256', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}-signed.msi.sha256', 'bucket': '${push_bucket}'},
+              #   'build_variants': ['enterprise-windows', 'windows']}
 
-              #MD5 for binaries
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.md5', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}.${ext|tgz}.md5', 'bucket': '${push_bucket}'}}
+              # #MD5 for binaries
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.md5', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}.${ext|tgz}.md5', 'bucket': '${push_bucket}'}}
 
-              #MD5 for shell
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.md5', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}.md5', 'bucket': '${push_bucket}'}}
+              # #MD5 for shell
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.md5', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-shell-${push_name}-${push_arch}-${suffix}.${ext|tgz}.md5', 'bucket': '${push_bucket}'}}
 
-              #MD5 for cryptd
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.md5', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}.md5', 'bucket': '${push_bucket}'},
-                'build_variants': *mongocryptd_variants}
+              # #MD5 for cryptd
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}.md5', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-cryptd-${push_name}-${push_arch}-${suffix}.${ext|tgz}.md5', 'bucket': '${push_bucket}'},
+              #   'build_variants': *mongocryptd_variants}
 
-              #MD5 for source tarball
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}.md5', 'bucket': 'build-push-testing'},
-                'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}.md5', 'bucket': '${push_bucket}'},
-                'build_variants': ['rhel70', 'windows']}
+              # #MD5 for source tarball
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-src-${src_suffix}-${task_id_hardcoded}.${ext|tar.gz}.md5', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': 'src/mongodb-src-${src_suffix}.${ext|tar.gz}.md5', 'bucket': '${push_bucket}'},
+              #   'build_variants': ['rhel70', 'windows']}
 
-              #MD5 for MSIs
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}-signed.msi.md5', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}-signed.msi.md5', 'bucket': '${push_bucket}'},
-                'build_variants': ['enterprise-windows', 'windows']}
+              # #MD5 for MSIs
+              # - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}-signed.msi.md5', 'bucket': 'build-push-testing'},
+              #   'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-${suffix}-signed.msi.md5', 'bucket': '${push_bucket}'},
+              #   'build_variants': ['enterprise-windows', 'windows']}
 
       # Debug symbols are not created for all variants and the copy is optional.
-      - command: s3Copy.copy
-        params:
-          aws_key: fake
-          aws_secret: fake
-          optional: true
-          s3_copy_files:
-              #Debug Symbols
-              - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}', 'bucket': '${push_bucket}'}}
+      # - command: s3Copy.copy
+      #   params:
+      #     aws_key: fake
+      #     aws_secret: fake
+      #     optional: true
+      #     s3_copy_files:
+      #         #Debug Symbols
+      #         - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},
+      #           'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}', 'bucket': '${push_bucket}'}}
 
-              #Debug Symbols Signature
-              - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}.sig', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}.sig', 'bucket': '${push_bucket}'}}
+      #         #Debug Symbols Signature
+      #         - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}.sig', 'bucket': 'build-push-testing'},
+      #           'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}.sig', 'bucket': '${push_bucket}'}}
 
-              #SHA1 for debug symbols
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha1', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}.sha1', 'bucket': '${push_bucket}'}}
+      #         #SHA1 for debug symbols
+      #         - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha1', 'bucket': 'build-push-testing'},
+      #           'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}.sha1', 'bucket': '${push_bucket}'}}
 
-              #SHA256 for debugsymbols
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha256', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}.sha256', 'bucket': '${push_bucket}'}}
+      #         #SHA256 for debugsymbols
+      #         - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}.sha256', 'bucket': 'build-push-testing'},
+      #           'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}.sha256', 'bucket': '${push_bucket}'}}
 
-              #MD5 for debugsymbols
-              - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}.md5', 'bucket': 'build-push-testing'},
-                'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}.md5', 'bucket': '${push_bucket}'}}
+      #         #MD5 for debugsymbols
+      #         - {'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}-${task_id_hardcoded}.${ext|tgz}.md5', 'bucket': 'build-push-testing'},
+      #           'destination': {'path': '${push_path}/mongodb-${push_name}-${push_arch}-debugsymbols-${suffix}.${ext|tgz}.md5', 'bucket': '${push_bucket}'}}
 
 
 task_groups:
