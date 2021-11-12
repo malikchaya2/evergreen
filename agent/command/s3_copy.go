@@ -172,7 +172,7 @@ func (c *s3copy) s3Copy(ctx context.Context,
 	td := client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}
 
 	var foundDottedBucketName bool
-
+	logger.Task().Infof("chayaMtesting allFiles: %s", c.S3CopyFiles)
 	for _, s3CopyFile := range c.S3CopyFiles {
 		if len(s3CopyFile.BuildVariants) > 0 && !utility.StringSliceContains(
 			s3CopyFile.BuildVariants, conf.BuildVariant.Name) {
@@ -203,12 +203,12 @@ func (c *s3copy) s3Copy(ctx context.Context,
 
 		// over here, what a failing test and passing test logged was virtually the same
 		responseString, err := comm.S3Copy(ctx, td, &s3CopyReq)
-		logger.Task().Infof("responseString: %s", responseString)
-		logger.Task().Infof("err: %s", err)
+		logger.Task().Infof("chayaMtesting responseString: %s", responseString)
+		logger.Task().Infof("chayaMtesting err: %s", err)
 		if responseString != "" {
 			logger.Task().Infof("s3Copy response: %s", responseString)
 		}
-		logger.Task().Infof("file: '%s', optional: '%s'", s3CopyFile.DisplayName, s3CopyFile.Optional)
+		logger.Task().Infof("chayaMtesting \n file: '%s', optional: '%t'", s3CopyFile, s3CopyFile.Optional)
 
 		if err == nil {
 			//only upload files to the task if they copied successfully
@@ -217,6 +217,7 @@ func (c *s3copy) s3Copy(ctx context.Context,
 				return errors.WithStack(err)
 			}
 		} else {
+			logger.Task().Infof("chayaMtesting err: %s", err.Error())
 			err = errors.Wrap(err, "s3 push copy failed")
 			logger.Execution().Error(err)
 			logger.Task().Infof("err != nil. err: %s file: '%s', optional: '%t'", s3CopyFile.Source.Path, s3CopyFile.Optional, err.Error())
