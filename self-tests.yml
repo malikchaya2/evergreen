@@ -638,8 +638,8 @@ tasks:
           aws_secret: fake
           s3_copy_files:
               #Binaries
-              - {'optional': true, 'source': {'path': 'something___random', 'bucket': 'something___random'},
-                'destination': {'path': 'something_random_6', 'bucket': 'something_random_6'}}
+              - {'optional': true, 'source': {'path': 'something___fake', 'bucket': 'something___fake'},
+                'destination': {'path': 'something_fake_6', 'bucket': 'something_fake_6'}}
 
               # #Shell
               # - {'optional': true, 'source': {'path': '${push_path}-STAGE/${push_name}/mongodb-shell-${push_name}-${push_arch}-${suffix}-${task_id_hardcoded}.${ext|tgz}', 'bucket': 'build-push-testing'},

@@ -135,10 +135,10 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 			}
 			err = srcBucket.Copy(ctx, copyOpts)
 			if err != nil {
-				grip.Errorf("S3 copy failed for task %s, retrying: %+v", task.Id, err)
+				grip.Errorf("ChayaMTesting 138 S3 copy failed for task %s, retrying: %+v", task.Id, err)
 				gimlet.WriteJSON(w, gimlet.ErrorResponse{
 					StatusCode: http.StatusOK,
-					Message:    fmt.Sprintf("S3 copy failed for task %s, retrying: %+v", task.Id, err),
+					Message:    fmt.Sprintf("ChayaMTesting 141 S3 copy failed for task %s, retrying: %+v", task.Id, err),
 				})
 				return true, err
 			}
