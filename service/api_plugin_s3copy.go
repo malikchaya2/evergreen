@@ -158,16 +158,18 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 		})
 
 	if err != nil {
-		// gimlet.WriteJSON(w, "ChayaMTesting S3 copy Failed")
-		grip.Errorf("ChayaMTesting 162 S3 copy failed for count: '%d', task %s, retrying: %+v", count, task.Id, err)
 		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
-		// doesn't get to task
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		// message := errors.Wrapf(err, "Error finding host running task %s", t.Id)
+		// as.LoggedError(w, r, http.StatusInternalServerError, message)
+
+		// if err != nil {
+		// 	gimlet.WriteJSONError(w, err.Error())
+		// 	return
+		// }
+
 		as.LoggedError(w, r, http.StatusInternalServerError,
-			errors.Wrapf(err, " chayaMTesting S3 copy failed for task %s", task.Id))
-		gimlet.WriteJSON(w, gimlet.ErrorResponse{
-			StatusCode: http.StatusInternalServerError,
-			Message:    fmt.Sprintf("ChayaMTesting logging an error %s, retrying: %+v", task.Id, err.Error()),
-		})
+			errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
 		return
 	}
 

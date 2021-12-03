@@ -339,15 +339,14 @@ functions:
           set -o xtrace
           rm evergreen/bin/output.*
           rm evergreen/bin/jstests/*.xml
-  copy-fake-destination-optional:
+  copy-fake-destination:
     - command: s3Copy.copy
       params:
-        optional: true
-        aws_key: ${aws_key}
-        aws_secret: ${aws_secret}
+        aws_key: fake
+        aws_secret: fake
         s3_copy_files:
-            - {'source': {'path': 'hello.tgz', 'bucket': 'evg-test-bucket-1'},
-               'destination': {'path': 'hello.tgz', 'bucket': 'evg-test-bucket-2'}}
+            - {'source': {'path': 'hello', 'bucket': 'evg-test-bucket-1'},
+               'destination': {'path': 'hello', 'bucket': 'evg-test-bucket-2'}}
 
           
 
