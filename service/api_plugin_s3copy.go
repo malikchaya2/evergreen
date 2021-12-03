@@ -14,6 +14,7 @@ import (
 	"github.com/evergreen-ci/pail"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -28,6 +29,7 @@ const (
 func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	task := MustHaveTask(r)
 
+	// when it fails, r.body is {}
 	s3CopyReq := &apimodels.S3CopyRequest{}
 	err := utility.ReadJSON(util.NewRequestReader(r), s3CopyReq)
 	if err != nil {
@@ -57,6 +59,17 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	copyToLocation := strings.Join([]string{s3CopyReq.S3DestinationBucket, s3CopyReq.S3DestinationPath}, "/")
 
 	newestPushLog, err := model.FindPushLogAfter(copyToLocation, v.RevisionOrderNumber)
+	grip.Warningln(message.Fields{
+		"message":               "chayaMTesting conflict with existing pushed file: ",
+		"error":                 err,
+		"copyFromLocation":      copyFromLocation,
+		"copyToLocation":        copyToLocation,
+		"newestPushLog":         newestPushLog,
+		"v.RevisionOrderNumber": v.RevisionOrderNumber,
+	})
+
+	grip.Warningln("chayaMTesting conflict with existing pushed file: ", copyToLocation)
+
 	if err != nil {
 		as.LoggedError(w, r, http.StatusInternalServerError,
 			errors.Wrapf(err, "problem querying for push log at %s (build=%s)",
@@ -65,7 +78,10 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if newestPushLog != nil {
-		grip.Warningln("conflict with existing pushed file:", copyToLocation)
+
+		grip.Warningln("chayaMTesting conflict with existing pushed file: status: ", newestPushLog.Status)
+		grip.Warningln("chayaMTesting conflict with existing pushed file: ", copyToLocation)
+		grip.Warningln("chayaMTesting conflict with newestPushLog: ", newestPushLog)
 		gimlet.WriteJSON(w, gimlet.ErrorResponse{
 			StatusCode: http.StatusOK,
 			Message:    fmt.Sprintf("noop, this version is currently in the process of trying to push, or has already succeeded in pushing the file: '%s'", copyToLocation),
@@ -109,17 +125,24 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	count := 0
 	err = utility.Retry(
 		ctx,
 		func() (bool, error) {
+			count = count + 1
 			copyOpts := pail.CopyOptions{
 				SourceKey:         s3CopyReq.S3SourcePath,
 				DestinationKey:    s3CopyReq.S3DestinationPath,
 				DestinationBucket: destBucket,
 			}
 			err = srcBucket.Copy(ctx, copyOpts)
+			grip.Errorf("ChayaMTesting 137 this is a retry. count: '%d',  %s, retrying: %+v", count, task.Id, err)
 			if err != nil {
-				grip.Errorf("S3 copy failed for task %s, retrying: %+v", task.Id, err)
+				grip.Errorf("ChayaMTesting 138 S3 copy failed for count: '%d', task %s, retrying: %+v", count, task.Id, err)
+				gimlet.WriteJSON(w, gimlet.ErrorResponse{
+					StatusCode: http.StatusOK,
+					Message:    fmt.Sprintf("ChayaMTesting 141 S3 copy failed for count: '%d', for task %s, retrying: %+v", count, task.Id, err),
+				})
 				return true, err
 			}
 
@@ -135,10 +158,16 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 		})
 
 	if err != nil {
+		// gimlet.WriteJSON(w, "ChayaMTesting S3 copy Failed")
+		grip.Errorf("ChayaMTesting 162 S3 copy failed for count: '%d', task %s, retrying: %+v", count, task.Id, err)
 		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
-
+		// doesn't get to task
 		as.LoggedError(w, r, http.StatusInternalServerError,
-			errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
+			errors.Wrapf(err, " chayaMTesting S3 copy failed for task %s", task.Id))
+		gimlet.WriteJSON(w, gimlet.ErrorResponse{
+			StatusCode: http.StatusInternalServerError,
+			Message:    fmt.Sprintf("ChayaMTesting logging an error %s, retrying: %+v", task.Id, err.Error()),
+		})
 		return
 	}
 

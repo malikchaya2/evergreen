@@ -172,7 +172,6 @@ func (c *s3copy) s3Copy(ctx context.Context,
 	td := client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}
 
 	var foundDottedBucketName bool
-
 	for _, s3CopyFile := range c.S3CopyFiles {
 		if len(s3CopyFile.BuildVariants) > 0 && !utility.StringSliceContains(
 			s3CopyFile.BuildVariants, conf.BuildVariant.Name) {
@@ -201,17 +200,26 @@ func (c *s3copy) s3Copy(ctx context.Context,
 			S3Permissions:       s3CopyFile.Permissions,
 		}
 
+		// over here, what a failing test and passing test logged was virtually the same
 		responseString, err := comm.S3Copy(ctx, td, &s3CopyReq)
-
 		if responseString != "" {
 			logger.Task().Infof("s3Copy response: %s", responseString)
 		}
-
-		if err != nil {
+		if err == nil {
+			//only upload files to the task if they copied successfully
+			err = c.attachFiles(ctx, comm, logger, td, s3CopyReq)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+		} else {
+			logger.Task().Infof("chayaMtesting err: %s", err.Error())
 			err = errors.Wrap(err, "s3 push copy failed")
 			logger.Execution().Error(err)
+			logger.Task().Infof("err != nil. err: %s file: '%s', optional: '%t'", s3CopyFile.Source.Path, s3CopyFile.Optional, err.Error())
 
 			if s3CopyFile.Optional {
+				logger.Task().Infof("in if s3CopyFile.Optional, optional: '%t'", s3CopyFile.Source.Path, s3CopyFile.Optional)
+
 				logger.Execution().Errorf("file '%s' is optional, continuing",
 					s3CopyFile.DisplayName)
 				continue
@@ -222,10 +230,6 @@ func (c *s3copy) s3Copy(ctx context.Context,
 
 		}
 
-		err = c.attachFiles(ctx, comm, logger, td, s3CopyReq)
-		if err != nil {
-			return errors.WithStack(err)
-		}
 		if !foundDottedBucketName && strings.Contains(s3CopyReq.S3DestinationBucket, ".") {
 			logger.Task().Warning("destination bucket names containing dots that are created after Sept. 30, 2020 are not guaranteed to have valid attached URLs")
 			foundDottedBucketName = true
