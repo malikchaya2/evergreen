@@ -35,7 +35,7 @@ type s3CopyHandler struct {
 	sc        data.Connector
 }
 
-func s3CopyRouteManager(sc data.Connector) gimlet.RouteHandler {
+func makes3Copy(sc data.Connector) gimlet.RouteHandler {
 	return &s3CopyHandler{sc: sc}
 }
 
