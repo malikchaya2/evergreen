@@ -193,7 +193,7 @@ func AttachHandler(app *gimlet.APIApp, opts HandlerOpts) {
 	app.AddRoute("/tasks/{task_id}/manifest").Version(2).Get().Wrap(viewTasks).RouteHandler(makeGetManifestHandler(sc))
 	app.AddRoute("/tasks/{task_id}/restart").Version(2).Post().Wrap(addProject, requireUser, editTasks).RouteHandler(makeTaskRestartHandler(sc))
 	app.AddRoute("/tasks/{task_id}/tests").Version(2).Get().Wrap(addProject, viewTasks).RouteHandler(makeFetchTestsForTask(sc))
-	app.AddRoute("/tasks/{taskId}/s3Copy/s3Copy").Version(2).Post().Wrap(requireTask).RouteHandler(makes3Copy(sc))
+	app.AddRoute("/tasks/{task_id}/s3Copy/s3Copy").Version(2).Post().Wrap(requireTask).RouteHandler(makes3Copy(sc))
 	app.AddRoute("/tasks/{task_id}/sync_path").Version(2).Get().Wrap(requireUser).RouteHandler(makeTaskSyncPathGetHandler(sc))
 	app.AddRoute("/tasks/{task_id}/set_has_cedar_results").Version(2).Post().Wrap(requireTask).RouteHandler(makeTaskSetHasCedarResultsHandler(sc))
 	app.AddRoute("/task/sync_read_credentials").Version(2).Get().Wrap(requireUser).RouteHandler(makeTaskSyncReadCredentialsGetHandler(sc))
