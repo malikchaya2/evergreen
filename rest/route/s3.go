@@ -33,6 +33,7 @@ type s3CopyHandler struct {
 	taskID    string
 	s3CopyReq *apimodels.S3CopyRequest
 	sc        data.Connector
+	count     int
 }
 
 func makes3Copy(sc data.Connector) gimlet.RouteHandler {
@@ -42,6 +43,7 @@ func makes3Copy(sc data.Connector) gimlet.RouteHandler {
 func (h *s3CopyHandler) Factory() gimlet.RouteHandler { return &s3CopyHandler{sc: h.sc} }
 
 func (h *s3CopyHandler) Parse(ctx context.Context, r *http.Request) error {
+	h.count = 0
 	taskID := gimlet.GetVars(r)["task_id"]
 	if taskID == "" {
 		return gimlet.ErrorResponse{
@@ -65,11 +67,12 @@ func (h *s3CopyHandler) Parse(ctx context.Context, r *http.Request) error {
 }
 
 func (h *s3CopyHandler) Run(ctx context.Context) gimlet.Responder {
+	h.count = h.count + 1
+	grip.Errorf("ChayaMTesting 1 start of run. count: '%s', task:  '%s'", h.count, h.taskID)
 	task, err := h.sc.FindTaskById(h.taskID)
 	if err != nil {
 		return gimlet.MakeJSONErrorResponder(err)
 	}
-	catcher := grip.NewBasicCatcher()
 
 	// START
 
@@ -93,11 +96,12 @@ func (h *s3CopyHandler) Run(ctx context.Context) gimlet.Responder {
 	copyFromLocation := strings.Join([]string{s3CopyReq.S3SourceBucket, s3CopyReq.S3SourcePath}, "/")
 	copyToLocation := strings.Join([]string{s3CopyReq.S3DestinationBucket, s3CopyReq.S3DestinationPath}, "/")
 
-	newestPushLog, err := model.FindPushLogAfter(copyToLocation, v.RevisionOrderNumber)
+	newestPushLog, err := model.FindPushLogAt(copyToLocation, v.RevisionOrderNumber)
 	if err != nil {
 		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "problem querying for push log at %s (build=%s)",
 			copyToLocation, task.BuildId))
 	}
+	grip.Errorf("ChayaMTesting 2 before checking for noop. count: '%s', task:  '%s'", h.count, h.taskID)
 
 	if newestPushLog != nil {
 		grip.Warningln("conflict with existing pushed file:", copyToLocation)
@@ -142,6 +146,8 @@ func (h *s3CopyHandler) Run(ctx context.Context) gimlet.Responder {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	grip.Errorf("ChayaMTesting 3 starting retry. count: '%s', task:  '%s'", h.count, h.taskID)
+
 	err = utility.Retry(
 		ctx,
 		func() (bool, error) {
@@ -152,7 +158,7 @@ func (h *s3CopyHandler) Run(ctx context.Context) gimlet.Responder {
 			}
 			err = srcBucket.Copy(ctx, copyOpts)
 			if err != nil {
-				grip.Errorf("S3 copy failed for task %s, retrying: %+v", task.Id, err)
+				grip.Errorf("ChayaMTesting  4 S3 copy failed for retrying. err:  %+v count: '%s', task:  '%s'", err, h.count, h.taskID)
 				return true, err
 			}
 
@@ -167,16 +173,12 @@ func (h *s3CopyHandler) Run(ctx context.Context) gimlet.Responder {
 			MinDelay:    s3CopyRetryMinDelay,
 		})
 
-	if err != nil {
-		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
+	grip.Errorf("ChayaMTesting 5 before returning err: %+v count: '%s', task:  '%s'", err, h.count, h.taskID)
+	return gimlet.MakeJSONInternalErrorResponder(err)
+	// if err != nil {
+	// 	grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
 
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
-	}
-
-	// END
-
-	if catcher.HasErrors() {
-		return gimlet.MakeJSONErrorResponder(catcher.Resolve())
-	}
-	return gimlet.NewJSONResponse("S3 copy Successful")
+	// 	return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
+	// }
+	// return gimlet.NewJSONResponse("S3 copy Successful")
 }

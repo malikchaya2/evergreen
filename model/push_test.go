@@ -12,7 +12,7 @@ import (
 
 var pushTestConfig = testutil.TestConfig()
 
-func TestFindPushLogAfter(t *testing.T) {
+func TestFindPushLogAf(t *testing.T) {
 
 	Convey("When checking for duplicate pushes", t, func() {
 
@@ -28,7 +28,7 @@ func TestFindPushLogAfter(t *testing.T) {
 				RevisionOrderNumber: 500,
 			}
 
-			pushLog, err := FindPushLogAfter(fileLoc, versionOne.RevisionOrderNumber)
+			pushLog, err := FindPushLogAt(fileLoc, versionOne.RevisionOrderNumber)
 			So(err, ShouldBeNil)
 			So(pushLog, ShouldBeNil)
 
@@ -54,7 +54,7 @@ func TestFindPushLogAfter(t *testing.T) {
 				RevisionOrderNumber: 600,
 			}
 
-			pushLog, err := FindPushLogAfter(fileLoc, versionTwo.RevisionOrderNumber)
+			pushLog, err := FindPushLogAt(fileLoc, versionTwo.RevisionOrderNumber)
 			So(err, ShouldBeNil)
 			So(pushLog, ShouldBeNil)
 
@@ -75,7 +75,7 @@ func TestFindPushLogAfter(t *testing.T) {
 			pushLog := NewPushLog(versionOne, t, fileLoc)
 			So(pushLog.Insert(), ShouldBeNil)
 
-			pushLog, err := FindPushLogAfter(fileLoc, versionOne.RevisionOrderNumber)
+			pushLog, err := FindPushLogAt(fileLoc, versionOne.RevisionOrderNumber)
 			So(err, ShouldBeNil)
 			So(pushLog, ShouldNotBeNil)
 
@@ -101,7 +101,7 @@ func TestFindPushLogAfter(t *testing.T) {
 				RevisionOrderNumber: 400,
 			}
 
-			pushLog, err := FindPushLogAfter(fileLoc, versionTwo.RevisionOrderNumber)
+			pushLog, err := FindPushLogAt(fileLoc, versionTwo.RevisionOrderNumber)
 			So(err, ShouldBeNil)
 			So(pushLog, ShouldNotBeNil)
 

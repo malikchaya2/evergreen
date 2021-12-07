@@ -88,8 +88,8 @@ func FindOnePushLog(query interface{}, projection interface{},
 }
 
 // FindNewerPushLog returns a PushLog item if there is a file pushed from
-// this version or a newer one, or one already in progress.
-func FindPushLogAfter(fileLoc string, revisionOrderNumber int) (*PushLog, error) {
+// this version that is in progress or has failed.
+func FindPushLogAt(fileLoc string, revisionOrderNumber int) (*PushLog, error) {
 	query := bson.M{
 		PushLogStatusKey: bson.M{
 			"$in": []string{
@@ -97,9 +97,7 @@ func FindPushLogAfter(fileLoc string, revisionOrderNumber int) (*PushLog, error)
 			},
 		},
 		PushLogLocationKey: fileLoc,
-		PushLogRonKey: bson.M{
-			"$gte": revisionOrderNumber,
-		},
+		PushLogRonKey:      revisionOrderNumber,
 	}
 	existingPushLog, err := FindOnePushLog(
 		query,
