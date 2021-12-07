@@ -141,6 +141,16 @@ func (c *baseCommunicator) retryRequest(ctx context.Context, info requestInfo, d
 	var out []byte
 	if data != nil {
 		out, err = json.Marshal(data)
+		grip.Debug(message.Fields{
+			"message":     "chayaMTesting request.go 145 in retryRequest",
+			"method":      info.method,
+			"path":        info.path,
+			"data":        data,
+			"len_request": len(out),
+			"out":         out,
+			"err":         err,
+		})
+
 		if err != nil {
 			return nil, err
 		}
@@ -173,6 +183,16 @@ func (c *baseCommunicator) retryRequest(ctx context.Context, info requestInfo, d
 			"end_of_request":   end,
 		})
 	}
+	grip.Debug(message.Fields{
+		"message":     "chayaMTesting request.go  187 in retryRequest",
+		"method":      info.method,
+		"path":        info.path,
+		"data":        data,
+		"len_request": len(out),
+		"out":         out,
+		"err":         err,
+		"resp":        resp,
+	})
 	return resp, err
 }
 

@@ -798,7 +798,7 @@ func (c *hostCommunicator) S3Copy(ctx context.Context, taskData TaskData, req *a
 	}
 	info.path = fmt.Sprintf("tasks/%s/s3Copy/s3Copy", taskData.ID)
 
-	resp, err := c.retryRequest(ctx, info, req)
+	resp, err := c.request(ctx, info, req)
 	if err != nil {
 		return "", utility.RespErrorf(resp, "failed to copy file in S3 for task %s: %s", taskData.ID, err.Error())
 	}

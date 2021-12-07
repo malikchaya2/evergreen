@@ -395,6 +395,7 @@ func (gh *githubHookApi) handleGitTag(ctx context.Context, event *github.PushEve
 	err = utility.Retry(
 		ctx,
 		func() (bool, error) {
+			//might need something like this 
 			retryCatcher := grip.NewBasicCatcher()
 			for _, pRef := range projectRefs {
 				if foundVersion[pRef.Id] {

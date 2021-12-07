@@ -148,37 +148,48 @@ func (h *s3CopyHandler) Run(ctx context.Context) gimlet.Responder {
 	defer cancel()
 	grip.Errorf("ChayaMTesting 3 starting retry. count: '%s', task:  '%s'", h.count, h.taskID)
 
-	err = utility.Retry(
-		ctx,
-		func() (bool, error) {
-			copyOpts := pail.CopyOptions{
-				SourceKey:         s3CopyReq.S3SourcePath,
-				DestinationKey:    s3CopyReq.S3DestinationPath,
-				DestinationBucket: destBucket,
-			}
-			err = srcBucket.Copy(ctx, copyOpts)
-			if err != nil {
-				grip.Errorf("ChayaMTesting  4 S3 copy failed for retrying. err:  %+v count: '%s', task:  '%s'", err, h.count, h.taskID)
-				return true, err
-			}
-
-			err = errors.Wrapf(newPushLog.UpdateStatus(model.PushLogSuccess),
-				"updating pushlog status failed for task %s", task.Id)
-
-			grip.Error(err)
-
-			return false, err
-		}, utility.RetryOptions{
-			MaxAttempts: s3CopyAttempts,
-			MinDelay:    s3CopyRetryMinDelay,
+	// err = utility.Retry(
+	// 	ctx,
+	// 	func() (bool, error) {
+	copyOpts := pail.CopyOptions{
+		SourceKey:         s3CopyReq.S3SourcePath,
+		DestinationKey:    s3CopyReq.S3DestinationPath,
+		DestinationBucket: destBucket,
+	}
+	err = srcBucket.Copy(ctx, copyOpts)
+	if err != nil {
+		grip.Errorf("ChayaMTesting  4 S3 copy failed for retrying. err:  %+v count: '%s', task:  '%s'", err, h.count, h.taskID)
+		return gimlet.NewJSONInternalErrorResponse(gimlet.ErrorResponse{
+			Message: fmt.Sprintf("55 S3 copy failed for task: '%s', \n error: '%s'", task.Id, err.Error()),
 		})
+	}
+
+	err = errors.Wrapf(newPushLog.UpdateStatus(model.PushLogSuccess),
+		"updating pushlog status failed for task %s", task.Id)
+
+	grip.Error(err)
+
+	// 	return false, err
+	// }, utility.RetryOptions{
+	// 	MaxAttempts: s3CopyAttempts,
+	// 	MinDelay:    s3CopyRetryMinDelay,
+	// })
 
 	grip.Errorf("ChayaMTesting 5 before returning err: %+v count: '%s', task:  '%s'", err, h.count, h.taskID)
-	return gimlet.MakeJSONInternalErrorResponder(err)
-	// if err != nil {
-	// 	grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
+	// return gimlet.MakeJSONInternalErrorResponder(err)
+	if err != nil {
+		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
 
-	// 	return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
-	// }
-	// return gimlet.NewJSONResponse("S3 copy Successful")
+		return gimlet.NewJSONInternalErrorResponse(gimlet.ErrorResponse{
+			Message: fmt.Sprintf("S3 copy failed for task: '%s', \n error: '%s'", task.Id, err.Error()),
+		})
+		// return  gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
+		// 	StatusCode: http.StatusBadRequest,
+		// 	Message:    err.Error(),
+		// })
+
+		// return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "Database error"))
+		// return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
+	}
+	return gimlet.NewJSONResponse("S3 copy Successful")
 }
