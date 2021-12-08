@@ -27,6 +27,7 @@ const (
 // file path already exists, no file copy is performed.
 func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	task := MustHaveTask(r)
+	grip.Errorf("ChayaMTesting 1 start of run, task:  '%s'", task.Id)
 
 	s3CopyReq := &apimodels.S3CopyRequest{}
 	err := utility.ReadJSON(util.NewRequestReader(r), s3CopyReq)
@@ -56,7 +57,7 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	copyFromLocation := strings.Join([]string{s3CopyReq.S3SourceBucket, s3CopyReq.S3SourcePath}, "/")
 	copyToLocation := strings.Join([]string{s3CopyReq.S3DestinationBucket, s3CopyReq.S3DestinationPath}, "/")
 
-	newestPushLog, err := model.FindPushLogAfter(copyToLocation, v.RevisionOrderNumber)
+	newestPushLog, err := model.FindPushLogAt(copyToLocation, v.RevisionOrderNumber)
 	if err != nil {
 		as.LoggedError(w, r, http.StatusInternalServerError,
 			errors.Wrapf(err, "problem querying for push log at %s (build=%s)",
@@ -109,30 +110,32 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	err = utility.Retry(
-		ctx,
-		func() (bool, error) {
-			copyOpts := pail.CopyOptions{
-				SourceKey:         s3CopyReq.S3SourcePath,
-				DestinationKey:    s3CopyReq.S3DestinationPath,
-				DestinationBucket: destBucket,
-			}
-			err = srcBucket.Copy(ctx, copyOpts)
-			if err != nil {
-				grip.Errorf("S3 copy failed for task %s, retrying: %+v", task.Id, err)
-				return true, err
-			}
+	// err = utility.Retry(
+	// ctx,
+	// func() (bool, error) {
+	copyOpts := pail.CopyOptions{
+		SourceKey:         s3CopyReq.S3SourcePath,
+		DestinationKey:    s3CopyReq.S3DestinationPath,
+		DestinationBucket: destBucket,
+	}
+	err = srcBucket.Copy(ctx, copyOpts)
+	if err != nil {
+		grip.Errorf("S3 copy failed for task %s, retrying: %+v", task.Id, err)
+		as.LoggedError(w, r, http.StatusInternalServerError,
+			errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
+		return
+	}
 
-			err = errors.Wrapf(newPushLog.UpdateStatus(model.PushLogSuccess),
-				"updating pushlog status failed for task %s", task.Id)
+	err = errors.Wrapf(newPushLog.UpdateStatus(model.PushLogSuccess),
+		"updating pushlog status failed for task %s", task.Id)
 
-			grip.Error(err)
+	grip.Error(err)
 
-			return false, err
-		}, utility.RetryOptions{
-			MaxAttempts: s3CopyAttempts,
-			MinDelay:    s3CopyRetryMinDelay,
-		})
+	// 	return false, err
+	// }, utility.RetryOptions{
+	// 	MaxAttempts: s3CopyAttempts,
+	// 	MinDelay:    s3CopyRetryMinDelay,
+	// })
 
 	if err != nil {
 		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))

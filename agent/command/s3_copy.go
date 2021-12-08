@@ -174,6 +174,9 @@ func (c *s3copy) s3Copy(ctx context.Context,
 	var foundDottedBucketName bool
 
 	for _, s3CopyFile := range c.S3CopyFiles {
+		logger.Task().Infof("in for loop for s3CopyFile:  " +
+			s3CopyFile.Destination.Path)
+
 		if len(s3CopyFile.BuildVariants) > 0 && !utility.StringSliceContains(
 			s3CopyFile.BuildVariants, conf.BuildVariant.Name) {
 			continue

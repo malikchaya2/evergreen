@@ -9,6 +9,8 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/mongodb/anser/bsonutil"
 	adb "github.com/mongodb/anser/db"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
@@ -81,15 +83,25 @@ func FindOnePushLog(query interface{}, projection interface{},
 	pushLog := &PushLog{}
 	q := db.Query(query).Project(projection).Sort(sort)
 	err := db.FindOneQ(PushlogCollection, q, pushLog)
-	if adb.ResultsNotFound(err) {
+	grip.Error(message.Fields{
+		"message":                          "ChayaMTesting pushlog 4",
+		"query":                            query,
+		"q":                                q,
+		"projection":                       projection,
+		"sort":                             sort,
+		"pushLog":                          pushLog,
+		"err":                              err,
+		"pushLog.Id == mgobson.ObjectId()": pushLog.Id == mgobson.ObjectId(""),
+	})
+	if adb.ResultsNotFound(err) || pushLog.Id == mgobson.ObjectId("") {
 		return nil, nil
 	}
 	return pushLog, err
 }
 
 // FindNewerPushLog returns a PushLog item if there is a file pushed from
-// this version or a newer one, or one already in progress.
-func FindPushLogAfter(fileLoc string, revisionOrderNumber int) (*PushLog, error) {
+// this version that is in progress or has failed.
+func FindPushLogAt(fileLoc string, revisionOrderNumber int) (*PushLog, error) {
 	query := bson.M{
 		PushLogStatusKey: bson.M{
 			"$in": []string{
@@ -97,15 +109,29 @@ func FindPushLogAfter(fileLoc string, revisionOrderNumber int) (*PushLog, error)
 			},
 		},
 		PushLogLocationKey: fileLoc,
-		PushLogRonKey: bson.M{
-			"$gte": revisionOrderNumber,
-		},
+		PushLogRonKey:      revisionOrderNumber,
 	}
+	grip.Error(message.Fields{
+		"message": "ChayaMTesting pushlog 3",
+		"query":   query,
+		//363
+		"revisionOrderNumber": revisionOrderNumber,
+		"fileLoc":             fileLoc,
+	})
 	existingPushLog, err := FindOnePushLog(
 		query,
 		db.NoProjection,
 		[]string{"-" + PushLogRonKey},
 	)
+	grip.Error(message.Fields{
+		"message":             "ChayaMTesting pushlog 5",
+		"query":               query,
+		"revisionOrderNumber": revisionOrderNumber,
+		"fileLoc":             fileLoc,
+		// null
+		"existingPushLog": existingPushLog,
+		"err":             err,
+	})
 	if err != nil {
 		return nil, err
 	}
