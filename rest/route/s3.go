@@ -17,6 +17,7 @@ import (
 	"github.com/evergreen-ci/pail"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -96,7 +97,20 @@ func (h *s3CopyHandler) Run(ctx context.Context) gimlet.Responder {
 	copyFromLocation := strings.Join([]string{s3CopyReq.S3SourceBucket, s3CopyReq.S3SourcePath}, "/")
 	copyToLocation := strings.Join([]string{s3CopyReq.S3DestinationBucket, s3CopyReq.S3DestinationPath}, "/")
 
+	grip.Error(message.Fields{
+		"message":               "ChayaMTesting pushlog 1",
+		"copyToLocation":        copyToLocation,
+		"v.RevisionOrderNumber": v.RevisionOrderNumber,
+	})
 	newestPushLog, err := model.FindPushLogAt(copyToLocation, v.RevisionOrderNumber)
+	grip.Error(message.Fields{
+		"message":               "ChayaMTesting pushlog 2",
+		"copyToLocation":        copyToLocation,
+		"v.RevisionOrderNumber": v.RevisionOrderNumber,
+		"newestPushLog":         newestPushLog,
+		"err":                   err,
+	})
+
 	if err != nil {
 		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "problem querying for push log at %s (build=%s)",
 			copyToLocation, task.BuildId))
