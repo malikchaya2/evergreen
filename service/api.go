@@ -116,6 +116,7 @@ func (as *APIServer) requireTaskStrict(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		r = setAPITaskContext(r, t)
+		// here
 		next(w, r)
 	}
 }
@@ -222,6 +223,10 @@ func (as *APIServer) GetParserProject(w http.ResponseWriter, r *http.Request) {
 
 func (as *APIServer) GetProjectRef(w http.ResponseWriter, r *http.Request) {
 	t := MustHaveTask(r)
+	grip.Error(message.WrapError(errors.New("chayaMtesting 3 GetProjectRef"), message.Fields{
+		"message": "in GetProjectRef start of run",
+		"task.Id": t.Id,
+	}))
 
 	p, err := model.FindMergedProjectRef(t.Project, t.Version, true)
 	if err != nil {
@@ -392,6 +397,11 @@ func (as *APIServer) AttachFiles(w http.ResponseWriter, r *http.Request) {
 // SetDownstreamParams updates file mappings for a task or build
 func (as *APIServer) SetDownstreamParams(w http.ResponseWriter, r *http.Request) {
 	t := MustHaveTask(r)
+	grip.Error(message.WrapError(errors.New("chayaMtesting 3 SetDownstreamParams"), message.Fields{
+		"message": "in api_plugin_s3copy.go start of run",
+		"task.Id": t.Id,
+	}))
+
 	grip.Infoln("Setting downstream expansions for task:", t.Id)
 
 	var downstreamParams []patch.Parameter
@@ -682,7 +692,7 @@ func (as *APIServer) GetServiceApp() *gimlet.APIApp {
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/git/patch").Wrap(requireTaskSecret).Handler(as.gitServePatch).Get()
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/keyval/inc").Wrap(requireTask).Handler(as.keyValPluginInc).Post()
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/manifest/load").Wrap(requireTask).Handler(as.manifestLoadHandler).Get()
-	app.Route().Version(2).Prefix("/task/{taskId}").Route("/s3Copy/s3Copy").Wrap(requireTaskSecret).Handler(as.s3copyPlugin).Post()
+	app.Route().Version(2).Prefix("/task/{taskId}").Route("/s3Copy").Wrap(requireTaskSecret).Handler(as.s3copyPlugin).Post()
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/downstreamParams").Wrap(requireTask).Handler(as.SetDownstreamParams).Post()
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/json/tags/{task_name}/{name}").Wrap(requireTask).Handler(as.getTaskJSONTagsForTask).Get()
 	app.Route().Version(2).Prefix("/task/{taskId}").Route("/json/history/{task_name}/{name}").Wrap(requireTask).Handler(as.getTaskJSONTaskHistory).Get()

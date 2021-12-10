@@ -212,6 +212,7 @@ type Task struct {
 	// testResultsPopulated is a local field that indicates whether the
 	// task's test results are successfully cached in LocalTestResults.
 	testResultsPopulated bool
+	CopyErrors           []string `bson:"copy_errors,omitempty" json:"copy_errors,omitempty"`
 }
 
 func (t *Task) MarshalBSON() ([]byte, error)  { return mgobson.Marshal(t) }

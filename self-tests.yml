@@ -348,7 +348,10 @@ functions:
             - {'source': {'path': 'hello.tgz', 'bucket': 'evg-test-bucket-1'},
                'destination': {'path': 'hello.tgz', 'bucket': 'evg-test-bucket-2'}}
 
-          
+#  copy-fake-destination-optional:
+#     - command: downstream_expansions.set
+#       params:
+#         file: src/test.yml          
 
 #######################################
 #                Tasks                #

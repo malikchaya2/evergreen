@@ -15,8 +15,6 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mitchellh/mapstructure"
-	"github.com/mongodb/grip"
-	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -171,10 +169,7 @@ func (c *s3copy) Execute(ctx context.Context,
 func (c *s3copy) s3Copy(ctx context.Context,
 	comm client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 
-	grip.Error(message.WrapError(errors.New("chayaMtesting 1"), message.Fields{
-		"message": "in agent/command/s3_copy.go",
-		"task.Id": conf.Task.Id,
-	}))
+	// this function only runs once
 	logger.Execution().Infof("chayaMtesting 178 error %v \n", errors.New("chayaMtesting 1"))
 	logger.Task().Infof("chayaMtesting 179 error %v \n", errors.New("chayaMtesting 1"))
 

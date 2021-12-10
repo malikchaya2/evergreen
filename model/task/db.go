@@ -89,6 +89,7 @@ var (
 	DisplayStatusKey            = bsonutil.MustHaveTag(Task{}, "DisplayStatus")
 	BaseTaskKey                 = bsonutil.MustHaveTag(Task{}, "BaseTask")
 	BuildVariantDisplayNameKey  = bsonutil.MustHaveTag(Task{}, "BuildVariantDisplayName")
+	CopyErrorsKey               = bsonutil.MustHaveTag(Task{}, "CopyErrors")
 
 	// BSON fields for the test result struct
 	TestResultStatusKey    = bsonutil.MustHaveTag(TestResult{}, "Status")
@@ -1514,4 +1515,19 @@ func AddHostCreateDetails(taskId, hostId string, execution int, hostCreateError 
 			HostCreateDetailsKey: HostCreateDetail{HostId: hostId, Error: hostCreateError.Error()},
 		}})
 	return errors.Wrapf(err, "error adding details of host creation failure to task")
+}
+
+func AddCopyError(taskId, execution int, CopyError string) error {
+	if CopyError == "" {
+		return nil
+	}
+	err := UpdateOne(
+		bson.M{
+			IdKey:        taskId,
+			ExecutionKey: execution,
+		},
+		bson.M{"$push": bson.M{
+			CopyErrorsKey: CopyError,
+		}})
+	return errors.Wrapf(err, "error adding copy error to task")
 }

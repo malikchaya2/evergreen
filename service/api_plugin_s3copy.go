@@ -23,7 +23,7 @@ import (
 // file path already exists, no file copy is performed.
 func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	task := MustHaveTask(r)
-
+	//here
 	grip.Error(message.WrapError(errors.New("chayaMtesting 3"), message.Fields{
 		"message": "in api_plugin_s3copy.go start of run",
 		"task.Id": task.Id,
@@ -112,9 +112,6 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	// err = utility.Retry(
-	// ctx,
-	// func() (bool, error) {
 	copyOpts := pail.CopyOptions{
 		SourceKey:         s3CopyReq.S3SourcePath,
 		DestinationKey:    s3CopyReq.S3DestinationPath,
@@ -122,30 +119,14 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 	err = srcBucket.Copy(ctx, copyOpts)
 	if err != nil {
-		grip.Errorf("S3 copy failed for task %s, retrying: %+v", task.Id, err)
-		as.LoggedError(w, r, http.StatusInternalServerError,
-			errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
-		return
-	}
-
-	err = errors.Wrapf(newPushLog.UpdateStatus(model.PushLogSuccess),
-		"updating pushlog status failed for task %s", task.Id)
-
-	grip.Error(err)
-
-	// 	return false, err
-	// }, utility.RetryOptions{
-	// 	MaxAttempts: s3CopyAttempts,
-	// 	MinDelay:    s3CopyRetryMinDelay,
-	// })
-
-	if err != nil {
 		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
-
 		as.LoggedError(w, r, http.StatusInternalServerError,
 			errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
 		return
 	}
+
+	grip.Error(errors.Wrapf(newPushLog.UpdateStatus(model.PushLogSuccess),
+		"updating pushlog status failed for task %s", task.Id))
 
 	gimlet.WriteJSON(w, "S3 copy Successful")
 }
