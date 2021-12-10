@@ -791,6 +791,14 @@ func (c *hostCommunicator) GetManifest(ctx context.Context, taskData TaskData) (
 }
 
 func (c *hostCommunicator) S3Copy(ctx context.Context, taskData TaskData, req *apimodels.S3CopyRequest) (string, error) {
+	grip.Error(message.WrapError(errors.New("chayaMtesting 2"), message.Fields{
+		"message": "in host_methods.go",
+		"task.Id": taskData.ID,
+	}))
+	grip.Info(message.Fields{
+		"message": "chayaMTesting in host_methods.go",
+		"task_id": taskData.ID,
+	})
 	info := requestInfo{
 		method:   http.MethodPost,
 		taskData: &taskData,
@@ -802,11 +810,12 @@ func (c *hostCommunicator) S3Copy(ctx context.Context, taskData TaskData, req *a
 		return "", utility.RespErrorf(resp, "failed to copy file in S3 for task %s: %s", taskData.ID, err.Error())
 	}
 	defer resp.Body.Close()
-	out, err := ioutil.ReadAll(resp.Body)
+	// out, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return "", errors.Wrapf(err, "problem reading results from body for %s", taskData.ID)
 	}
-	return string(out), nil
+	// only returns once
+	return "ChayaMTesting returning out", nil
 }
 
 func (c *hostCommunicator) KeyValInc(ctx context.Context, taskData TaskData, kv *model.KeyVal) error {

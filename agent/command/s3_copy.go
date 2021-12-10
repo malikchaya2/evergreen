@@ -15,6 +15,8 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mitchellh/mapstructure"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -169,12 +171,19 @@ func (c *s3copy) Execute(ctx context.Context,
 func (c *s3copy) s3Copy(ctx context.Context,
 	comm client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 
+	grip.Error(message.WrapError(errors.New("chayaMtesting 1"), message.Fields{
+		"message": "in agent/command/s3_copy.go",
+		"task.Id": conf.Task.Id,
+	}))
+	logger.Execution().Infof("chayaMtesting 178 error %v \n", errors.New("chayaMtesting 1"))
+	logger.Task().Infof("chayaMtesting 179 error %v \n", errors.New("chayaMtesting 1"))
+
 	td := client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}
 
 	var foundDottedBucketName bool
-
+	logger.Task().Infof("chayaMtesting 184 td: %v, error: %v", td, errors.New("chayaMtesting 1"))
 	for _, s3CopyFile := range c.S3CopyFiles {
-		logger.Task().Infof("in for loop for s3CopyFile:  " +
+		logger.Task().Infof("chayaMtesting 186 in for loop for s3CopyFile:  \n " +
 			s3CopyFile.Destination.Path)
 
 		if len(s3CopyFile.BuildVariants) > 0 && !utility.StringSliceContains(
@@ -183,6 +192,7 @@ func (c *s3copy) s3Copy(ctx context.Context,
 		}
 
 		if ctx.Err() != nil {
+			logger.Task().Infof("chayaMtesting 195 ctxerr: %v, error: %v", ctx.Err(), errors.New("chayaMtesting 1"))
 			return errors.New("s3copy operation received was canceled")
 		}
 
@@ -203,28 +213,32 @@ func (c *s3copy) s3Copy(ctx context.Context,
 			S3DisplayName:       s3CopyFile.DisplayName,
 			S3Permissions:       s3CopyFile.Permissions,
 		}
-
+		logger.Task().Infof("chayaMtesting 216, about to hit comm.S3Copy. error: %v \n", errors.New("chayaMtesting 1"))
 		responseString, err := comm.S3Copy(ctx, td, &s3CopyReq)
-
+		logger.Task().Infof("chayaMtesting 217, just hit comm.S3Copy. error: %v \n err: '%v', response: '%s' ", errors.New("chayaMtesting 1"), err, responseString)
 		if responseString != "" {
 			logger.Task().Infof("s3Copy response: %s", responseString)
 		}
 
 		if err != nil {
+			logger.Task().Infof("chayaMtesting 224 error %v \n", errors.New("chayaMtesting 1"))
 			err = errors.Wrap(err, "s3 push copy failed")
 			logger.Execution().Error(err)
 
 			if s3CopyFile.Optional {
+				logger.Task().Infof("chayaMtesting 229 error %v \n", errors.New("chayaMtesting 1"))
 				logger.Execution().Errorf("file '%s' is optional, continuing",
 					s3CopyFile.DisplayName)
 				continue
 			} else {
+				logger.Task().Infof("chayaMtesting 234 error %v \n", errors.New("chayaMtesting 1"))
 				return errors.Wrapf(err, "failed to push %s to %s",
 					s3CopyFile.Source.Path, s3CopyFile.Destination.Bucket)
 			}
 
 		}
 
+		logger.Task().Infof("chayaMtesting 241 error %v \n", errors.New("chayaMtesting 1"))
 		err = c.attachFiles(ctx, comm, logger, td, s3CopyReq)
 		if err != nil {
 			return errors.WithStack(err)
@@ -233,10 +247,10 @@ func (c *s3copy) s3Copy(ctx context.Context,
 			logger.Task().Warning("destination bucket names containing dots that are created after Sept. 30, 2020 are not guaranteed to have valid attached URLs")
 			foundDottedBucketName = true
 		}
-
+		logger.Task().Infof("chayaMtesting 250 error %v \n", errors.New("chayaMtesting 1"))
 		logger.Task().Infof("successfully copied '%s' to '%s'", s3CopyFile.Source.Path, s3CopyFile.Destination.Path)
 	}
-
+	logger.Task().Infof("chayaMtesting 253 error %v \n", errors.New("chayaMtesting 1"))
 	return nil
 }
 

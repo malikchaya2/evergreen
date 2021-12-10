@@ -342,7 +342,6 @@ functions:
   copy-fake-destination-optional:
     - command: s3Copy.copy
       params:
-        optional: true
         aws_key: ${aws_key}
         aws_secret: ${aws_secret}
         s3_copy_files:
