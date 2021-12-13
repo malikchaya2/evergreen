@@ -125,10 +125,11 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	}
 	err = srcBucket.Copy(ctx, copyOpts)
 	if err != nil {
+		err = errors.Wrapf(err, "S3 copy failed for task %s", task.Id)
 		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
-		as.LoggedError(w, r, http.StatusInternalServerError,
-			errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
 		task.AddCopyError(err.Error())
+		as.LoggedError(w, r, http.StatusInternalServerError,
+			err)
 		return
 	}
 

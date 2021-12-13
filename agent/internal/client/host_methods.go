@@ -807,15 +807,16 @@ func (c *hostCommunicator) S3Copy(ctx context.Context, taskData TaskData, req *a
 	info.setTaskPathSuffix("s3Copy")
 	resp, err := c.request(ctx, info, req)
 	if err != nil {
-		return "", utility.RespErrorf(resp, "failed to copy file in S3 for task %s: %s", taskData.ID, err.Error())
+		return err.Error(), utility.RespErrorf(resp, "failed to copy file in S3 for task %s: %s", taskData.ID, err.Error())
 	}
+
 	defer resp.Body.Close()
-	// out, err := ioutil.ReadAll(resp.Body)
+	out, err := ioutil.ReadAll(resp.Body)
 	if err != nil {
 		return "", errors.Wrapf(err, "problem reading results from body for %s", taskData.ID)
 	}
 	// only returns once
-	return "ChayaMTesting returning out", nil
+	return string(out), nil
 }
 
 func (c *hostCommunicator) KeyValInc(ctx context.Context, taskData TaskData, kv *model.KeyVal) error {
