@@ -2252,6 +2252,22 @@ func (t *Task) SetResetWhenFinished() error {
 	)
 }
 
+func (t *Task) AddCopyError(CopyError string) error {
+
+	if CopyError == "" {
+		return nil
+	}
+
+	return UpdateOne(
+		bson.M{
+			IdKey:        t.Id,
+			ExecutionKey: t.Execution,
+		},
+		bson.M{"$push": bson.M{
+			CopyErrorsKey: CopyError,
+		}})
+}
+
 // MergeTestResultsBulk takes a slice of task structs and returns the slice with
 // test results populated. Note that the order may change. The second parameter
 // can be used to use a specific test result filtering query, otherwise all test

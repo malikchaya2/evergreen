@@ -69,6 +69,12 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 
 	if newestPushLog != nil {
 		grip.Warningln("conflict with existing pushed file:", copyToLocation)
+		if task.CopyErrors != nil && len(task.CopyErrors) > 0 {
+			copyErr := errors.New(task.CopyErrors[0])
+			as.LoggedError(w, r, http.StatusInternalServerError,
+				errors.Wrapf(copyErr, "S3 copy failed for task %s", task.Id))
+			return
+		}
 		gimlet.WriteJSON(w, gimlet.ErrorResponse{
 			StatusCode: http.StatusOK,
 			Message:    fmt.Sprintf("noop, this version is currently in the process of trying to push, or has already succeeded in pushing the file: '%s'", copyToLocation),
@@ -122,6 +128,7 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 		grip.Error(errors.Wrap(errors.WithStack(newPushLog.UpdateStatus(model.PushLogFailed)), "updating pushlog status failed"))
 		as.LoggedError(w, r, http.StatusInternalServerError,
 			errors.Wrapf(err, "S3 copy failed for task %s", task.Id))
+		task.AddCopyError(err.Error())
 		return
 	}
 

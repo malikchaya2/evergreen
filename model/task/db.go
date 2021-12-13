@@ -1516,18 +1516,3 @@ func AddHostCreateDetails(taskId, hostId string, execution int, hostCreateError 
 		}})
 	return errors.Wrapf(err, "error adding details of host creation failure to task")
 }
-
-func AddCopyError(taskId, execution int, CopyError string) error {
-	if CopyError == "" {
-		return nil
-	}
-	err := UpdateOne(
-		bson.M{
-			IdKey:        taskId,
-			ExecutionKey: execution,
-		},
-		bson.M{"$push": bson.M{
-			CopyErrorsKey: CopyError,
-		}})
-	return errors.Wrapf(err, "error adding copy error to task")
-}
