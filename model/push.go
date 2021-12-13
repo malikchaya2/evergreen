@@ -97,9 +97,7 @@ func FindPushLogAfter(fileLoc string, revisionOrderNumber int) (*PushLog, error)
 			},
 		},
 		PushLogLocationKey: fileLoc,
-		PushLogRonKey: bson.M{
-			"$gte": revisionOrderNumber,
-		},
+		PushLogRonKey:      revisionOrderNumber,
 	}
 	existingPushLog, err := FindOnePushLog(
 		query,
