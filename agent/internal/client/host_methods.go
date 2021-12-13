@@ -807,7 +807,7 @@ func (c *hostCommunicator) S3Copy(ctx context.Context, taskData TaskData, req *a
 	info.setTaskPathSuffix("s3Copy")
 	resp, err := c.request(ctx, info, req)
 	if err != nil {
-		return err.Error(), utility.RespErrorf(resp, "failed to copy file in S3 for task %s: %s", taskData.ID, err.Error())
+		return "", utility.RespErrorf(resp, "failed to copy file in S3 for task %s: %s", taskData.ID, err.Error())
 	}
 
 	defer resp.Body.Close()
