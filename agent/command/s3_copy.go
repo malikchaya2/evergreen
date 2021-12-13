@@ -168,6 +168,8 @@ func (c *s3copy) Execute(ctx context.Context,
 // production destination
 func (c *s3copy) s3Copy(ctx context.Context,
 	comm client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
+	// this only gets logged once
+	logger.Task().Infof("chayaMtesting 179 error %v \n", errors.New("chayaMtesting 1"))
 
 	td := client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}
 

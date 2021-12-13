@@ -14,6 +14,7 @@ import (
 	"github.com/evergreen-ci/pail"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -27,6 +28,11 @@ const (
 // file path already exists, no file copy is performed.
 func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	task := MustHaveTask(r)
+	//this gets logged twice
+	grip.Error(message.WrapError(errors.New("chayaMtesting"), message.Fields{
+		"message": "in api_plugin_s3copy.go start of run",
+		"task.Id": task.Id,
+	}))
 
 	s3CopyReq := &apimodels.S3CopyRequest{}
 	err := utility.ReadJSON(util.NewRequestReader(r), s3CopyReq)
