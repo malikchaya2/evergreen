@@ -219,9 +219,14 @@ func (c *s3copy) s3Copy(ctx context.Context,
 			logger.Task().Infof("chayaMtesting 224 error %v \n", errors.New("chayaMtesting 1"))
 			err = errors.Wrap(err, "s3 push copy failed")
 			task, err := comm.GetTask(ctx, td)
+			if task == nil {
+				logger.Task().Infof("chayaMtesting task is nil")
+			} else {
+				logger.Task().Infof("chayaMtesting task.CopyErrors %v \n", task.CopyErrors)
+			}
 			if err != nil {
-				logger.Task().Infof("chayaMtesting 234 error %v \n", errors.New("chayaMtesting 1"))
-				return errors.Wrap(err, "fs3 copy failed to retrieve current task")
+				logger.Task().Infof("chayaMtesting 223 error %v \n", errors.New("chayaMtesting 1"))
+				return errors.Wrap(err, "s3 copy failed to retrieve current task")
 			}
 			if len(task.CopyErrors) != 0 {
 				err = errors.Wrap(err, task.CopyErrors[0])
