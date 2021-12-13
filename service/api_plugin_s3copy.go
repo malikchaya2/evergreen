@@ -56,7 +56,7 @@ func (as *APIServer) s3copyPlugin(w http.ResponseWriter, r *http.Request) {
 	copyFromLocation := strings.Join([]string{s3CopyReq.S3SourceBucket, s3CopyReq.S3SourcePath}, "/")
 	copyToLocation := strings.Join([]string{s3CopyReq.S3DestinationBucket, s3CopyReq.S3DestinationPath}, "/")
 
-	newestPushLog, err := model.FindPushLogAt(copyToLocation, v.RevisionOrderNumber)
+	newestPushLog, err := model.FindPushLogAfter(copyToLocation, v.RevisionOrderNumber)
 	if err != nil {
 		as.LoggedError(w, r, http.StatusInternalServerError,
 			errors.Wrapf(err, "problem querying for push log at %s (build=%s)",
