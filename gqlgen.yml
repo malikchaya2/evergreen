@@ -116,9 +116,9 @@ models:
   ProjectEventLogEntry:
     model: github.com/evergreen-ci/evergreen/rest/model.APIProjectEvent
   RepoEventLogEntry:
-    model: github.com/evergreen-ci/evergreen/rest/model.APIProjectEvent
+    model: github.com/evergreen-ci/evergreen/rest/model.APIRepoEvent
   RepoSettings:
-    model: github.com/evergreen-ci/evergreen/rest/model.APIProjectSettings
+    model: github.com/evergreen-ci/evergreen/rest/model.APIRepoSettings
     fields:
       githubWebhooksEnabled:
         resolver: true
