@@ -102,8 +102,19 @@ models:
     model: github.com/evergreen-ci/evergreen/rest/model.TestLogs
   Duration:
     model: github.com/evergreen-ci/evergreen/rest/model.APIDuration
-  ProjectSettings:
-    model: github.com/evergreen-ci/evergreen/rest/model.APIProjectSettings
+  ProjectEventsSettings:
+    model: github.com/evergreen-ci/evergreen/rest/model.APIProjectEventsSettings
+    fields:
+      githubWebhooksEnabled:
+        resolver: true
+      vars:
+        resolver: true
+      aliases:
+        resolver: true
+      subscriptions:
+        resolver: true
+  RepoEventsSettings:
+    model: github.com/evergreen-ci/evergreen/rest/model.APIProjectEventsSettings
     fields:
       githubWebhooksEnabled:
         resolver: true
@@ -117,6 +128,17 @@ models:
     model: github.com/evergreen-ci/evergreen/rest/model.APIProjectEvent
   RepoEventLogEntry:
     model: github.com/evergreen-ci/evergreen/rest/model.APIProjectEvent
+  ProjectSettings:
+    model: github.com/evergreen-ci/evergreen/rest/model.APIProjectSettings
+    fields:
+      githubWebhooksEnabled:
+        resolver: true
+      vars:
+        resolver: true
+      aliases:
+        resolver: true
+      subscriptions:
+        resolver: true
   RepoSettings:
     model: github.com/evergreen-ci/evergreen/rest/model.APIProjectSettings
     fields:

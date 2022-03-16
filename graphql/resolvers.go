@@ -88,6 +88,14 @@ func (r *Resolver) TaskLogs() TaskLogsResolver {
 	return &taskLogsResolver{r}
 }
 
+func (r *Resolver) ProjectEventsSettings() ProjectEventsSettingsResolver {
+	return &projectEventsSettingsResolver{r}
+}
+
+func (r *Resolver) RepoEventsSettings() RepoEventsSettingsResolver {
+	return &repoEventsSettingsResolver{r}
+}
+
 func (r *Resolver) ProjectSettings() ProjectSettingsResolver {
 	return &projectSettingsResolver{r}
 }
@@ -122,6 +130,8 @@ type projectResolver struct{ *Resolver }
 type repoRefResolver struct{ *Resolver }
 type annotationResolver struct{ *Resolver }
 type issueLinkResolver struct{ *Resolver }
+type projectEventsSettingsResolver struct{ *Resolver }
+type repoEventsSettingsResolver struct{ *Resolver }
 type projectSettingsResolver struct{ *Resolver }
 type repoSettingsResolver struct{ *Resolver }
 type projectSubscriberResolver struct{ *Resolver }
@@ -471,6 +481,30 @@ func (r *projectResolver) ValidDefaultLoggers(ctx context.Context, obj *restMode
 
 func (r *repoRefResolver) ValidDefaultLoggers(ctx context.Context, obj *restModel.APIProjectRef) ([]string, error) {
 	return model.ValidDefaultLoggers, nil
+}
+
+func (r *projectEventsSettingsResolver) Vars(ctx context.Context, obj *restModel.APIProjectEventsSettings) (*restModel.APIProjectVars, error) {
+	return getRedactedAPIVarsForProject(ctx, utility.FromStringPtr(obj.ProjectRef.Id))
+}
+
+func (r *repoEventsSettingsResolver) Vars(ctx context.Context, obj *restModel.APIProjectEventsSettings) (*restModel.APIProjectVars, error) {
+	return getRedactedAPIVarsForProject(ctx, utility.FromStringPtr(obj.ProjectRef.Id))
+}
+
+func (r *projectEventsSettingsResolver) Aliases(ctx context.Context, obj *restModel.APIProjectEventsSettings) ([]*restModel.APIProjectAlias, error) {
+	return getAPIAliasesForProject(ctx, utility.FromStringPtr(obj.ProjectRef.Id))
+}
+
+func (r *repoEventsSettingsResolver) Aliases(ctx context.Context, obj *restModel.APIProjectEventsSettings) ([]*restModel.APIProjectAlias, error) {
+	return getAPIAliasesForProject(ctx, utility.FromStringPtr(obj.ProjectRef.Id))
+}
+
+func (r *projectEventsSettingsResolver) Subscriptions(ctx context.Context, obj *restModel.APIProjectEventsSettings) ([]*restModel.APISubscription, error) {
+	return getAPISubscriptionsForProject(ctx, utility.FromStringPtr(obj.ProjectRef.Id))
+}
+
+func (r *repoEventsSettingsResolver) Subscriptions(ctx context.Context, obj *restModel.APIProjectEventsSettings) ([]*restModel.APISubscription, error) {
+	return getAPISubscriptionsForProject(ctx, utility.FromStringPtr(obj.ProjectRef.Id))
 }
 
 func (r *projectSettingsResolver) GithubWebhooksEnabled(ctx context.Context, obj *restModel.APIProjectSettings) (bool, error) {
