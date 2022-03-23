@@ -659,7 +659,7 @@ type ComplexityRoot struct {
 
 	ProjectSettings struct {
 		Aliases               func(childComplexity int) int
-		GitHubWebhooksEnabled func(childComplexity int) int
+		GithubWebhooksEnabled func(childComplexity int) int
 		ProjectRef            func(childComplexity int) int
 		Subscriptions         func(childComplexity int) int
 		Vars                  func(childComplexity int) int
@@ -799,7 +799,7 @@ type ComplexityRoot struct {
 
 	RepoSettings struct {
 		Aliases               func(childComplexity int) int
-		GitHubWebhooksEnabled func(childComplexity int) int
+		GithubWebhooksEnabled func(childComplexity int) int
 		ProjectRef            func(childComplexity int) int
 		Subscriptions         func(childComplexity int) int
 		Vars                  func(childComplexity int) int
@@ -1250,7 +1250,7 @@ type MutationResolver interface {
 	CopyProject(ctx context.Context, project data.CopyProjectOpts) (*model.APIProjectRef, error)
 	AttachProjectToNewRepo(ctx context.Context, project MoveProjectInput) (*model.APIProjectRef, error)
 	SaveProjectSettingsForSection(ctx context.Context, projectSettings *model.APIProjectSettings, section ProjectSettingsSection) (*model.APIProjectSettings, error)
-	SaveRepoSettingsForSection(ctx context.Context, repoSettings *model.APIProjectSettings, section ProjectSettingsSection) (*model.APIProjectSettings, error)
+	SaveRepoSettingsForSection(ctx context.Context, repoSettings *model.APIProjectSettings, section ProjectSettingsSection) (*model.APIRepoSettings, error)
 	DefaultSectionToRepo(ctx context.Context, projectID string, section ProjectSettingsSection) (*string, error)
 	AttachProjectToRepo(ctx context.Context, projectID string) (*model.APIProjectRef, error)
 	DetachProjectFromRepo(ctx context.Context, projectID string) (*model.APIProjectRef, error)
@@ -1321,6 +1321,8 @@ type ProjectResolver interface {
 	Patches(ctx context.Context, obj *model.APIProjectRef, patchesInput PatchesInput) (*Patches, error)
 }
 type ProjectSettingsResolver interface {
+	GithubWebhooksEnabled(ctx context.Context, obj *model.APIProjectSettings) (bool, error)
+
 	Vars(ctx context.Context, obj *model.APIProjectSettings) (*model.APIProjectVars, error)
 	Aliases(ctx context.Context, obj *model.APIProjectSettings) ([]*model.APIProjectAlias, error)
 	Subscriptions(ctx context.Context, obj *model.APIProjectSettings) ([]*model.APISubscription, error)
@@ -1371,7 +1373,7 @@ type QueryResolver interface {
 	TaskNamesForBuildVariant(ctx context.Context, projectID string, buildVariant string) ([]string, error)
 	BuildVariantsForTaskName(ctx context.Context, projectID string, taskName string) ([]*task.BuildVariantTuple, error)
 	ProjectSettings(ctx context.Context, identifier string) (*model.APIProjectSettings, error)
-	RepoSettings(ctx context.Context, id string) (*model.APIProjectSettings, error)
+	RepoSettings(ctx context.Context, id string) (*model.APIRepoSettings, error)
 	ProjectEvents(ctx context.Context, identifier string, limit *int, before *time.Time) (*ProjectEvents, error)
 	RepoEvents(ctx context.Context, id string, limit *int, before *time.Time) (*RepoEvents, error)
 	HasVersion(ctx context.Context, id string) (bool, error)
@@ -1380,9 +1382,11 @@ type RepoRefResolver interface {
 	ValidDefaultLoggers(ctx context.Context, obj *model.APIProjectRef) ([]string, error)
 }
 type RepoSettingsResolver interface {
-	Vars(ctx context.Context, obj *model.APIProjectSettings) (*model.APIProjectVars, error)
-	Aliases(ctx context.Context, obj *model.APIProjectSettings) ([]*model.APIProjectAlias, error)
-	Subscriptions(ctx context.Context, obj *model.APIProjectSettings) ([]*model.APISubscription, error)
+	GithubWebhooksEnabled(ctx context.Context, obj *model.APIRepoSettings) (bool, error)
+	ProjectRef(ctx context.Context, obj *model.APIRepoSettings) (*model.APIProjectRef, error)
+	Vars(ctx context.Context, obj *model.APIRepoSettings) (*model.APIProjectVars, error)
+	Aliases(ctx context.Context, obj *model.APIRepoSettings) ([]*model.APIProjectAlias, error)
+	Subscriptions(ctx context.Context, obj *model.APIRepoSettings) ([]*model.APISubscription, error)
 }
 type TaskResolver interface {
 	AbortInfo(ctx context.Context, obj *model.APITask) (*AbortInfo, error)
@@ -4416,12 +4420,12 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.ProjectSettings.Aliases(childComplexity), true
 
-	case "ProjectSettings.gitHubWebhooksEnabled":
-		if e.complexity.ProjectSettings.GitHubWebhooksEnabled == nil {
+	case "ProjectSettings.githubWebhooksEnabled":
+		if e.complexity.ProjectSettings.GithubWebhooksEnabled == nil {
 			break
 		}
 
-		return e.complexity.ProjectSettings.GitHubWebhooksEnabled(childComplexity), true
+		return e.complexity.ProjectSettings.GithubWebhooksEnabled(childComplexity), true
 
 	case "ProjectSettings.projectRef":
 		if e.complexity.ProjectSettings.ProjectRef == nil {
@@ -5331,12 +5335,12 @@ func (e *executableSchema) Complexity(typeName, field string, childComplexity in
 
 		return e.complexity.RepoSettings.Aliases(childComplexity), true
 
-	case "RepoSettings.gitHubWebhooksEnabled":
-		if e.complexity.RepoSettings.GitHubWebhooksEnabled == nil {
+	case "RepoSettings.githubWebhooksEnabled":
+		if e.complexity.RepoSettings.GithubWebhooksEnabled == nil {
 			break
 		}
 
-		return e.complexity.RepoSettings.GitHubWebhooksEnabled(childComplexity), true
+		return e.complexity.RepoSettings.GithubWebhooksEnabled(childComplexity), true
 
 	case "RepoSettings.projectRef":
 		if e.complexity.RepoSettings.ProjectRef == nil {
@@ -8603,7 +8607,7 @@ type GithubProjectConflicts {
 }
 
 type ProjectSettings {
-  gitHubWebhooksEnabled: Boolean!
+  githubWebhooksEnabled: Boolean!
   projectRef: Project
   vars: ProjectVars
   aliases: [ProjectAlias!]
@@ -8611,7 +8615,7 @@ type ProjectSettings {
 }
 
 type RepoSettings {
-  gitHubWebhooksEnabled: Boolean!
+  githubWebhooksEnabled: Boolean!
   projectRef: RepoRef ## use the repo ref here in order to have stronger types
   vars: ProjectVars
   aliases: [ProjectAlias!]
@@ -18304,9 +18308,9 @@ func (ec *executionContext) _Mutation_saveRepoSettingsForSection(ctx context.Con
 		}
 		return graphql.Null
 	}
-	res := resTmp.(*model.APIProjectSettings)
+	res := resTmp.(*model.APIRepoSettings)
 	fc.Result = res
-	return ec.marshalNRepoSettings2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectSettings(ctx, field.Selections, res)
+	return ec.marshalNRepoSettings2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoSettings(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) _Mutation_defaultSectionToRepo(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
@@ -24513,7 +24517,7 @@ func (ec *executionContext) _ProjectEvents_count(ctx context.Context, field grap
 	return ec.marshalNInt2int(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _ProjectSettings_gitHubWebhooksEnabled(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectSettings) (ret graphql.Marshaler) {
+func (ec *executionContext) _ProjectSettings_githubWebhooksEnabled(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectSettings) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -24524,14 +24528,14 @@ func (ec *executionContext) _ProjectSettings_gitHubWebhooksEnabled(ctx context.C
 		Object:     "ProjectSettings",
 		Field:      field,
 		Args:       nil,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 	}
 
 	ctx = graphql.WithFieldContext(ctx, fc)
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.GitHubWebhooksEnabled, nil
+		return ec.resolvers.ProjectSettings().GithubWebhooksEnabled(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -26695,9 +26699,9 @@ func (ec *executionContext) _Query_repoSettings(ctx context.Context, field graph
 		}
 		return graphql.Null
 	}
-	res := resTmp.(*model.APIProjectSettings)
+	res := resTmp.(*model.APIRepoSettings)
 	fc.Result = res
-	return ec.marshalNRepoSettings2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectSettings(ctx, field.Selections, res)
+	return ec.marshalNRepoSettings2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoSettings(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) _Query_projectEvents(ctx context.Context, field graphql.CollectedField) (ret graphql.Marshaler) {
@@ -27037,7 +27041,7 @@ func (ec *executionContext) _RepoCommitQueueParams_message(ctx context.Context, 
 	return ec.marshalNString2ᚖstring(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _RepoEventLogEntry_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectEvent) (ret graphql.Marshaler) {
+func (ec *executionContext) _RepoEventLogEntry_timestamp(ctx context.Context, field graphql.CollectedField, obj *model.APIRepoEvent) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -27072,7 +27076,7 @@ func (ec *executionContext) _RepoEventLogEntry_timestamp(ctx context.Context, fi
 	return ec.marshalNTime2ᚖtimeᚐTime(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _RepoEventLogEntry_user(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectEvent) (ret graphql.Marshaler) {
+func (ec *executionContext) _RepoEventLogEntry_user(ctx context.Context, field graphql.CollectedField, obj *model.APIRepoEvent) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -27107,7 +27111,7 @@ func (ec *executionContext) _RepoEventLogEntry_user(ctx context.Context, field g
 	return ec.marshalNString2ᚖstring(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _RepoEventLogEntry_before(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectEvent) (ret graphql.Marshaler) {
+func (ec *executionContext) _RepoEventLogEntry_before(ctx context.Context, field graphql.CollectedField, obj *model.APIRepoEvent) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -27134,12 +27138,12 @@ func (ec *executionContext) _RepoEventLogEntry_before(ctx context.Context, field
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(model.APIProjectSettings)
+	res := resTmp.(model.APIRepoSettings)
 	fc.Result = res
-	return ec.marshalORepoSettings2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectSettings(ctx, field.Selections, res)
+	return ec.marshalORepoSettings2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoSettings(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _RepoEventLogEntry_after(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectEvent) (ret graphql.Marshaler) {
+func (ec *executionContext) _RepoEventLogEntry_after(ctx context.Context, field graphql.CollectedField, obj *model.APIRepoEvent) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -27166,9 +27170,9 @@ func (ec *executionContext) _RepoEventLogEntry_after(ctx context.Context, field 
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(model.APIProjectSettings)
+	res := resTmp.(model.APIRepoSettings)
 	fc.Result = res
-	return ec.marshalORepoSettings2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectSettings(ctx, field.Selections, res)
+	return ec.marshalORepoSettings2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoSettings(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) _RepoEvents_eventLogEntries(ctx context.Context, field graphql.CollectedField, obj *RepoEvents) (ret graphql.Marshaler) {
@@ -27201,9 +27205,9 @@ func (ec *executionContext) _RepoEvents_eventLogEntries(ctx context.Context, fie
 		}
 		return graphql.Null
 	}
-	res := resTmp.([]*model.APIProjectEvent)
+	res := resTmp.([]*model.APIRepoEvent)
 	fc.Result = res
-	return ec.marshalNRepoEventLogEntry2ᚕᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectEventᚄ(ctx, field.Selections, res)
+	return ec.marshalNRepoEventLogEntry2ᚕᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoEventᚄ(ctx, field.Selections, res)
 }
 
 func (ec *executionContext) _RepoEvents_count(ctx context.Context, field graphql.CollectedField, obj *RepoEvents) (ret graphql.Marshaler) {
@@ -28553,7 +28557,7 @@ func (ec *executionContext) _RepoRef_validDefaultLoggers(ctx context.Context, fi
 	return ec.marshalNString2ᚕstringᚄ(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _RepoSettings_gitHubWebhooksEnabled(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectSettings) (ret graphql.Marshaler) {
+func (ec *executionContext) _RepoSettings_githubWebhooksEnabled(ctx context.Context, field graphql.CollectedField, obj *model.APIRepoSettings) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -28564,14 +28568,14 @@ func (ec *executionContext) _RepoSettings_gitHubWebhooksEnabled(ctx context.Cont
 		Object:     "RepoSettings",
 		Field:      field,
 		Args:       nil,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 	}
 
 	ctx = graphql.WithFieldContext(ctx, fc)
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.GitHubWebhooksEnabled, nil
+		return ec.resolvers.RepoSettings().GithubWebhooksEnabled(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -28588,7 +28592,7 @@ func (ec *executionContext) _RepoSettings_gitHubWebhooksEnabled(ctx context.Cont
 	return ec.marshalNBoolean2bool(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _RepoSettings_projectRef(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectSettings) (ret graphql.Marshaler) {
+func (ec *executionContext) _RepoSettings_projectRef(ctx context.Context, field graphql.CollectedField, obj *model.APIRepoSettings) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -28599,14 +28603,14 @@ func (ec *executionContext) _RepoSettings_projectRef(ctx context.Context, field 
 		Object:     "RepoSettings",
 		Field:      field,
 		Args:       nil,
-		IsMethod:   false,
-		IsResolver: false,
+		IsMethod:   true,
+		IsResolver: true,
 	}
 
 	ctx = graphql.WithFieldContext(ctx, fc)
 	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (interface{}, error) {
 		ctx = rctx // use context from middleware stack in children
-		return obj.ProjectRef, nil
+		return ec.resolvers.RepoSettings().ProjectRef(rctx, obj)
 	})
 	if err != nil {
 		ec.Error(ctx, err)
@@ -28615,12 +28619,12 @@ func (ec *executionContext) _RepoSettings_projectRef(ctx context.Context, field 
 	if resTmp == nil {
 		return graphql.Null
 	}
-	res := resTmp.(model.APIProjectRef)
+	res := resTmp.(*model.APIProjectRef)
 	fc.Result = res
-	return ec.marshalORepoRef2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectRef(ctx, field.Selections, res)
+	return ec.marshalORepoRef2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectRef(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _RepoSettings_vars(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectSettings) (ret graphql.Marshaler) {
+func (ec *executionContext) _RepoSettings_vars(ctx context.Context, field graphql.CollectedField, obj *model.APIRepoSettings) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -28652,7 +28656,7 @@ func (ec *executionContext) _RepoSettings_vars(ctx context.Context, field graphq
 	return ec.marshalOProjectVars2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectVars(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _RepoSettings_aliases(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectSettings) (ret graphql.Marshaler) {
+func (ec *executionContext) _RepoSettings_aliases(ctx context.Context, field graphql.CollectedField, obj *model.APIRepoSettings) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -28684,7 +28688,7 @@ func (ec *executionContext) _RepoSettings_aliases(ctx context.Context, field gra
 	return ec.marshalOProjectAlias2ᚕᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectAliasᚄ(ctx, field.Selections, res)
 }
 
-func (ec *executionContext) _RepoSettings_subscriptions(ctx context.Context, field graphql.CollectedField, obj *model.APIProjectSettings) (ret graphql.Marshaler) {
+func (ec *executionContext) _RepoSettings_subscriptions(ctx context.Context, field graphql.CollectedField, obj *model.APIRepoSettings) (ret graphql.Marshaler) {
 	defer func() {
 		if r := recover(); r != nil {
 			ec.Error(ctx, ec.Recover(ctx, r))
@@ -40982,7 +40986,7 @@ func (ec *executionContext) unmarshalInputProjectSettingsInput(ctx context.Conte
 			var err error
 
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("githubWebhooksEnabled"))
-			it.GitHubWebhooksEnabled, err = ec.unmarshalOBoolean2bool(ctx, v)
+			it.GithubWebhooksEnabled, err = ec.unmarshalOBoolean2bool(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -41438,7 +41442,7 @@ func (ec *executionContext) unmarshalInputRepoSettingsInput(ctx context.Context,
 			var err error
 
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("githubWebhooksEnabled"))
-			it.GitHubWebhooksEnabled, err = ec.unmarshalOBoolean2bool(ctx, v)
+			it.GithubWebhooksEnabled, err = ec.unmarshalOBoolean2bool(ctx, v)
 			if err != nil {
 				return it, err
 			}
@@ -45653,11 +45657,20 @@ func (ec *executionContext) _ProjectSettings(ctx context.Context, sel ast.Select
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("ProjectSettings")
-		case "gitHubWebhooksEnabled":
-			out.Values[i] = ec._ProjectSettings_gitHubWebhooksEnabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&invalids, 1)
-			}
+		case "githubWebhooksEnabled":
+			field := field
+			out.Concurrently(i, func() (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._ProjectSettings_githubWebhooksEnabled(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&invalids, 1)
+				}
+				return res
+			})
 		case "projectRef":
 			out.Values[i] = ec._ProjectSettings_projectRef(ctx, field, obj)
 		case "vars":
@@ -46508,7 +46521,7 @@ func (ec *executionContext) _RepoCommitQueueParams(ctx context.Context, sel ast.
 
 var repoEventLogEntryImplementors = []string{"RepoEventLogEntry"}
 
-func (ec *executionContext) _RepoEventLogEntry(ctx context.Context, sel ast.SelectionSet, obj *model.APIProjectEvent) graphql.Marshaler {
+func (ec *executionContext) _RepoEventLogEntry(ctx context.Context, sel ast.SelectionSet, obj *model.APIRepoEvent) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, repoEventLogEntryImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -46779,7 +46792,7 @@ func (ec *executionContext) _RepoRef(ctx context.Context, sel ast.SelectionSet, 
 
 var repoSettingsImplementors = []string{"RepoSettings"}
 
-func (ec *executionContext) _RepoSettings(ctx context.Context, sel ast.SelectionSet, obj *model.APIProjectSettings) graphql.Marshaler {
+func (ec *executionContext) _RepoSettings(ctx context.Context, sel ast.SelectionSet, obj *model.APIRepoSettings) graphql.Marshaler {
 	fields := graphql.CollectFields(ec.OperationContext, sel, repoSettingsImplementors)
 
 	out := graphql.NewFieldSet(fields)
@@ -46788,13 +46801,31 @@ func (ec *executionContext) _RepoSettings(ctx context.Context, sel ast.Selection
 		switch field.Name {
 		case "__typename":
 			out.Values[i] = graphql.MarshalString("RepoSettings")
-		case "gitHubWebhooksEnabled":
-			out.Values[i] = ec._RepoSettings_gitHubWebhooksEnabled(ctx, field, obj)
-			if out.Values[i] == graphql.Null {
-				atomic.AddUint32(&invalids, 1)
-			}
+		case "githubWebhooksEnabled":
+			field := field
+			out.Concurrently(i, func() (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._RepoSettings_githubWebhooksEnabled(ctx, field, obj)
+				if res == graphql.Null {
+					atomic.AddUint32(&invalids, 1)
+				}
+				return res
+			})
 		case "projectRef":
-			out.Values[i] = ec._RepoSettings_projectRef(ctx, field, obj)
+			field := field
+			out.Concurrently(i, func() (res graphql.Marshaler) {
+				defer func() {
+					if r := recover(); r != nil {
+						ec.Error(ctx, ec.Recover(ctx, r))
+					}
+				}()
+				res = ec._RepoSettings_projectRef(ctx, field, obj)
+				return res
+			})
 		case "vars":
 			field := field
 			out.Concurrently(i, func() (res graphql.Marshaler) {
@@ -51306,7 +51337,7 @@ func (ec *executionContext) marshalNRepoCommitQueueParams2githubᚗcomᚋevergre
 	return ec._RepoCommitQueueParams(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRepoEventLogEntry2ᚕᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectEventᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.APIProjectEvent) graphql.Marshaler {
+func (ec *executionContext) marshalNRepoEventLogEntry2ᚕᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoEventᚄ(ctx context.Context, sel ast.SelectionSet, v []*model.APIRepoEvent) graphql.Marshaler {
 	ret := make(graphql.Array, len(v))
 	var wg sync.WaitGroup
 	isLen1 := len(v) == 1
@@ -51330,7 +51361,7 @@ func (ec *executionContext) marshalNRepoEventLogEntry2ᚕᚖgithubᚗcomᚋeverg
 			if !isLen1 {
 				defer wg.Done()
 			}
-			ret[i] = ec.marshalNRepoEventLogEntry2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectEvent(ctx, sel, v[i])
+			ret[i] = ec.marshalNRepoEventLogEntry2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoEvent(ctx, sel, v[i])
 		}
 		if isLen1 {
 			f(i)
@@ -51350,7 +51381,7 @@ func (ec *executionContext) marshalNRepoEventLogEntry2ᚕᚖgithubᚗcomᚋeverg
 	return ret
 }
 
-func (ec *executionContext) marshalNRepoEventLogEntry2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectEvent(ctx context.Context, sel ast.SelectionSet, v *model.APIProjectEvent) graphql.Marshaler {
+func (ec *executionContext) marshalNRepoEventLogEntry2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoEvent(ctx context.Context, sel ast.SelectionSet, v *model.APIRepoEvent) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			ec.Errorf(ctx, "must not be null")
@@ -51374,11 +51405,11 @@ func (ec *executionContext) marshalNRepoEvents2ᚖgithubᚗcomᚋevergreenᚑci�
 	return ec._RepoEvents(ctx, sel, v)
 }
 
-func (ec *executionContext) marshalNRepoSettings2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectSettings(ctx context.Context, sel ast.SelectionSet, v model.APIProjectSettings) graphql.Marshaler {
+func (ec *executionContext) marshalNRepoSettings2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoSettings(ctx context.Context, sel ast.SelectionSet, v model.APIRepoSettings) graphql.Marshaler {
 	return ec._RepoSettings(ctx, sel, &v)
 }
 
-func (ec *executionContext) marshalNRepoSettings2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectSettings(ctx context.Context, sel ast.SelectionSet, v *model.APIProjectSettings) graphql.Marshaler {
+func (ec *executionContext) marshalNRepoSettings2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoSettings(ctx context.Context, sel ast.SelectionSet, v *model.APIRepoSettings) graphql.Marshaler {
 	if v == nil {
 		if !graphql.HasFieldError(ctx, graphql.GetFieldContext(ctx)) {
 			ec.Errorf(ctx, "must not be null")
@@ -54133,10 +54164,6 @@ func (ec *executionContext) unmarshalOPublicKeyInput2ᚖgithubᚗcomᚋevergreen
 	return &res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalORepoRef2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectRef(ctx context.Context, sel ast.SelectionSet, v model.APIProjectRef) graphql.Marshaler {
-	return ec._RepoRef(ctx, sel, &v)
-}
-
 func (ec *executionContext) marshalORepoRef2ᚖgithubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectRef(ctx context.Context, sel ast.SelectionSet, v *model.APIProjectRef) graphql.Marshaler {
 	if v == nil {
 		return graphql.Null
@@ -54149,7 +54176,7 @@ func (ec *executionContext) unmarshalORepoRefInput2githubᚗcomᚋevergreenᚑci
 	return res, graphql.ErrorOnPath(ctx, err)
 }
 
-func (ec *executionContext) marshalORepoSettings2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIProjectSettings(ctx context.Context, sel ast.SelectionSet, v model.APIProjectSettings) graphql.Marshaler {
+func (ec *executionContext) marshalORepoSettings2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIRepoSettings(ctx context.Context, sel ast.SelectionSet, v model.APIRepoSettings) graphql.Marshaler {
 	return ec._RepoSettings(ctx, sel, &v)
 }
 

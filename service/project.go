@@ -209,7 +209,7 @@ func (uis *UIServer) projectPage(w http.ResponseWriter, r *http.Request) {
 		PRConflictingRefs           []string                    `json:"pr_testing_conflicting_refs,omitempty"`
 		CQConflictingRefs           []string                    `json:"commit_queue_conflicting_refs,omitempty"`
 		GithubChecksConflictingRefs []string                    `json:"github_checks_conflicting_refs,omitempty"`
-		GitHubWebhooksEnabled       bool                        `json:"github_webhooks_enabled"`
+		GithubWebhooksEnabled       bool                        `json:"github_webhooks_enabled"`
 		GithubValidOrgs             []string                    `json:"github_valid_orgs"`
 		Subscriptions               []restModel.APISubscription `json:"subscriptions"`
 		Permissions                 gimlet.Permissions          `json:"permissions"`

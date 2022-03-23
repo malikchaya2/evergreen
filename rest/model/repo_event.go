@@ -20,7 +20,7 @@ type APIRepoEvent struct {
 
 type APIRepoSettings struct {
 	RepoRef               APIProjectRef     `json:"proj_ref"`
-	GitHubWebhooksEnabled bool              `json:"github_webhooks_enabled"`
+	GithubWebhooksEnabled bool              `json:"github_webhooks_enabled"`
 	Vars                  APIRepoVars       `json:"vars"`
 	Aliases               []APIRepoAlias    `json:"aliases"`
 	Subscriptions         []APISubscription `json:"subscriptions"`
@@ -100,7 +100,7 @@ func DbRepoSettingsToRestModel(settings model.ProjectSettings) (APIRepoSettings,
 
 	return APIRepoSettings{
 		RepoRef:               apiRepoRef,
-		GitHubWebhooksEnabled: settings.GitHubHooksEnabled,
+		GithubWebhooksEnabled: settings.GithubHooksEnabled,
 		Vars:                  apiRepoVars,
 		Aliases:               DbRepoAliasesToRestModel(settings.Aliases),
 		Subscriptions:         apiSubscriptions,

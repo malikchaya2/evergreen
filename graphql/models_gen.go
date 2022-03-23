@@ -206,8 +206,8 @@ type PublicKeyInput struct {
 }
 
 type RepoEvents struct {
-	EventLogEntries []*model.APIProjectEvent `json:"eventLogEntries"`
-	Count           int                      `json:"count"`
+	EventLogEntries []*model.APIRepoEvent `json:"eventLogEntries"`
+	Count           int                   `json:"count"`
 }
 
 type SortOrder struct {
