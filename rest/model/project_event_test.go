@@ -105,8 +105,8 @@ func (s *ProjectEventSuite) TestProjectRef() {
 }
 
 func (s *ProjectEventSuite) TestGithubHooksEnabled() {
-	s.Equal(s.projChanges.Before.GitHubHooksEnabled, s.APIEvent.Before.GitHubWebhooksEnabled)
-	s.Equal(s.projChanges.After.GitHubHooksEnabled, s.APIEvent.After.GitHubWebhooksEnabled)
+	s.Equal(s.projChanges.Before.GithubHooksEnabled, s.APIEvent.Before.GithubWebhooksEnabled)
+	s.Equal(s.projChanges.After.GithubHooksEnabled, s.APIEvent.After.GithubWebhooksEnabled)
 }
 
 func (s *ProjectEventSuite) TestProjectVars() {
