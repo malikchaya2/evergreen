@@ -3942,9 +3942,12 @@ func (r *versionResolver) Status(ctx context.Context, obj *restModel.APIVersion)
 		return "", InternalServerError.Send(ctx, fmt.Sprintf("An error occurred when converting a version status: %s", err.Error()))
 	}
 	isAborted := utility.FromBoolPtr(obj.Aborted)
-	nonAbortedStatuses := []string{}
-	if !isAborted {
-		nonAbortedStatuses = append(nonAbortedStatuses, status)
+	allStatuses := []string{}
+	if isAborted {
+		allStatuses = append(allStatuses, evergreen.PatchAborted)
+
+	} else {
+		allStatuses = append(allStatuses, status)
 	}
 	if evergreen.IsPatchRequester(*obj.Requester) {
 		p, err := data.FindPatchById(*obj.Id)
@@ -3961,19 +3964,15 @@ func (r *versionResolver) Status(ctx context.Context, obj *restModel.APIVersion)
 					continue
 				}
 				if cpVersion.Aborted {
-					isAborted = true
+					allStatuses = append(allStatuses, evergreen.PatchAborted)
 				} else {
-					nonAbortedStatuses = append(nonAbortedStatuses, *cp.Status)
+					allStatuses = append(allStatuses, *cp.Status)
 				}
 			}
-			status = patch.GetCollectiveStatus(nonAbortedStatuses)
+			status = patch.GetCollectiveStatus(allStatuses)
 		}
 	}
 
-	// If theres an aborted task we should set the patch status to aborted if there are no other failures
-	if isAborted && !utility.StringSliceContains(nonAbortedStatuses, evergreen.PatchFailed) {
-		status = evergreen.PatchAborted
-	}
 	return status, nil
 }
 
