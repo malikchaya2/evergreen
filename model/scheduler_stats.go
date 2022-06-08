@@ -8,6 +8,7 @@ import (
 	"github.com/evergreen-ci/evergreen/db"
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
@@ -138,6 +139,14 @@ func hasTaskId(taskId string, dependsOn []task.Dependency) bool {
 	for _, d := range dependsOn {
 		if d.TaskId == taskId {
 			return true
+		}
+		if d.TaskId == "" {
+			grip.Debug(message.Fields{
+				"ticket":    "EVG-16810",
+				"message":   "empty dependency id found in hasTaskId",
+				"dependsOn": dependsOn,
+				"taskId":    taskId,
+			})
 		}
 	}
 	return false

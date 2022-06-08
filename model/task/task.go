@@ -650,6 +650,15 @@ func (t *Task) AddDependency(d Dependency) error {
 		}
 	}
 	t.DependsOn = append(t.DependsOn, d)
+
+	if d.TaskId == "" {
+		grip.Debug(message.Fields{
+			"ticket":     "EVG-16810",
+			"message":    "empty dependency id found in AddDependency",
+			"dependency": d,
+			"taskId":     t.Id,
+		})
+	}
 	return UpdateOne(
 		bson.M{
 			IdKey: t.Id,
@@ -709,7 +718,11 @@ func (t *Task) DependenciesMet(depCaches map[string]Task) (bool, error) {
 				return false, errors.Wrap(err, "finding dependency")
 			}
 			if foundTask == nil {
-				return false, errors.Errorf("dependency '%s' not found", dependency.TaskId)
+				grip.Error(message.Fields{
+					"message": "dependency not found",
+					"task_id": dependency.TaskId,
+				})
+				continue
 			}
 			depTask = *foundTask
 			depCaches[depTask.Id] = depTask

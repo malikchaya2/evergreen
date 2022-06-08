@@ -768,6 +768,15 @@ func removeNextMergeTaskDependency(cq commitqueue.CommitQueue, currentIssue stri
 			Status: AllStatuses,
 		}
 		if err = nextMerge.AddDependency(d); err != nil {
+			if d.TaskId == "" {
+				grip.Debug(message.Fields{
+					"ticket":          "EVG-16810",
+					"message":         "empty dependency id found in removeNextMergeTaskDependency",
+					"dependency":      d,
+					"currentMerge.Id": currentMerge.Id,
+					"currentIssue":    currentIssue,
+				})
+			}
 			return errors.Wrap(err, "adding dependency")
 		}
 	}

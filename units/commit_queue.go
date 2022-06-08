@@ -220,6 +220,14 @@ func (j *commitQueueJob) addMergeTaskDependencies(cq commitqueue.CommitQueue) er
 		}
 		err = mergeTask.AddDependency(dependency)
 		if err != nil {
+			if dependency.TaskId == "" {
+				grip.Debug(message.Fields{
+					"ticket":     "EVG-16810",
+					"message":    "empty dependency id found in addMergeTaskDependencies",
+					"dependency": dependency,
+					"taskId":     mergeTask.Id,
+				})
+			}
 			return errors.Wrap(err, "unable to add dependency")
 		}
 		err = mergeTask.UpdateDependsOn(dependency.Status, []string{dependency.TaskId})

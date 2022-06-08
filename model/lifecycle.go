@@ -969,6 +969,14 @@ func makeDeps(t BuildVariantTaskUnit, thisTask *task.Task, taskIds TaskIdTable) 
 			if id == thisTask.Id {
 				continue
 			}
+			if id == "" {
+				grip.Debug(message.Fields{
+					"ticket":  "EVG-16810",
+					"message": "empty dependency id found in makeDeps",
+					"depIDs":  depIDs,
+					"taskId":  thisTask.Id,
+				})
+			}
 			dependencySet[task.Dependency{TaskId: id, Status: status}] = true
 		}
 	}
