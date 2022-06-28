@@ -329,11 +329,17 @@ tasks:
     name: dist-staging
     patch_only: true
     run_on: archlinux-new-small
+    depends_on:
+      - name: smoke-test-task
+        status: success
   - <<: *run-build
     name: dist
   - <<: *run-smoke-test
     name: smoke-test-task
     tags: ["smoke"]
+    depends_on:
+      - name: test-auth
+        status: success
   - <<: *run-smoke-test
     name: smoke-test-endpoints
     tags: ["smoke"]
