@@ -304,14 +304,6 @@ func (j *patchIntentProcessor) finishPatch(ctx context.Context, patchDoc *patch.
 	if j.intent.ReusePreviousPatchDefinition() {
 		err = j.setToPreviousPatchDefinition(patchDoc, project)
 		if err != nil {
-			grip.Error(message.WrapError(err, message.Fields{
-				"message":     "setting patch definition to the previous patch",
-				"job":         j.ID(),
-				"patch_id":    j.PatchID,
-				"intent_type": j.IntentType,
-				"intent_id":   j.IntentID,
-				"source":      "patch intents",
-			}))
 			return err
 		}
 	}
