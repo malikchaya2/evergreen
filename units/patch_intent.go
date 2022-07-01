@@ -489,7 +489,7 @@ func (j *patchIntentProcessor) finishPatch(ctx context.Context, patchDoc *patch.
 func (j *patchIntentProcessor) getPreviousPatchDefinition(project *model.Project, failedOnly bool) ([]patch.VariantTasks, error) {
 	previousPatch, err := patch.FindOne(patch.MostRecentPatchByUserAndProject(j.user.Username(), project.Identifier))
 	if err != nil {
-		return nil, errors.Wrap(err, "error querying for most recent patch")
+		return nil, errors.Wrap(err, "querying for most recent patch")
 	}
 	if previousPatch == nil {
 		return nil, errors.Errorf("no previous patch available")
@@ -522,8 +522,7 @@ func (j *patchIntentProcessor) getPreviousPatchDefinition(project *model.Project
 	return res, nil
 }
 
-//todo: do we need j?
-func (j *patchIntentProcessor) setFailedTasksToPrevious(patchDoc, previousPatch *patch.Patch, project *model.Project) error {
+func setFailedTasksToPrevious(patchDoc, previousPatch *patch.Patch, project *model.Project) error {
 	var failedTasks []string
 	for _, vt := range previousPatch.VariantsTasks {
 		tasksInProjectVariant := project.FindTasksForVariant(vt.Variant)
@@ -543,7 +542,7 @@ func (j *patchIntentProcessor) setFailedTasksToPrevious(patchDoc, previousPatch 
 func (j *patchIntentProcessor) setToPreviousPatchDefinition(patchDoc *patch.Patch, project *model.Project, failedOnly bool) (error, string) {
 	previousPatch, err := patch.FindOne(patch.MostRecentPatchByUserAndProject(j.user.Username(), project.Identifier))
 	if err != nil {
-		return errors.Wrap(err, "error querying for most recent patch"), ""
+		return errors.Wrap(err, "querying for most recent patch"), ""
 	}
 	if previousPatch == nil {
 		return errors.Errorf("no previous patch available"), ""
