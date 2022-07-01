@@ -301,15 +301,11 @@ func (j *patchIntentProcessor) finishPatch(ctx context.Context, patchDoc *patch.
 		return err
 	}
 
-	if j.intent.ReusePreviousPatchDefinition() {
-		err = j.setToPreviousPatchDefinition(patchDoc, project)
-		if err != nil {
-			return err
-		}
-	}
+	var previousPatchStatus string
+	failedOnly := j.intent.RepeatFailedTasksAndVariants()
 
-	if j.intent.RepeatFailedTasksAndVariants() {
-		patchDoc.VariantsTasks, err = j.getPreviousPatchDefinition(project, true)
+	if j.intent.ReusePreviousPatchDefinition() || failedOnly {
+		err, previousPatchStatus = j.setToPreviousPatchDefinition(patchDoc, project, failedOnly)
 		if err != nil {
 			return err
 		}
@@ -339,7 +335,9 @@ func (j *patchIntentProcessor) finishPatch(ctx context.Context, patchDoc *patch.
 		}
 	}
 
-	if len(patchDoc.VariantsTasks) == 0 {
+	skipForFailed := failedOnly && !(previousPatchStatus == evergreen.PatchFailed)
+
+	if len(patchDoc.VariantsTasks) == 0 && !skipForFailed {
 		project.BuildProjectTVPairs(patchDoc, j.intent.GetAlias())
 	}
 
@@ -524,20 +522,44 @@ func (j *patchIntentProcessor) getPreviousPatchDefinition(project *model.Project
 	return res, nil
 }
 
-func (j *patchIntentProcessor) setToPreviousPatchDefinition(patchDoc *patch.Patch, project *model.Project) error {
+//todo: do we need j?
+func (j *patchIntentProcessor) setFailedTasksToPrevious(patchDoc, previousPatch *patch.Patch, project *model.Project) error {
+	var failedTasks []string
+	for _, vt := range previousPatch.VariantsTasks {
+		tasksInProjectVariant := project.FindTasksForVariant(vt.Variant)
+		displayTasksInProjectVariant := project.FindDisplayTasksForVariant(vt.Variant)
+		var tasks []string
+		tasks, _, err := getPreviousFailedTasksAndDisplayTasks(tasksInProjectVariant, displayTasksInProjectVariant, vt, previousPatch.Version)
+		if err != nil {
+			return err
+		}
+		failedTasks = append(failedTasks, tasks...)
+	}
+
+	patchDoc.Tasks = failedTasks
+	return nil
+}
+
+func (j *patchIntentProcessor) setToPreviousPatchDefinition(patchDoc *patch.Patch, project *model.Project, failedOnly bool) (error, string) {
 	previousPatch, err := patch.FindOne(patch.MostRecentPatchByUserAndProject(j.user.Username(), project.Identifier))
 	if err != nil {
-		return errors.Wrap(err, "error querying for most recent patch")
+		return errors.Wrap(err, "error querying for most recent patch"), ""
 	}
 	if previousPatch == nil {
-		return errors.Errorf("no previous patch available")
+		return errors.Errorf("no previous patch available"), ""
 	}
 
 	patchDoc.BuildVariants = previousPatch.BuildVariants
-	patchDoc.Tasks = previousPatch.Tasks
 	patchDoc.RegexBuildVariants = previousPatch.RegexBuildVariants
 	patchDoc.RegexTasks = previousPatch.RegexTasks
-	return nil
+
+	if failedOnly {
+		j.setFailedTasksToPrevious(patchDoc, previousPatch, project)
+	} else {
+		patchDoc.Tasks = previousPatch.Tasks
+	}
+
+	return nil, previousPatch.Status
 }
 
 func getPreviousFailedTasksAndDisplayTasks(tasksInProjectVariant []string, displayTasksInProjectVariant []string, vt patch.VariantTasks, version string) ([]string, []patch.DisplayTask, error) {
