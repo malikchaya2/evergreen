@@ -329,11 +329,22 @@ tasks:
     name: dist-staging
     patch_only: true
     run_on: archlinux-new-small
+    depends_on:
+      - name: smoke-test-task
+        status: success
+    commands:
+      - command: shell.exec
+        params:
+          script: |
+            exit 1 
   - <<: *run-build
     name: dist
   - <<: *run-smoke-test
     name: smoke-test-task
     tags: ["smoke"]
+    depends_on:
+    - name: test-auth
+      status: success
   - <<: *run-smoke-test
     name: smoke-test-endpoints
     tags: ["smoke"]
@@ -601,6 +612,14 @@ buildvariants:
       - name: test-db-auth
       - name: test-cloud
 
+    display_tasks:  
+      - name: display_task
+        execution_tasks: 
+          - dist-staging
+          - "docker-cleanup"
+          - test-agent-internal-client
+          - test-agent-command
+
   - name: race-detector
     display_name: Race Detector
     run_on:
@@ -611,7 +630,7 @@ buildvariants:
       RUN_EC2_SPECIFIC_TESTS: true
       mongodb_url: https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu1604-4.2.18.tgz
       race_detector: true
-      test_timeout: 15m
+      test_timeout: 1m
     tasks:
       - name: ".test"
       - name: test-db-auth
