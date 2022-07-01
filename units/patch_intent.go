@@ -486,42 +486,6 @@ func (j *patchIntentProcessor) finishPatch(ctx context.Context, patchDoc *patch.
 	return catcher.Resolve()
 }
 
-func (j *patchIntentProcessor) getPreviousPatchDefinition(project *model.Project, failedOnly bool) ([]patch.VariantTasks, error) {
-	previousPatch, err := patch.FindOne(patch.MostRecentPatchByUserAndProject(j.user.Username(), project.Identifier))
-	if err != nil {
-		return nil, errors.Wrap(err, "querying for most recent patch")
-	}
-	if previousPatch == nil {
-		return nil, errors.Errorf("no previous patch available")
-	}
-	var res []patch.VariantTasks
-	if failedOnly && !(previousPatch.Status == evergreen.PatchFailed) {
-		return res, nil
-	}
-	for _, vt := range previousPatch.VariantsTasks {
-		tasksInProjectVariant := project.FindTasksForVariant(vt.Variant)
-		displayTasksInProjectVariant := project.FindDisplayTasksForVariant(vt.Variant)
-		var displayTasks []patch.DisplayTask
-		var tasks []string
-		if failedOnly {
-			tasks, displayTasks, err = getPreviousFailedTasksAndDisplayTasks(tasksInProjectVariant, displayTasksInProjectVariant, vt, previousPatch.Version)
-			if err != nil {
-				return nil, err
-			}
-		} else {
-			tasks, displayTasks = getPreviousTasksAndDisplayTasks(tasksInProjectVariant, displayTasksInProjectVariant, vt)
-		}
-		if len(tasks)+len(displayTasks) > 0 {
-			res = append(res, patch.VariantTasks{
-				Variant:      vt.Variant,
-				Tasks:        tasks,
-				DisplayTasks: displayTasks,
-			})
-		}
-	}
-	return res, nil
-}
-
 func setFailedTasksToPrevious(patchDoc, previousPatch *patch.Patch, project *model.Project) error {
 	var failedTasks []string
 	for _, vt := range previousPatch.VariantsTasks {
