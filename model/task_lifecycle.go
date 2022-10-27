@@ -949,7 +949,11 @@ func getBuildStatus(buildTasks []task.Task) (string, bool) {
 	// Check if no tasks have started and if all tasks are blocked.
 	noStartedTasks := true
 	allTasksBlocked := true
+	allUnscheduled := true
 	for _, t := range buildTasks {
+		if t.Status == evergreen.TaskUndispatched {
+			allUnscheduled = false
+		}
 		if !evergreen.IsUnstartedTaskStatus(t.Status) {
 			noStartedTasks = false
 			allTasksBlocked = false
@@ -961,6 +965,10 @@ func getBuildStatus(buildTasks []task.Task) (string, bool) {
 	}
 
 	if noStartedTasks || allTasksBlocked {
+		// if all the tasks are unscheduled, set active to false
+		if allUnscheduled {
+			return evergreen.BuildUnscheduled, allTasksBlocked
+		}
 		return evergreen.BuildCreated, allTasksBlocked
 	}
 
@@ -1019,6 +1027,10 @@ func updateBuildStatus(b *build.Build) (bool, error) {
 	buildStatus, allTasksBlocked := getBuildStatus(buildTasks)
 	blockedChanged := allTasksBlocked != b.AllTasksBlocked
 
+	if buildStatus == evergreen.BuildUnscheduled {
+		b.SetActivated(false)
+	}
+
 	if err = b.SetAllTasksBlocked(allTasksBlocked); err != nil {
 		return false, errors.Wrapf(err, "setting build '%s' as blocked", b.Id)
 	}
@@ -1075,6 +1087,14 @@ func getVersionStatus(builds []build.Build) string {
 			break
 		}
 	}
+	//dependencies on tasks in other build variants
+	// generated task: normally the build variant wouldn't be created if non of the tasks are scheduled
+	// ghost build variants get created
+	// have a generated tasks that is supposed to run on many build variants, we only select certain build variants to run, it may still generate those.
+
+	// to reproduce:
+	// a generated task generates tasks in many build variants but the patch restricts to only one build varaiant.
+
 	if noStartedBuilds {
 		return evergreen.VersionCreated
 	}
