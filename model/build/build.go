@@ -70,9 +70,10 @@ type Build struct {
 	TriggerType  string `bson:"trigger_type,omitempty" json:"trigger_type,omitempty"`
 	TriggerEvent string `bson:"trigger_event,omitempty" json:"trigger_event,omitempty"`
 
-	// Set to true if all tasks in the build are blocked.
+	// Set to true if all tasks in the build are blocked or unscheduled.
 	// Should not be exposed, only for internal use.
-	AllTasksBlocked bool `bson:"all_tasks_blocked"`
+	AllTasksBlocked     bool `bson:"all_tasks_blocked"`
+	AllTasksUnscheduled bool `bson:"all_tasks_unscheduled"`
 }
 
 func (b *Build) MarshalBSON() ([]byte, error)  { return mgobson.Marshal(b) }
@@ -215,6 +216,18 @@ func (b *Build) SetAllTasksBlocked(blocked bool) error {
 	return UpdateOne(
 		bson.M{IdKey: b.Id},
 		bson.M{"$set": bson.M{AllTasksBlockedKey: blocked}},
+	)
+}
+
+// SetAllTasksUnscheduled sets the build AllTasksUnscheduled field to the given boolean.
+func (b *Build) SetAllTasksUnscheduled(unscheduled bool) error {
+	if b.AllTasksUnscheduled == unscheduled {
+		return nil
+	}
+	b.AllTasksUnscheduled = unscheduled
+	return UpdateOne(
+		bson.M{IdKey: b.Id},
+		bson.M{"$set": bson.M{AllTasksUnscheduledKey: unscheduled}},
 	)
 }
 

@@ -1035,6 +1035,10 @@ func updateBuildStatus(b *build.Build) (bool, error) {
 		return false, errors.Wrapf(err, "setting build '%s' as blocked", b.Id)
 	}
 
+	if err = b.SetAllTasksUnscheduled(buildStatus == evergreen.BuildUnscheduled); err != nil {
+		return false, errors.Wrapf(err, "setting build '%s' as unscheduled", b.Id)
+	}
+
 	if buildStatus == b.Status {
 		return blockedChanged, nil
 	}
@@ -1101,7 +1105,8 @@ func getVersionStatus(builds []build.Build) string {
 
 	// Check if builds are started but not finished.
 	for _, b := range builds {
-		if b.Activated && !evergreen.IsFinishedBuildStatus(b.Status) && !b.AllTasksBlocked {
+		// have AllTasksBlocked be true if it's all unscheduled
+		if b.Activated && !evergreen.IsFinishedBuildStatus(b.Status) && !b.AllTasksBlocked && !b.AllTasksUnscheduled {
 			return evergreen.VersionStarted
 		}
 	}
