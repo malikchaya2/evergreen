@@ -562,7 +562,7 @@ func MarkEnd(t *task.Task, caller string, finishTime time.Time, detail *apimodel
 	}
 
 	grip.Info(message.Fields{
-		"message":            "marking task finished",
+		"message":            "",
 		"usage":              "container task health dashboard",
 		"task_id":            t.Id,
 		"execution":          t.Execution,
@@ -947,12 +947,15 @@ func updateMakespans(b *build.Build, buildTasks []task.Task) error {
 // a boolean denoting if all tasks in the build are blocked.
 func getBuildStatus(buildTasks []task.Task) (string, bool) {
 	// Check if no tasks have started and if all tasks are blocked.
+
+	//check if can change this logic to allTasksBlockedOrUnscheduled
 	noStartedTasks := true
 	allTasksBlocked := true
-	allUnscheduled := true
+	// change to allTasksUnscheduled
+	allTasksUnscheduled := true
 	for _, t := range buildTasks {
-		if t.Status == evergreen.TaskUndispatched {
-			allUnscheduled = false
+		if t.Status == evergreen.TaskUndispatched && !t.Activated {
+			allTasksUnscheduled = false
 		}
 		if !evergreen.IsUnstartedTaskStatus(t.Status) {
 			noStartedTasks = false
@@ -964,11 +967,12 @@ func getBuildStatus(buildTasks []task.Task) (string, bool) {
 		}
 	}
 
+	// if all the tasks are unscheduled, set active to false
+	if allTasksUnscheduled {
+		return evergreen.BuildUnscheduled, allTasksBlocked
+	}
+
 	if noStartedTasks || allTasksBlocked {
-		// if all the tasks are unscheduled, set active to false
-		if allUnscheduled {
-			return evergreen.BuildUnscheduled, allTasksBlocked
-		}
 		return evergreen.BuildCreated, allTasksBlocked
 	}
 
@@ -1019,24 +1023,56 @@ func updateBuildGithubStatus(b *build.Build, buildTasks []task.Task) error {
 // updateBuildStatus updates the status of the build based on its tasks' statuses
 // Returns true if the build's status has changed or if all of the build's tasks become blocked.
 func updateBuildStatus(b *build.Build) (bool, error) {
+	// comes in here
 	buildTasks, err := task.FindWithFields(task.ByBuildId(b.Id), task.StatusKey, task.ActivatedKey, task.DependsOnKey, task.IsGithubCheckKey, task.AbortedKey)
 	if err != nil {
 		return false, errors.Wrapf(err, "getting tasks in build '%s'", b.Id)
 	}
 
+	grip.Debug(message.Fields{
+		"message":    "chayaMTesting updateBuildStatus 1033",
+		"ticket":     "EVG-17305",
+		"build":      b,
+		"buildTasks": buildTasks,
+	})
+
 	buildStatus, allTasksBlocked := getBuildStatus(buildTasks)
+	if buildStatus == evergreen.BuildUnscheduled {
+		// check if setting these is neccesary (maybe for restarts)
+		if err = b.SetAllTasksUnscheduled(true); err != nil {
+			return true, errors.Wrapf(err, "setting build '%s' as unscheduled", b.Id)
+		}
+		if err = b.SetActivated(false); err != nil {
+			return true, errors.Wrapf(err, "setting build '%s' as inactive", b.Id)
+		}
+
+		return true, nil
+	}
+	grip.Debug(message.Fields{
+		"message":         "chayaMTesting updateBuildStatus 1049",
+		"ticket":          "EVG-17305",
+		"build":           b,
+		"buildTasks":      buildTasks,
+		"buildStatus":     buildStatus,
+		"allTasksBlocked": allTasksBlocked,
+		"B.Status":        b.Status,
+		"b.active":        b.Activated,
+	})
+
 	blockedChanged := allTasksBlocked != b.AllTasksBlocked
 
-	if buildStatus == evergreen.BuildUnscheduled {
-		b.SetActivated(false)
-	}
+	grip.Debug(message.Fields{
+		"message":         "chayaMTesting updateBuildStatus 1062",
+		"ticket":          "EVG-17305",
+		"build":           b,
+		"buildTasks":      buildTasks,
+		"buildStatus":     buildStatus,
+		"allTasksBlocked": allTasksBlocked,
+		"blockedChanged":  blockedChanged,
+	})
 
 	if err = b.SetAllTasksBlocked(allTasksBlocked); err != nil {
 		return false, errors.Wrapf(err, "setting build '%s' as blocked", b.Id)
-	}
-
-	if err = b.SetAllTasksUnscheduled(buildStatus == evergreen.BuildUnscheduled); err != nil {
-		return false, errors.Wrapf(err, "setting build '%s' as unscheduled", b.Id)
 	}
 
 	if buildStatus == b.Status {
@@ -1245,13 +1281,6 @@ func UpdateBuildAndVersionStatusForTask(t *task.Task) error {
 	}
 	// If no build has changed status, then we can assume the version and patch statuses have also stayed the same.
 	if !buildStatusChanged {
-
-		grip.DebugWhen(t.ActivatedBy == "chaya.malik", message.Fields{
-			"message": "!buildStatusChanged in UpdateBuildAndVersionStatusForTask",
-			"ticket":  "EVG-17305",
-			"task":    t.Id,
-			"build":   taskBuild.Id,
-		})
 		return nil
 	}
 
