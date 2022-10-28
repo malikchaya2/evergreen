@@ -948,20 +948,25 @@ func updateMakespans(b *build.Build, buildTasks []task.Task) error {
 func getBuildStatus(buildTasks []task.Task) (string, bool) {
 	// Check if no tasks have started and if all tasks are blocked.
 	noStartedTasks := true
-	allTasksBlocked := true
+	allTasksBlockedOrUnscheduled := true
 	for _, t := range buildTasks {
 		if !evergreen.IsUnstartedTaskStatus(t.Status) {
 			noStartedTasks = false
-			allTasksBlocked = false
+			// move this to its own function
+			taskUnscheduled := t.Status == evergreen.TaskUndispatched && !t.Activated
+
+			if !taskUnscheduled {
+				allTasksBlockedOrUnscheduled = false
+			}
 			break
 		}
 		if !t.Blocked() {
-			allTasksBlocked = false
+			allTasksBlockedOrUnscheduled = false
 		}
 	}
 
-	if noStartedTasks || allTasksBlocked {
-		return evergreen.BuildCreated, allTasksBlocked
+	if noStartedTasks || allTasksBlockedOrUnscheduled {
+		return evergreen.BuildCreated, allTasksBlockedOrUnscheduled
 	}
 
 	// Check if tasks are started but not finished.
