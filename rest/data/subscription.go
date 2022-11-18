@@ -3,7 +3,6 @@ package data
 import (
 	"fmt"
 	"net/http"
-	"time"
 
 	"github.com/evergreen-ci/evergreen/model/event"
 	"github.com/evergreen-ci/evergreen/model/patch"
@@ -63,38 +62,6 @@ func SaveSubscriptions(owner string, subscriptions []restModel.APISubscription, 
 		}
 
 		dbSubscriptions = append(dbSubscriptions, dbSubscription)
-
-		if dbSubscription.ResourceType == event.ResourceTypeVersion && isEndTrigger(dbSubscription.Trigger) {
-			var versionId string
-			for _, selector := range dbSubscription.Selectors {
-				if selector.Type == event.SelectorID {
-					versionId = selector.Data
-				}
-			}
-			children, err := getVersionChildren(versionId)
-			if err != nil {
-				return gimlet.ErrorResponse{
-					StatusCode: http.StatusInternalServerError,
-					Message:    errors.Wrapf(err, "retrieving child versions for version '%s'", versionId).Error(),
-				}
-			}
-
-			for _, childPatchId := range children {
-				childDbSubscription := dbSubscription
-				childDbSubscription.LastUpdated = time.Now()
-				childDbSubscription.Filter.ID = childPatchId
-				var selectors []event.Selector
-				for _, selector := range dbSubscription.Selectors {
-					if selector.Type == event.SelectorID {
-						selector.Data = childPatchId
-					}
-					selectors = append(selectors, selector)
-				}
-				childDbSubscription.Selectors = selectors
-				dbSubscriptions = append(dbSubscriptions, childDbSubscription)
-			}
-		}
-
 	}
 
 	catcher := grip.NewSimpleCatcher()
