@@ -1182,9 +1182,6 @@ func updateVersionStatus(v *Version) (string, error) {
 
 	//add event if children are done
 	isDone, childrenStatus, parentPatch, err := v.GetFamilyInformation()
-	if isDone {
-		event.LogVersionChildrenCompletionEvent(v.Id)
-	}
 
 	if v.IsChild() {
 		if parentPatch.Status != evergreen.PatchFailed && childrenStatus == evergreen.PatchFailed {
@@ -1243,9 +1240,6 @@ func UpdatePatchStatus(p *patch.Patch, versionStatus, buildVariant string) error
 	//todo: we don't need this whole thing. Just don't log the outcome unless it's truly done
 	//add a completion event if children are done
 	isDone, childrenStatus, parentPatch, err := p.GetFamilyInformation()
-	if isDone {
-		event.LogPatchChildrenCompletionEvent(p.Id.Hex())
-	}
 
 	if p.IsChild() {
 		if parentPatch.Status != evergreen.PatchFailed && childrenStatus == evergreen.PatchFailed {
