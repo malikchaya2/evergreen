@@ -752,6 +752,53 @@ func (p *Patch) GetPatchIndex(parentPatch *Patch) (int, error) {
 	return -1, nil
 }
 
+func (p *Patch) GetFamilyInformation() (bool, string, *Patch, error) {
+	isDone := false
+
+	childrenOrSiblings, parentPatch, err := p.GetPatchFamily()
+	if err != nil {
+		return isDone, "", parentPatch, errors.Wrap(err, "getting child or sibling patches")
+	}
+
+	// make sure the parent is done, if not, wait for the parent
+	if p.IsChild() {
+		if !evergreen.IsFinishedPatchStatus(parentPatch.Status) {
+			return isDone, "", parentPatch, nil
+		}
+	}
+	childrenStatus, err := GetChildrenOrSiblingsReadiness(childrenOrSiblings)
+	if err != nil {
+		return isDone, childrenStatus, parentPatch, errors.Wrap(err, "getting child or sibling information")
+	}
+	if !evergreen.IsFinishedPatchStatus(childrenStatus) {
+		return isDone, childrenStatus, parentPatch, nil
+	} else {
+		isDone = true
+	}
+
+	return isDone, childrenStatus, parentPatch, err
+}
+
+func GetChildrenOrSiblingsReadiness(childrenOrSiblings []string) (string, error) {
+	childrenStatus := evergreen.PatchSucceeded
+	for _, childPatch := range childrenOrSiblings {
+		childPatchDoc, err := FindOneId(childPatch)
+		if err != nil {
+			return "", errors.Wrapf(err, "getting tasks for child patch '%s'", childPatch)
+		}
+		if childPatchDoc == nil {
+			return "", errors.Errorf("child patch '%s' not found", childPatch)
+		}
+		if childPatchDoc.Status == evergreen.PatchFailed {
+			childrenStatus = evergreen.PatchFailed
+		}
+		if !evergreen.IsFinishedPatchStatus(childPatchDoc.Status) {
+			return childPatchDoc.Status, nil
+		}
+	}
+	return childrenStatus, nil
+
+}
 func (p *Patch) GetPatchFamily() ([]string, *Patch, error) {
 	var childrenOrSiblings []string
 	var parentPatch *Patch

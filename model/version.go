@@ -185,6 +185,41 @@ func (v *Version) GetParentVersion() (*Version, error) {
 	return parentVersion, nil
 }
 
+func (v *Version) GetFamilyInformation() (bool, string, *patch.Patch, error) {
+	isDone := false
+	var p *patch.Patch
+	p, err := patch.FindOne(patch.ByVersion(v.Id))
+	if err != nil {
+		return isDone, "", nil, errors.Wrapf(err, "finding patch for version '%s'", v.Id)
+	}
+	if p == nil {
+		return isDone, "", nil, errors.Errorf("no patch found for version '%s'", v.Id)
+	}
+
+	childrenOrSiblings, parentPatch, err := p.GetPatchFamily()
+	if err != nil {
+		return isDone, "", parentPatch, errors.Wrap(err, "getting child or sibling patches")
+	}
+
+	// make sure the parent is done, if not, wait for the parent
+	if p.IsChild() {
+		if !evergreen.IsFinishedPatchStatus(parentPatch.Status) {
+			return isDone, "", parentPatch, nil
+		}
+	}
+	childrenStatus, err := patch.GetChildrenOrSiblingsReadiness(childrenOrSiblings)
+	if err != nil {
+		return isDone, childrenStatus, parentPatch, errors.Wrap(err, "getting child or sibling information")
+	}
+	if !evergreen.IsFinishedPatchStatus(childrenStatus) {
+		return isDone, childrenStatus, parentPatch, nil
+	} else {
+		isDone = true
+	}
+
+	return isDone, childrenStatus, parentPatch, err
+}
+
 func (v *Version) AddSatisfiedTrigger(definitionID string) error {
 	if v.SatisfiedTriggers == nil {
 		v.SatisfiedTriggers = []string{}

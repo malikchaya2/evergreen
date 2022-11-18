@@ -1180,7 +1180,23 @@ func updateVersionStatus(v *Version) (string, error) {
 		}
 	}
 
-	event.LogVersionStateChangeEvent(v.Id, versionStatus)
+	//add event if children are done
+	isDone, childrenStatus, parentPatch, err := v.GetFamilyInformation()
+	if isDone {
+		event.LogVersionChildrenCompletionEvent(v.Id)
+	}
+
+	if v.IsChild() {
+		if parentPatch.Status != evergreen.PatchFailed && childrenStatus == evergreen.PatchFailed {
+			// update version status based on family outcome
+			setParentStatus(parentPatch, childrenStatus)
+			versionStatus = childrenStatus
+		}
+	}
+
+	if !evergreen.IsFinishedPatchStatus(versionStatus) || isDone {
+		event.LogVersionStateChangeEvent(v.Id, versionStatus)
+	}
 
 	if evergreen.IsFinishedVersionStatus(versionStatus) {
 		if err = v.MarkFinished(versionStatus, time.Now()); err != nil {
@@ -1195,6 +1211,25 @@ func updateVersionStatus(v *Version) (string, error) {
 	return versionStatus, nil
 }
 
+func setParentStatus(parentPatch *patch.Patch, childrenStatus string) error {
+
+	parentVersion, err := VersionFindOneId(parentPatch.Id.Hex())
+	if err != nil {
+		return errors.Wrapf(err, "finding version by id %s", parentPatch.Id.Hex())
+	}
+	if parentVersion == nil {
+		return errors.Wrapf(err, "cannot find version with id %s", parentPatch.Id.Hex())
+	}
+
+	if err := parentPatch.UpdateStatus(childrenStatus); err != nil {
+		return errors.Wrapf(err, "updating patch '%s' with status '%s'", parentPatch.Id.Hex(), childrenStatus)
+	}
+	if err := parentVersion.UpdateStatus(childrenStatus); err != nil {
+		return errors.Wrapf(err, "updating version '%s' with status '%s'", parentVersion.Id, childrenStatus)
+	}
+	return nil
+}
+
 func UpdatePatchStatus(p *patch.Patch, versionStatus, buildVariant string) error {
 	patchStatus, err := evergreen.VersionStatusToPatchStatus(versionStatus)
 	if err != nil {
@@ -1205,7 +1240,28 @@ func UpdatePatchStatus(p *patch.Patch, versionStatus, buildVariant string) error
 		return nil
 	}
 
-	event.LogPatchStateChangeEvent(p.Version, patchStatus)
+	//todo: we don't need this whole thing. Just don't log the outcome unless it's truly done
+	//add a completion event if children are done
+	isDone, childrenStatus, parentPatch, err := p.GetFamilyInformation()
+	if isDone {
+		event.LogPatchChildrenCompletionEvent(p.Id.Hex())
+	}
+
+	if p.IsChild() {
+		if parentPatch.Status != evergreen.PatchFailed && childrenStatus == evergreen.PatchFailed {
+			// update version status based on family outcome
+			setParentStatus(parentPatch, childrenStatus)
+			patchStatus = childrenStatus
+		}
+
+	}
+
+	// only log a patchStateChange event if the whole patch (including the children) is done,
+	// or if the new status is not an outcome status
+	if !evergreen.IsFinishedPatchStatus(patchStatus) || isDone {
+		event.LogPatchStateChangeEvent(p.Version, patchStatus)
+	}
+
 	if evergreen.IsFinishedPatchStatus(patchStatus) {
 		if err = p.MarkFinished(patchStatus, time.Now()); err != nil {
 			return errors.Wrapf(err, "marking patch '%s' as finished with status '%s'", p.Id.Hex(), patchStatus)
