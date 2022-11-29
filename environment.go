@@ -724,7 +724,8 @@ func (e *envState) initSenders(ctx context.Context) error {
 			Channel:  "#",
 			Name:     "evergreen",
 			Username: "Evergreen",
-			IconURL:  fmt.Sprintf("%s/static/img/evergreen_green_150x150.png", e.settings.Ui.Url),
+			//todo: can this be removed?
+			IconURL: fmt.Sprintf("%s/static/img/evergreen_green_150x150.png", e.settings.Ui.Url),
 		}, slack.Token, levelInfo)
 		if err != nil {
 			return errors.Wrap(err, "setting up Slack logger")
@@ -745,11 +746,28 @@ func (e *envState) initSenders(ctx context.Context) error {
 	e.senders[SenderGeneric] = sender
 
 	catcher := grip.NewBasicCatcher()
+	grip.Info(message.Fields{
+		"sender":    sender,
+		"message":   "chayaMtesting 750",
+		"e.senders": e.senders,
+	})
+
 	for name, s := range e.senders {
 		catcher.Add(s.SetLevel(levelInfo))
 		tempName := name
 		catcher.Add(s.SetErrorHandler(func(err error, m message.Composer) {
 			if err == nil {
+				grip.Info(message.Fields{
+					"sender":              sender,
+					"message":             "chayaMtesting 750",
+					"e.senders":           e.senders,
+					"notification":        m.String(),
+					"message_type":        fmt.Sprintf("%T", m),
+					"notification_target": tempName.String(),
+					"event":               m,
+					"name":                name,
+					"s":                   s,
+				})
 				return
 			}
 			grip.Error(message.WrapError(err, message.Fields{
