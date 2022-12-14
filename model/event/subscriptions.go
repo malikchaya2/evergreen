@@ -790,8 +790,14 @@ func NewVersionGithubCheckOutcomeSubscription(id string, sub Subscriber) Subscri
 	return subscription
 }
 
-func NewExpiringPatchOutcomeSubscription(id string, sub Subscriber) Subscription {
+func NewExpiringChildPatchOutcomeSubscription(id string, sub Subscriber) Subscription {
 	subscription := NewSubscriptionByID(ResourceTypePatch, TriggerOutcome, id, sub)
+	subscription.LastUpdated = time.Now()
+	return subscription
+}
+
+func NewExpiringPatchOutcomeSubscription(id string, sub Subscriber) Subscription {
+	subscription := NewSubscriptionByID(ResourceTypePatch, TriggerFamilyOutcome, id, sub)
 	subscription.LastUpdated = time.Now()
 	return subscription
 }

@@ -385,12 +385,12 @@ func (j *patchIntentProcessor) finishPatch(ctx context.Context, patchDoc *patch.
 					ChildId:  childPatch,
 					Type:     event.SendChildPatchOutcome,
 				})
-				patchSub := event.NewExpiringPatchOutcomeSubscription(childPatch, childGhStatusSub)
+				patchSub := event.NewExpiringChildPatchOutcomeSubscription(childPatch, childGhStatusSub)
 				if err = patchSub.Upsert(); err != nil {
 					catcher.Wrap(err, "isnerting child patch subscription for GitHub PR")
 				}
 				// add subscription so that the parent can wait on the children
-				patchSub = event.NewExpiringPatchOutcomeSubscription(childPatch, waitOnChilSub)
+				patchSub = event.NewExpiringChildPatchOutcomeSubscription(childPatch, waitOnChilSub)
 				if err = patchSub.Upsert(); err != nil {
 					catcher.Wrap(err, "inserting patch subscription for GitHub PR")
 				}
