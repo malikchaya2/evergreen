@@ -963,6 +963,8 @@ func (h *startTaskHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	if len(updates.PatchNewStatus) != 0 {
+		// does this need to log for child patches as well? maybe that's why when a restarted task is done running, it doesn't notify
+		// I don't think so because the change would be to "started"
 		event.LogPatchStateChangeEvent(t.Version, updates.PatchNewStatus)
 	}
 	if len(updates.BuildNewStatus) != 0 {

@@ -368,6 +368,7 @@ func (j *patchIntentProcessor) finishPatch(ctx context.Context, patchDoc *patch.
 			catcher.Wrap(err, "inserting build subscription for GitHub PR")
 		}
 		if patchDoc.IsParent() {
+			// the subs are here
 			// add a subscription on each child patch to report it's status to github when it's done.
 			for _, childPatch := range patchDoc.Triggers.ChildPatches {
 				childGhStatusSub := event.NewGithubStatusAPISubscriber(event.GithubPullRequestSubscriber{
@@ -402,6 +403,7 @@ func (j *patchIntentProcessor) finishPatch(ctx context.Context, patchDoc *patch.
 		}))
 	}
 	event.LogPatchStateChangeEvent(patchDoc.Id.Hex(), patchDoc.Status)
+	// need here maybe?
 
 	if canFinalize && j.intent.ShouldFinalizePatch() {
 		if _, err = model.FinalizePatch(ctx, patchDoc, j.intent.RequesterIdentity(), githubOauthToken); err != nil {
@@ -430,6 +432,24 @@ func (j *patchIntentProcessor) finishPatch(ctx context.Context, patchDoc *patch.
 				"variant_tasks": patchDoc.VariantsTasks,
 				"alias":         patchDoc.Alias,
 			})
+		}
+	}
+
+	isDone, parentPatch, err := patchDoc.GetFamilyInformation()
+	if err != nil {
+		return errors.Wrapf(err, "getting family information for patch '%s'", p.Id.Hex())
+	}
+	if isDone {
+		// is there something wrong with collectivestatus?
+		// the main one is aborted. is that where it fails? no, mine is failed. it's always taking the child status
+		collectiveStatus, err := patchDoc.CollectiveStatus()
+		if err != nil {
+			return errors.Wrapf(err, "getting collective status for patch '%s'", patchDoc.Id.Hex())
+		}
+		if parentPatch != nil {
+			event.LogPatchChildrenCompletionEvent(parentPatch.Id.Hex(), collectiveStatus, parentPatch.Author)
+		} else {
+			event.LogPatchChildrenCompletionEvent(patchDoc.Id.Hex(), collectiveStatus, patchDoc.Author)
 		}
 	}
 
