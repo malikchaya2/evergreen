@@ -740,9 +740,36 @@ func (p *Patch) CollectiveStatus() (string, error) {
 			return "", errors.Errorf(fmt.Sprintf("parent patch '%s' does not exist", p.Triggers.ParentPatch))
 		}
 	}
+
+	grip.Error(message.Fields{
+		"message":     "chayaMtesting UpdatePatchStatus 745",
+		"parentPatch": parentPatch,
+		"patchId":     p.Id.Hex(),
+		"p.Status":    p.Status,
+		"p.isChild":   p.IsChild(),
+		"p.isParent":  p.IsParent(),
+	})
+
 	allStatuses := []string{parentPatch.Status}
+	grip.Error(message.Fields{
+		"message":      "chayaMtesting UpdatePatchStatus 755",
+		"parentPatch":  parentPatch,
+		"patchId":      p.Id.Hex(),
+		"p.Status":     p.Status,
+		"allStatuses":  allStatuses,
+		"childPatches": parentPatch.Triggers.ChildPatches,
+	})
 	for _, childPatchId := range parentPatch.Triggers.ChildPatches {
 		cp, err := FindOneId(childPatchId)
+		grip.Error(message.Fields{
+			"message":      "chayaMtesting UpdatePatchStatus 765",
+			"parentPatch":  parentPatch,
+			"patchId":      p.Id.Hex(),
+			"p.Status":     p.Status,
+			"allStatuses":  allStatuses,
+			"childPatches": parentPatch.Triggers.ChildPatches,
+			"cp":           cp,
+		})
 		if err != nil {
 			return "", errors.Wrapf(err, "getting child patch '%s' ", childPatchId)
 		}
@@ -751,7 +778,14 @@ func (p *Patch) CollectiveStatus() (string, error) {
 		}
 		allStatuses = append(allStatuses, cp.Status)
 	}
-
+	grip.Error(message.Fields{
+		"message":      "chayaMtesting UpdatePatchStatus 782",
+		"parentPatch":  parentPatch,
+		"patchId":      p.Id.Hex(),
+		"p.Status":     p.Status,
+		"childPatches": parentPatch.Triggers.ChildPatches,
+		"allStatuses":  allStatuses,
+	})
 	return GetCollectiveStatus(allStatuses), nil
 }
 
@@ -1128,6 +1162,10 @@ func (p PatchesByCreateTime) Swap(i, j int) {
 // GetCollectiveStatus answers the question of what the patch status should be
 // when the patch status and the status of it's children are different
 func GetCollectiveStatus(statuses []string) string {
+	grip.Error(message.Fields{
+		"message":  "chayaMtesting GetCollectiveStatus 1166",
+		"statuses": statuses,
+	})
 	hasCreated := false
 	hasFailure := false
 	hasSuccess := false
@@ -1147,6 +1185,15 @@ func GetCollectiveStatus(statuses []string) string {
 			hasAborted = true
 		}
 	}
+	grip.Error(message.Fields{
+		"message":    "chayaMtesting GetCollectiveStatus 1189",
+		"statuses":   statuses,
+		"hasCreated": hasCreated,
+		"hasFailure": hasFailure,
+		"hasSuccess": hasSuccess,
+		"hasAborted": hasAborted,
+		"!(hasCreated || hasFailure || hasSuccess || hasAborted)": !(hasCreated || hasFailure || hasSuccess || hasAborted),
+	})
 
 	if !(hasCreated || hasFailure || hasSuccess || hasAborted) {
 		grip.Critical(message.Fields{

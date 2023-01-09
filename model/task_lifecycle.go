@@ -1353,6 +1353,15 @@ func UpdatePatchStatus(p *patch.Patch, versionStatus, buildVariant string) error
 	}
 	if isDone {
 		collectiveStatus, err := p.CollectiveStatus()
+		grip.Error(message.Fields{
+			"message":          "chayaMtesting UpdatePatchStatus 1357",
+			"collectiveStatus": collectiveStatus,
+			"err":              err,
+			"patchId":          p.Id.Hex(),
+			"p.Status":         p.Status,
+			"p.isChild":        p.IsChild(),
+			"p.isParent":       p.IsParent(),
+		})
 		if err != nil {
 			return errors.Wrapf(err, "getting collective status for patch '%s'", p.Id.Hex())
 		}
