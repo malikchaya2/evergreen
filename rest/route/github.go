@@ -685,22 +685,29 @@ func (gh *githubHookApi) checkPRApprovals(ctx context.Context, settings *evergre
 		return errors.Wrap(err, "getting GitHub OAuth token from settings")
 	}
 
-	reviews, err := thirdparty.GetGithubPullRequestReviews(ctx, githubToken, userRepo.Owner, userRepo.Repo, prNum)
-	if err != nil {
-		return errors.Wrap(err, "getting GitHub PR reviews")
-	}
-
 	var numApprovals int
-	for _, r := range reviews {
-		if r.GetState() == githubReviewApproved {
-			numApprovals += 1
+	reviewsPage := 0
+	var reviews []*github.PullRequestReview
+
+	for numApprovals < requiredApprovalCount {
+		reviews, reviewsPage, err = thirdparty.GetGithubPullRequestReviews(
+			ctx, githubToken, userRepo.Owner, userRepo.Repo, prNum, reviewsPage,
+		)
+		if err != nil {
+			return errors.Wrap(err, "getting GitHub PR reviews")
+		}
+		for _, r := range reviews {
+			if r.GetState() == githubReviewApproved {
+				numApprovals += 1
+			}
+			if numApprovals >= requiredApprovalCount {
+				break
+			}
+		}
+		if reviewsPage == 0 {
+			break
 		}
 	}
-
-	if numApprovals < requiredApprovalCount {
-		return errors.Errorf("PR %d does not have enough approvals. %d approval(s) required", prNum, requiredApprovalCount)
-	}
-	return nil
 }
 
 // Because the PR isn't necessarily on a commit queue, we only error if item is on the queue and can't be removed correctly
