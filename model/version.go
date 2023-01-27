@@ -740,7 +740,7 @@ type GroupedBuildVariant struct {
 }
 
 // Takes a version id and some filter criteria and returns the matching associated tasks grouped together by their build variant.
-func generateBuildVariants(versionId string, buildVariantOpts BuildVariantOptions, requester string) ([]*GroupedBuildVariant, error) {
+func GenerateBuildVariants(versionId string, buildVariantOpts BuildVariantOptions, requester string) ([]*GroupedBuildVariant, error) {
 	var variantDisplayName = map[string]string{}
 	var tasksByVariant = map[string][]*model.APITask{}
 	defaultSort := []task.TasksSortOrder{

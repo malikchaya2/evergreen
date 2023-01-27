@@ -16,6 +16,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/manifest"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/version"
 	"github.com/evergreen-ci/evergreen/rest/data"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/gimlet"
@@ -57,7 +58,7 @@ func (r *versionResolver) BaseVersion(ctx context.Context, obj *restModel.APIVer
 }
 
 // BuildVariants is the resolver for the buildVariants field.
-func (r *versionResolver) BuildVariants(ctx context.Context, obj *restModel.APIVersion, options BuildVariantOptions) ([]*GroupedBuildVariant, error) {
+func (r *versionResolver) BuildVariants(ctx context.Context, obj *restModel.APIVersion, options version.BuildVariantOptions) ([]*GroupedBuildVariant, error) {
 	// If activated is nil in the db we should resolve it and cache it for subsequent queries. There is a very low likely hood of this field being hit
 	if obj.Activated == nil {
 		version, err := model.VersionFindOne(model.VersionById(*obj.Id))
@@ -73,7 +74,7 @@ func (r *versionResolver) BuildVariants(ctx context.Context, obj *restModel.APIV
 	if obj.IsPatchRequester() && !utility.FromBoolPtr(obj.Activated) {
 		return nil, nil
 	}
-	groupedBuildVariants, err := generateBuildVariants(utility.FromStringPtr(obj.Id), options, utility.FromStringPtr(obj.Requester))
+	groupedBuildVariants, err := model.GenerateBuildVariants(utility.FromStringPtr(obj.Id), options, utility.FromStringPtr(obj.Requester))
 	if err != nil {
 		return nil, InternalServerError.Send(ctx, fmt.Sprintf("Error generating build variants for version %s : %s", *obj.Id, err.Error()))
 	}
@@ -81,7 +82,7 @@ func (r *versionResolver) BuildVariants(ctx context.Context, obj *restModel.APIV
 }
 
 // BuildVariantStats is the resolver for the buildVariantStats field.
-func (r *versionResolver) BuildVariantStats(ctx context.Context, obj *restModel.APIVersion, options BuildVariantOptions) ([]*task.GroupedTaskStatusCount, error) {
+func (r *versionResolver) BuildVariantStats(ctx context.Context, obj *restModel.APIVersion, options version.BuildVariantOptions) ([]*task.GroupedTaskStatusCount, error) {
 	opts := task.GetTasksByVersionOptions{
 		TaskNames:                      options.Tasks,
 		Variants:                       options.Variants,

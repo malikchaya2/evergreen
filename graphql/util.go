@@ -22,6 +22,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/model/user"
+	"github.com/evergreen-ci/evergreen/model/version"
 	"github.com/evergreen-ci/evergreen/rest/data"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/thirdparty"
@@ -268,84 +269,6 @@ func getAPITaskFromTask(ctx context.Context, url string, task task.Task) (*restM
 		return nil, InternalServerError.Send(ctx, fmt.Sprintf("error building apiTask from task %s: %s", task.Id, err.Error()))
 	}
 	return &apiTask, nil
-}
-
-// Takes a version id and some filter criteria and returns the matching associated tasks grouped together by their build variant.
-func generateBuildVariants(versionId string, buildVariantOpts BuildVariantOptions, requester string) ([]*GroupedBuildVariant, error) {
-	var variantDisplayName = map[string]string{}
-	var tasksByVariant = map[string][]*restModel.APITask{}
-	defaultSort := []task.TasksSortOrder{
-		{Key: task.DisplayNameKey, Order: 1},
-	}
-	if buildVariantOpts.IncludeBaseTasks == nil {
-		buildVariantOpts.IncludeBaseTasks = utility.ToBoolPtr(true)
-	}
-
-	opts := task.GetTasksByVersionOptions{
-		Statuses:                       evergreen.GetValidTaskStatusesFilter(buildVariantOpts.Statuses),
-		Variants:                       buildVariantOpts.Variants,
-		TaskNames:                      buildVariantOpts.Tasks,
-		Sorts:                          defaultSort,
-		IncludeBaseTasks:               utility.FromBoolPtr(buildVariantOpts.IncludeBaseTasks),
-		IncludeBuildVariantDisplayName: true,
-		// Do not fetch inactive tasks for patches. This is because the UI does not display inactive tasks for patches.
-		IncludeNeverActivatedTasks: !evergreen.IsPatchRequester(requester),
-	}
-
-	start := time.Now()
-	tasks, _, err := task.GetTasksByVersion(versionId, opts)
-	if err != nil {
-		return nil, errors.Wrapf(err, fmt.Sprintf("Error getting tasks for patch `%s`", versionId))
-	}
-	timeToFindTasks := time.Since(start)
-	buildTaskStartTime := time.Now()
-	for _, t := range tasks {
-		apiTask := restModel.APITask{}
-		err := apiTask.BuildFromService(&t, nil)
-		if err != nil {
-			return nil, errors.Wrapf(err, fmt.Sprintf("Error building apiTask from task : %s", t.Id))
-		}
-		variantDisplayName[t.BuildVariant] = t.BuildVariantDisplayName
-		tasksByVariant[t.BuildVariant] = append(tasksByVariant[t.BuildVariant], &apiTask)
-
-	}
-
-	timeToBuildTasks := time.Since(buildTaskStartTime)
-	groupTasksStartTime := time.Now()
-
-	result := []*GroupedBuildVariant{}
-	for variant, tasks := range tasksByVariant {
-		pbv := GroupedBuildVariant{
-			Variant:     variant,
-			DisplayName: variantDisplayName[variant],
-			Tasks:       tasks,
-		}
-		result = append(result, &pbv)
-	}
-
-	timeToGroupTasks := time.Since(groupTasksStartTime)
-
-	sortTasksStartTime := time.Now()
-	// sort variants by name
-	sort.SliceStable(result, func(i, j int) bool {
-		return result[i].DisplayName < result[j].DisplayName
-	})
-
-	timeToSortTasks := time.Since(sortTasksStartTime)
-
-	totalTime := time.Since(start)
-	grip.InfoWhen(totalTime > time.Second*2, message.Fields{
-		"Ticket":             "EVG-14828",
-		"timeToFindTasksMS":  timeToFindTasks.Milliseconds(),
-		"timeToBuildTasksMS": timeToBuildTasks.Milliseconds(),
-		"timeToGroupTasksMS": timeToGroupTasks.Milliseconds(),
-		"timeToSortTasksMS":  timeToSortTasks.Milliseconds(),
-		"totalTimeMS":        totalTime.Milliseconds(),
-		"versionId":          versionId,
-		"taskCount":          len(tasks),
-		"buildVariantCount":  len(result),
-	})
-	return result, nil
 }
 
 // getCedarFailedTestResultsSample returns a sample of failed test results for the given tasks that match the supplied testFilters
@@ -646,7 +569,7 @@ func setVersionActivationStatus(version *model.Version) error {
 	return errors.Wrapf(version.SetActivated(task.AnyActiveTasks(tasks)), "Updating version activated status for `%s`", version.Id)
 }
 
-func isPopulated(buildVariantOptions *BuildVariantOptions) bool {
+func isPopulated(buildVariantOptions *version.BuildVariantOptions) bool {
 	if buildVariantOptions == nil {
 		return false
 	}

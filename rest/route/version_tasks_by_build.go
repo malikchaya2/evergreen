@@ -2,12 +2,9 @@ package route
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 
 	"github.com/evergreen-ci/evergreen/model"
-	"github.com/evergreen-ci/evergreen/model/annotations"
-	"github.com/evergreen-ci/evergreen/model/task"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
@@ -45,45 +42,25 @@ func (h *makeVersionTasksByBuildHandler) Parse(ctx context.Context, r *http.Requ
 }
 
 func (h *makeVersionTasksByBuildHandler) Run(ctx context.Context) gimlet.Responder {
-	//put this in a for loop
-	taskIds, err := task.FindAllTaskIDsFromBuild(h.versionId)
+	buildVariants, err := getVersionBuildsAndTasks(h.versionId)
 	if err != nil {
-		return gimlet.NewJSONInternalErrorResponse(errors.Wrapf(err, "finding task IDs for version '%s'", h.versionId))
+		return gimlet.MakeJSONErrorResponder(errors.Wrap(err, "error getting version builds and tasks"))
 	}
-	return getVersionBuildsAndTasks(taskIds, h.fetchAllExecutions)
+	return gimlet.NewJSONResponse(buildVariants)
 }
 
-func getVersionBuildsAndTasks(id string) gimlet.Responder {
+func getVersionBuildsAndTasks(id string) ([]*model.GroupedBuildVariant, error) {
 
 	version, err := model.VersionFindOne(model.VersionById(id))
 	if err != nil {
-		return gimlet.NewJSONInternalErrorResponse(errors.Wrap(err, "finding version"))
+		return nil, errors.Wrap(err, "finding version")
 	}
 	apiVersion := restModel.APIVersion{}
 	apiVersion.BuildFromService(*version)
 
 	if apiVersion.IsPatchRequester() && !utility.FromBoolPtr(apiVersion.Activated) {
-		return gimlet.NewJSONResponse("")
+		return nil, nil
 	}
-	groupedBuildVariants, err := generateBuildVariants(utility.FromStringPtr(obj.Id), options, utility.FromStringPtr(obj.Requester))
-	if err != nil {
-		return nil, InternalServerError.Send(ctx, fmt.Sprintf("Error generating build variants for version %s : %s", *obj.Id, err.Error()))
-	}
-	return groupedBuildVariants, nil
+	return model.GenerateBuildVariants(id, options, utility.FromStringPtr(&version.Requester))
 
-	allAnnotations, err := annotations.FindByTaskIds(taskIds)
-	if err != nil {
-		return gimlet.NewJSONInternalErrorResponse(errors.Wrap(err, "finding task annotations"))
-	}
-	annotationsToReturn := allAnnotations
-	if !allExecutions {
-		annotationsToReturn = annotations.GetLatestExecutions(allAnnotations)
-	}
-	var res []restModel.APITaskAnnotation
-	for _, a := range annotationsToReturn {
-		apiAnnotation := restModel.APITaskAnnotationBuildFromService(a)
-		res = append(res, *apiAnnotation)
-	}
-
-	return gimlet.NewJSONResponse(res)
 }

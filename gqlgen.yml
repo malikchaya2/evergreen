@@ -25,7 +25,7 @@ models:
   BuildBaronSettingsInput:
     model: github.com/evergreen-ci/evergreen/rest/model.APIBuildBaronSettings
   BuildVariantOptions:
-    model: github.com/evergreen-ci/evergreen/model/task.BuildVariantOptions
+    model: github.com/evergreen-c/evergreen/model.BuildVariantOptions
   BuildVariantTuple:
     model: github.com/evergreen-ci/evergreen/model/task.BuildVariantTuple
   ChildPatch:
@@ -73,7 +73,7 @@ models:
   GroupedTaskStatusCount:
     model: github.com/evergreen-ci/evergreen/model/task.GroupedTaskStatusCount
   GroupedBuildVariant:
-    model: github.com/evergreen-ci/evergreen/model/version.GroupedBuildVariant
+    model: github.com/evergreen-ci/evergreen/model.GroupedBuildVariant
   Host:
     model: github.com/evergreen-ci/evergreen/rest/model.APIHost
   HostEventLogData:

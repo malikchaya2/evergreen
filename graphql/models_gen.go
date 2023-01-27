@@ -32,15 +32,6 @@ type BuildBaron struct {
 	SearchReturnInfo        *thirdparty.SearchReturnInfo `json:"searchReturnInfo"`
 }
 
-// BuildVariantOptions is an input to the mainlineCommits query.
-// It stores values for statuses, tasks, and variants which are used to filter for matching versions.
-type BuildVariantOptions struct {
-	IncludeBaseTasks *bool    `json:"includeBaseTasks"`
-	Statuses         []string `json:"statuses"`
-	Tasks            []string `json:"tasks"`
-	Variants         []string `json:"variants"`
-}
-
 type Dependency struct {
 	BuildVariant   string         `json:"buildVariant"`
 	MetStatus      MetStatus      `json:"metStatus"`
@@ -68,12 +59,6 @@ type EditSpawnHostInput struct {
 	SavePublicKey       *bool           `json:"savePublicKey"`
 	ServicePassword     *string         `json:"servicePassword"`
 	Volume              *string         `json:"volume"`
-}
-
-type GroupedBuildVariant struct {
-	DisplayName string           `json:"displayName"`
-	Tasks       []*model.APITask `json:"tasks"`
-	Variant     string           `json:"variant"`
 }
 
 type GroupedFiles struct {
