@@ -1067,7 +1067,7 @@ func (r *queryResolver) MainlineCommits(ctx context.Context, options MainlineCom
 			opts := task.HasMatchingTasksOptions{
 				TaskNames:                  buildVariantOptions.Tasks,
 				Variants:                   buildVariantOptions.Variants,
-				Statuses:                   getValidTaskStatusesFilter(buildVariantOptions.Statuses),
+				Statuses:                   evergreen.GetValidTaskStatusesFilter(buildVariantOptions.Statuses),
 				IncludeNeverActivatedTasks: true,
 			}
 			hasTasks, err := task.HasMatchingTasks(v.Id, opts)

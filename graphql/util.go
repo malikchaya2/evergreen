@@ -282,7 +282,7 @@ func generateBuildVariants(versionId string, buildVariantOpts BuildVariantOption
 	}
 
 	opts := task.GetTasksByVersionOptions{
-		Statuses:                       getValidTaskStatusesFilter(buildVariantOpts.Statuses),
+		Statuses:                       evergreen.GetValidTaskStatusesFilter(buildVariantOpts.Statuses),
 		Variants:                       buildVariantOpts.Variants,
 		TaskNames:                      buildVariantOpts.Tasks,
 		Sorts:                          defaultSort,
@@ -787,17 +787,6 @@ func hasProjectPermission(ctx context.Context, resource string, next graphql.Res
 		return next(ctx)
 	}
 	return nil, Forbidden.Send(ctx, fmt.Sprintf("user %s does not have permission to access settings for the project %s", user.Username(), resource))
-}
-
-// getValidTaskStatusesFilter returns a slice of task statuses that are valid and are searchable.
-// It returns an empty array if all is included as one of the entries
-func getValidTaskStatusesFilter(statuses []string) []string {
-	filteredStatuses := []string{}
-	if utility.StringSliceContains(statuses, evergreen.TaskAll) {
-		return filteredStatuses
-	}
-	filteredStatuses = utility.StringSliceIntersection(evergreen.TaskStatuses, statuses)
-	return filteredStatuses
 }
 
 func getCollectiveStatusArray(v restModel.APIVersion) ([]string, error) {

@@ -298,8 +298,8 @@ func (r *versionResolver) Tasks(ctx context.Context, obj *restModel.APIVersion, 
 	}
 
 	opts := task.GetTasksByVersionOptions{
-		Statuses:         getValidTaskStatusesFilter(options.Statuses),
-		BaseStatuses:     getValidTaskStatusesFilter(options.BaseStatuses),
+		Statuses:         evergreen.GetValidTaskStatusesFilter(options.Statuses),
+		BaseStatuses:     evergreen.GetValidTaskStatusesFilter(options.BaseStatuses),
 		Variants:         []string{variantParam},
 		TaskNames:        []string{taskNameParam},
 		Page:             pageParam,
@@ -357,7 +357,7 @@ func (r *versionResolver) TaskStatusStats(ctx context.Context, obj *restModel.AP
 		IncludeExecutionTasks: false,
 		TaskNames:             options.Tasks,
 		Variants:              options.Variants,
-		Statuses:              getValidTaskStatusesFilter(options.Statuses),
+		Statuses:              evergreen.GetValidTaskStatusesFilter(options.Statuses),
 		// If the version is a patch, we don't want to include its never activated tasks.
 		IncludeNeverActivatedTasks: !obj.IsPatchRequester(),
 	}

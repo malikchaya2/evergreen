@@ -3,6 +3,7 @@ package model
 import (
 	"context"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
@@ -14,10 +15,13 @@ import (
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/model/user"
+	"github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/utility"
 	"github.com/google/go-github/v34/github"
 	"github.com/mongodb/anser/bsonutil"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -721,6 +725,96 @@ func CreateManifest(v *Version, proj *Project, projectRef *ProjectRef, settings 
 	}
 	_, err = newManifest.TryInsert()
 	return newManifest, errors.Wrap(err, "inserting manifest")
+}
+
+type BuildVariantOptions struct {
+	IncludeBaseTasks *bool    `json:"includeBaseTasks"`
+	Statuses         []string `json:"statuses"`
+	Tasks            []string `json:"tasks"`
+	Variants         []string `json:"variants"`
+}
+type GroupedBuildVariant struct {
+	DisplayName string           `json:"displayName"`
+	Tasks       []*model.APITask `json:"tasks"`
+	Variant     string           `json:"variant"`
+}
+
+// Takes a version id and some filter criteria and returns the matching associated tasks grouped together by their build variant.
+func generateBuildVariants(versionId string, buildVariantOpts BuildVariantOptions, requester string) ([]*GroupedBuildVariant, error) {
+	var variantDisplayName = map[string]string{}
+	var tasksByVariant = map[string][]*model.APITask{}
+	defaultSort := []task.TasksSortOrder{
+		{Key: task.DisplayNameKey, Order: 1},
+	}
+	if buildVariantOpts.IncludeBaseTasks == nil {
+		buildVariantOpts.IncludeBaseTasks = utility.ToBoolPtr(true)
+	}
+
+	opts := task.GetTasksByVersionOptions{
+		Statuses:                       evergreen.GetValidTaskStatusesFilter(buildVariantOpts.Statuses),
+		Variants:                       buildVariantOpts.Variants,
+		TaskNames:                      buildVariantOpts.Tasks,
+		Sorts:                          defaultSort,
+		IncludeBaseTasks:               utility.FromBoolPtr(buildVariantOpts.IncludeBaseTasks),
+		IncludeBuildVariantDisplayName: true,
+		// Do not fetch inactive tasks for patches. This is because the UI does not display inactive tasks for patches.
+		IncludeNeverActivatedTasks: !evergreen.IsPatchRequester(requester),
+	}
+
+	start := time.Now()
+	tasks, _, err := task.GetTasksByVersion(versionId, opts)
+	if err != nil {
+		return nil, errors.Wrapf(err, fmt.Sprintf("Error getting tasks for patch `%s`", versionId))
+	}
+	timeToFindTasks := time.Since(start)
+	buildTaskStartTime := time.Now()
+	for _, t := range tasks {
+		apiTask := model.APITask{}
+		err := apiTask.BuildFromService(&t, nil)
+		if err != nil {
+			return nil, errors.Wrapf(err, fmt.Sprintf("Error building apiTask from task : %s", t.Id))
+		}
+		variantDisplayName[t.BuildVariant] = t.BuildVariantDisplayName
+		tasksByVariant[t.BuildVariant] = append(tasksByVariant[t.BuildVariant], &apiTask)
+
+	}
+
+	timeToBuildTasks := time.Since(buildTaskStartTime)
+	groupTasksStartTime := time.Now()
+
+	result := []*GroupedBuildVariant{}
+	for variant, tasks := range tasksByVariant {
+		pbv := GroupedBuildVariant{
+			Variant:     variant,
+			DisplayName: variantDisplayName[variant],
+			Tasks:       tasks,
+		}
+		result = append(result, &pbv)
+	}
+
+	timeToGroupTasks := time.Since(groupTasksStartTime)
+
+	sortTasksStartTime := time.Now()
+	// sort variants by name
+	sort.SliceStable(result, func(i, j int) bool {
+		return result[i].DisplayName < result[j].DisplayName
+	})
+
+	timeToSortTasks := time.Since(sortTasksStartTime)
+
+	totalTime := time.Since(start)
+	grip.InfoWhen(totalTime > time.Second*2, message.Fields{
+		"Ticket":             "EVG-14828",
+		"timeToFindTasksMS":  timeToFindTasks.Milliseconds(),
+		"timeToBuildTasksMS": timeToBuildTasks.Milliseconds(),
+		"timeToGroupTasksMS": timeToGroupTasks.Milliseconds(),
+		"timeToSortTasksMS":  timeToSortTasks.Milliseconds(),
+		"totalTimeMS":        totalTime.Milliseconds(),
+		"versionId":          versionId,
+		"taskCount":          len(tasks),
+		"buildVariantCount":  len(result),
+	})
+	return result, nil
 }
 
 type VersionsByCreateTime []Version

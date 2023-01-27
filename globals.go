@@ -415,6 +415,17 @@ func PatchStatusToVersionStatus(patchStatus string) (string, error) {
 	}
 }
 
+// getValidTaskStatusesFilter returns a slice of task statuses that are valid and are searchable.
+// It returns an empty array if all is included as one of the entries
+func GetValidTaskStatusesFilter(statuses []string) []string {
+	filteredStatuses := []string{}
+	if utility.StringSliceContains(statuses, TaskAll) {
+		return filteredStatuses
+	}
+	filteredStatuses = utility.StringSliceIntersection(TaskStatuses, statuses)
+	return filteredStatuses
+}
+
 type ModificationAction string
 
 const (
