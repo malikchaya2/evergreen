@@ -581,9 +581,10 @@ func (c *baseCommunicator) GetPullRequestInfo(ctx context.Context, taskData Task
 	info.setTaskPathSuffix("pull_request")
 
 	body := apimodels.CheckMergeRequest{
-		PRNum: prNum,
-		Owner: owner,
-		Repo:  repo,
+		PRNum:   prNum,
+		Owner:   owner,
+		Repo:    repo,
+		Verbose: true,
 	}
 	resp, err := c.retryRequest(ctx, info, &body)
 	if err != nil {
