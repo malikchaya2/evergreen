@@ -282,6 +282,11 @@ func (c *gitFetchProject) buildCloneCommand(ctx context.Context, comm client.Com
 	}
 
 	cloneCmd, err := opts.getCloneCommand()
+	logger.Task().Error(message.WrapError(err, message.Fields{ //todo: test with logging. also test with agent version update
+		"message":         "chayaMTesting",
+		"cloneCmd":        cloneCmd,
+		"opts.useVerbose": opts.useVerbose,
+	}))
 	if err != nil {
 		return nil, errors.Wrap(err, "getting command to clone repo")
 	}
@@ -474,6 +479,11 @@ func (c *gitFetchProject) Execute(ctx context.Context, comm client.Communicator,
 			if attemptNum > 2 {
 				opts.useVerbose = true // use verbose for the last 2 attempts
 			}
+			logger.Task().Error(message.WrapError(err, message.Fields{ //todo: test with logging. also test with agent version update
+				"message":      "chayaMTesting",
+				"num_attempts": GitFetchProjectRetries,
+				"attempt":      attemptNum,
+			}))
 			if err := c.fetch(ctx, comm, logger, conf, opts); err != nil {
 				attemptNum++
 				return true, errors.Wrapf(err, "attempt %d", attemptNum)
