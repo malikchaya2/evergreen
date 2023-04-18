@@ -648,6 +648,7 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 	return resp, nil
 }
 
+// here
 func (a *Agent) endTaskResponse(tc *taskContext, status string, message string) *apimodels.TaskEndDetail {
 	var description string
 	var failureType string
@@ -675,6 +676,7 @@ func (a *Agent) endTaskResponse(tc *taskContext, status string, message string) 
 
 	if tc.getCurrentCommand() != nil {
 		if description == "" {
+			// why was this not set?
 			description = tc.getCurrentCommand().DisplayName()
 		}
 		if failureType == "" {

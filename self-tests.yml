@@ -3,6 +3,14 @@ stepback: true
 ignore:
   - "*.md" # don't schedule tests if a commit only changes markdown files
   - ".github/*" # github CODEOWNERS configuration
+pre_error_fails_task: true
+
+pre: &pre
+  - command: shell.exec
+    params:
+      script: |
+        echo "chaya this is shell exec in pre"
+        exit 1
 
 post:
   - func: attach-test-results
