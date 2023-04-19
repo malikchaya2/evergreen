@@ -592,6 +592,7 @@ func (a *Agent) runTaskTimeoutCommands(ctx context.Context, tc *taskContext) {
 	}
 }
 
+// here
 // finishTask sends the returned EndTaskResponse and error
 func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, message string) (*apimodels.EndTaskResponse, error) {
 	detail := a.endTaskResponse(tc, status, message)
@@ -652,6 +653,7 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 func (a *Agent) endTaskResponse(tc *taskContext, status string, message string) *apimodels.TaskEndDetail {
 	var description string
 	var failureType string
+	tc.logger.Task().Warningf("chaya in endTaskResponse")
 	if a.endTaskResp != nil { // if the user indicated a task response, use this instead
 		tc.logger.Task().Infof("Task status set with HTTP endpoint.")
 		if !evergreen.IsValidTaskEndStatus(a.endTaskResp.Status) {
@@ -675,6 +677,7 @@ func (a *Agent) endTaskResponse(tc *taskContext, status string, message string) 
 	}
 
 	if tc.getCurrentCommand() != nil {
+		tc.logger.Task().Errorf("chaya in endTaskResponse. description: '%s'", description)
 		if description == "" {
 			// why was this not set?
 			description = tc.getCurrentCommand().DisplayName()
@@ -683,6 +686,7 @@ func (a *Agent) endTaskResponse(tc *taskContext, status string, message string) 
 			failureType = tc.getCurrentCommand().Type()
 		}
 	}
+	tc.logger.Task().Errorf("chaya in endTaskResponse. description: '%s'", description)
 	detail := &apimodels.TaskEndDetail{
 		Description:     description,
 		Type:            failureType,

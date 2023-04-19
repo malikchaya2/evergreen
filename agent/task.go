@@ -176,6 +176,7 @@ func (a *Agent) setupSystemMetricsCollector(ctx context.Context, tc *taskContext
 }
 
 func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
+	// here
 	tc.logger.Task().Info("Running pre-task commands.")
 	opts := runCommandsOptions{}
 
@@ -223,6 +224,8 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 		msg := fmt.Sprintf("Running pre-task commands failed: %s", err)
 		tc.logger.Task().Error(msg)
 		if opts.failPreAndPost {
+			//set it here
+			// finishTask()
 			return errors.New(msg)
 		}
 	}
