@@ -169,6 +169,7 @@ func getCommandName(commandInfo model.PluginCommandConf, cmd command.Command) st
 		commandName = fmt.Sprintf(`'%s' (%s)`, commandInfo.DisplayName, commandName)
 	}
 	if commandInfo.Function != "" {
+		// here. this is set to the display name somewhere
 		commandName = fmt.Sprintf(`%s in function '%s'`, commandName, commandInfo.Function)
 	}
 

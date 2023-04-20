@@ -653,7 +653,6 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 func (a *Agent) endTaskResponse(tc *taskContext, status string, message string) *apimodels.TaskEndDetail {
 	var description string
 	var failureType string
-	tc.logger.Task().Warningf("chaya in endTaskResponse")
 	if a.endTaskResp != nil { // if the user indicated a task response, use this instead
 		tc.logger.Task().Infof("Task status set with HTTP endpoint.")
 		if !evergreen.IsValidTaskEndStatus(a.endTaskResp.Status) {
@@ -677,16 +676,21 @@ func (a *Agent) endTaskResponse(tc *taskContext, status string, message string) 
 	}
 
 	if tc.getCurrentCommand() != nil {
-		tc.logger.Task().Errorf("chaya in endTaskResponse. description: '%s'", description)
+		tc.logger.Task().Warningf("chayas in endTaskResponse. description: '%s'", description)
 		if description == "" {
 			// why was this not set?
+			tc.logger.Task().Warning("chayaas in if")
+			tc.logger.Task().Warningf("chayaa in if. Display Name: '%s'", tc.getCurrentCommand().DisplayName())
+			tc.logger.Task().Warningf("chayaa in if. Name: '%s'", tc.getCurrentCommand().Name())
 			description = tc.getCurrentCommand().DisplayName()
+
+			tc.logger.Task().Warningf("chaya in if. description after setting it: '%s'", description)
 		}
 		if failureType == "" {
 			failureType = tc.getCurrentCommand().Type()
 		}
 	}
-	tc.logger.Task().Errorf("chaya in endTaskResponse. description: '%s'", description)
+	tc.logger.Task().Warningf("chaya in endTaskResponse. description: '%s'", description)
 	detail := &apimodels.TaskEndDetail{
 		Description:     description,
 		Type:            failureType,

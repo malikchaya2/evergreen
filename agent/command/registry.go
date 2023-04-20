@@ -140,31 +140,24 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 	)
 	catcher := grip.NewBasicCatcher()
 
+	if project.Pre != nil {
+		parsedCommands := ParsePreOrPost(project.Pre.List(), commandInfo, project, "pre")
+		parsed = append(parsed, parsedCommands...)
+	}
+	if project.Post != nil {
+		parsedCommands := ParsePreOrPost(project.Post.List(), commandInfo, project, "post")
+		parsed = append(parsed, parsedCommands...)
+	}
+
 	if name := commandInfo.Function; name != "" {
 		cmds, ok := project.Functions[name]
 		if !ok {
 			catcher.Errorf("function '%s' not found in project functions", name)
 		} else if cmds != nil {
-			for i, c := range cmds.List() {
-				if c.Function != "" {
-					catcher.Errorf("cannot reference a function ('%s') within another function ('%s')", c.Function, name)
-					continue
-				}
-
-				// if no command specific type, use the function's command type
-				if c.Type == "" {
-					c.Type = commandInfo.Type
-				}
-
-				if c.DisplayName == "" {
-					c.DisplayName = fmt.Sprintf(`'%v' in "%v" (#%d)`, c.Command, name, i+1)
-				}
-
-				if c.TimeoutSecs == 0 {
-					c.TimeoutSecs = commandInfo.TimeoutSecs
-				}
-
-				parsed = append(parsed, c)
+			parsedCommands, err := parseFunctionCommands(cmds.List(), commandInfo, name, "")
+			parsed = append(parsed, parsedCommands...)
+			if err != nil {
+				catcher.Add(err)
 			}
 		}
 	} else {
@@ -186,7 +179,11 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 			continue
 		}
 		cmd.SetType(c.GetType(project))
-		cmd.SetDisplayName(c.DisplayName)
+		displayName := cmd.Name()
+		if c.DisplayName != "" {
+			displayName = c.DisplayName
+		}
+		cmd.SetDisplayName(displayName)
 		cmd.SetIdleTimeout(time.Duration(c.TimeoutSecs) * time.Second)
 
 		out = append(out, cmd)
@@ -197,4 +194,67 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 	}
 
 	return out, nil
+}
+
+func parseFunctionCommands(cmds []model.PluginCommandConf, commandInfo model.PluginCommandConf, name string, block string) ([]model.PluginCommandConf, error) {
+	var parsed []model.PluginCommandConf
+	catcher := grip.NewBasicCatcher()
+
+	for i, c := range cmds {
+		if c.Function != "" {
+			catcher.Errorf("cannot reference a function ('%s') within another function ('%s')", c.Function, name)
+			continue
+		}
+
+		// if no command specific type, use the function's command type
+		if c.Type == "" {
+			c.Type = commandInfo.Type
+		}
+
+		if c.DisplayName == "" {
+			if block != "" {
+				block = fmt.Sprintf(`in "%v"`, block)
+			}
+			c.DisplayName = fmt.Sprintf(`'%v' in "%v" %v (#%d)`, c.Command, name, block, i+1)
+		}
+
+		if c.TimeoutSecs == 0 {
+			c.TimeoutSecs = commandInfo.TimeoutSecs
+		}
+
+		parsed = append(parsed, c)
+	}
+	if catcher.HasErrors() {
+		return nil, catcher.Resolve()
+	}
+	return parsed, nil
+
+}
+
+func ParsePreOrPost(cmds []model.PluginCommandConf, commandInfo model.PluginCommandConf, project *model.Project, block string) []model.PluginCommandConf {
+	var parsed []model.PluginCommandConf
+	catcher := grip.NewBasicCatcher() //todo, return
+
+	for i, c := range cmds {
+		if name := c.Function; name != "" {
+			cmds, ok := project.Functions[name]
+			if !ok {
+				catcher.Errorf("function '%s' not found in project functions", name)
+			} else if cmds != nil {
+				parsedCommands, err := parseFunctionCommands(cmds.List(), commandInfo, name, block)
+				parsed = append(parsed, parsedCommands...)
+				if err != nil {
+					catcher.Add(err)
+				}
+			}
+		} else {
+			if c.DisplayName == "" {
+				c.DisplayName = fmt.Sprintf(`'%v' in "%s" (#%d)`, c.Command, block, i+1)
+			}
+			parsed = append(parsed, c)
+		}
+
+	}
+
+	return parsed
 }
