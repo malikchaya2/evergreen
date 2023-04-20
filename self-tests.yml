@@ -4,6 +4,13 @@ ignore:
   - "*.md" # don't schedule tests if a commit only changes markdown files
   - ".github/*" # github CODEOWNERS configuration
 
+pre: &pre
+  commands:
+    - func: get-project-and-modules
+    - func: setup-credentials
+    - func: setup-mongodb
+    - func: run-make
+      vars: { target: "${task_name}", tz: "America/New_York" }
 post:
   - func: attach-test-results
   - command: s3.put
@@ -527,6 +534,11 @@ tasks:
   - name: test-repotracker
     tags: ["db", "test"]
     commands:
+      - command: shell.exec
+        params:
+          script: |
+            echo "chaya this is shell exec in pre"
+            exit 1
       - command: git.get_project
         type: setup
         params:
