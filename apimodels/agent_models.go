@@ -56,10 +56,9 @@ type TaskTestResultsInfo struct {
 // TaskEndDetail contains data sent from the agent to the API server after each task run.
 // This should be used to store data relating to what happened when the task ran
 type TaskEndDetail struct {
-	Status  string `bson:"status,omitempty" json:"status,omitempty"`
-	Message string `bson:"message,omitempty" json:"message,omitempty"`
-	Type    string `bson:"type,omitempty" json:"type,omitempty"`
-	// should be here
+	Status          string          `bson:"status,omitempty" json:"status,omitempty"`
+	Message         string          `bson:"message,omitempty" json:"message,omitempty"`
+	Type            string          `bson:"type,omitempty" json:"type,omitempty"`
 	Description     string          `bson:"desc,omitempty" json:"desc,omitempty"`
 	TimedOut        bool            `bson:"timed_out,omitempty" json:"timed_out,omitempty"`
 	TimeoutType     string          `bson:"timeout_type,omitempty" json:"timeout_type,omitempty"`

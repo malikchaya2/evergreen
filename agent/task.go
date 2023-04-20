@@ -223,8 +223,6 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 		msg := fmt.Sprintf("Running pre-task commands failed: %s", err)
 		tc.logger.Task().Error(msg)
 		if opts.failPreAndPost {
-			//set it here
-			// finishTask()
 			return errors.New(msg)
 		}
 	}
