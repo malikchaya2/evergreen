@@ -248,10 +248,64 @@ func (s *AgentSuite) TestCancelRunCommands() {
 		},
 	}
 	cmds := []model.PluginCommandConf{cmd}
-	err := s.a.runCommands(ctx, s.tc, cmds, runCommandsOptions{})
+	err := s.a.runCommands(ctx, s.tc, cmds, runCommandsOptions{}, "post")
 	s.Require().Error(err)
 	s.Contains(err.Error(), context.Canceled.Error())
 }
+
+// func (s *AgentSuite) TestRender() {
+// 	sampleProjYAMLWithMultiFields = `
+// tasks:
+// - name: blueberry
+//   commands:
+//     - command: shell.exec
+// - name: strawberry
+//   commands:
+//     - command: shell.exec
+// - name: banana-is-a-berry
+//   commands:
+//     - command: shell.exec
+
+// buildvariants:
+// - name: rutabaga
+//   tasks:
+//     - name: blueberry
+//     - name: strawberry
+// - name: sweet-potato
+//   tasks:
+//     - name: strawberry
+//     - name: lotta-fruits
+
+// functions:
+//   purple:
+//     - command: shell.exec
+//     - command: shell.exec
+//   orange:
+//     - command: shell.exec
+
+// task_groups:
+// - name: i-am-a-fruitarian
+//   tasks:
+//     - blueberry
+//     - strawberry
+// - name: lotta-fruits
+//   tasks:
+//     - blueberry
+//     - banana-is-a-berry
+// `
+// 	ctx, cancel := context.WithCancel(context.Background())
+// 	cancel()
+// 	cmd := model.PluginCommandConf{
+// 		Command: "shell.exec",
+// 		Params: map[string]interface{}{
+// 			"script": "echo hi",
+// 		},
+// 	}
+// 	cmds := []model.PluginCommandConf{cmd}
+// 	err := s.a.runCommands(ctx, s.tc, cmds, runCommandsOptions{})
+// 	s.Require().Error(err)
+// 	s.Contains(err.Error(), context.Canceled.Error())
+// }
 
 func (s *AgentSuite) TestPre() {
 	projYml := `

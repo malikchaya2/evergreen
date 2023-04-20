@@ -177,6 +177,7 @@ func (a *Agent) setupSystemMetricsCollector(ctx context.Context, tc *taskContext
 
 func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 	// here
+	// should we add a render for here?
 	tc.logger.Task().Info("Running pre-task commands.")
 	opts := runCommandsOptions{}
 
@@ -197,7 +198,7 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 				ctx2, cancel = a.withCallbackTimeout(ctx, tc)
 			}
 			defer cancel()
-			err = a.runCommands(ctx2, tc, taskGroup.SetupGroup.List(), opts)
+			err = a.runCommands(ctx2, tc, taskGroup.SetupGroup.List(), opts, "pre")
 			if err != nil {
 				tc.logger.Execution().Error(errors.Wrap(err, "running task setup group"))
 				if taskGroup.SetupGroupFailTask {
@@ -218,7 +219,7 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 	if taskGroup.SetupTask != nil {
 		tc.logger.Task().Infof("Running setup task for task group '%s'.", taskGroup.Name)
 		opts.failPreAndPost = taskGroup.SetupGroupFailTask
-		err = a.runCommands(ctx, tc, taskGroup.SetupTask.List(), opts)
+		err = a.runCommands(ctx, tc, taskGroup.SetupTask.List(), opts, "pre")
 	}
 	if err != nil {
 		msg := fmt.Sprintf("Running pre-task commands failed: %s", err)

@@ -70,8 +70,8 @@ func GetCommandFactory(name string) (CommandFactory, bool) {
 	return evgRegistry.getCommandFactory(name)
 }
 
-func Render(c model.PluginCommandConf, project *model.Project) ([]Command, error) {
-	return evgRegistry.renderCommands(c, project)
+func Render(c model.PluginCommandConf, project *model.Project, block string) ([]Command, error) {
+	return evgRegistry.renderCommands(c, project, block)
 }
 
 func RegisteredCommandNames() []string { return evgRegistry.registeredCommandNames() }
@@ -132,7 +132,7 @@ func (r *commandRegistry) getCommandFactory(name string) (CommandFactory, bool) 
 }
 
 func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
-	project *model.Project) ([]Command, error) {
+	project *model.Project, block string) ([]Command, error) {
 
 	var (
 		parsed []model.PluginCommandConf
@@ -140,14 +140,14 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 	)
 	catcher := grip.NewBasicCatcher()
 
-	if project.Pre != nil {
-		parsedCommands := ParsePreOrPost(project.Pre.List(), commandInfo, project, "pre")
-		parsed = append(parsed, parsedCommands...)
-	}
-	if project.Post != nil {
-		parsedCommands := ParsePreOrPost(project.Post.List(), commandInfo, project, "post")
-		parsed = append(parsed, parsedCommands...)
-	}
+	// if project.Pre != nil {
+	// 	parsedCommands := ParsePreOrPost(project.Pre.List(), commandInfo, project, "pre")
+	// 	parsed = append(parsed, parsedCommands...)
+	// }
+	// if project.Post != nil {
+	// 	parsedCommands := ParsePreOrPost(project.Post.List(), commandInfo, project, "post")
+	// 	parsed = append(parsed, parsedCommands...)
+	// }
 
 	if name := commandInfo.Function; name != "" {
 		cmds, ok := project.Functions[name]
@@ -161,6 +161,7 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 			}
 		}
 	} else {
+		// add block here
 		parsed = append(parsed, commandInfo)
 	}
 

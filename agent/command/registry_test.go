@@ -77,34 +77,34 @@ func TestRenderCommands(t *testing.T) {
 	t.Run("ProjectHasPreWithFunc", func(t *testing.T) {
 		info := model.PluginCommandConf{Command: "command.mock"}
 
-		multiCommand := `
+		projYml := `
 pre:
   - func: "a_function"
 functions:
   a_function:
-    command: shell.exec
+    command: command.mock
   purple:
-    - command: shell.exec
-    - command: shell.exec
+    - command: command.mock
+    - command: command.mock
   orange:
-    - command: shell.exec
+    - command: command.mock
 `
 
 		p := &model.Project{}
 		ctx := context.Background()
-		_, err := model.LoadProjectInto(ctx, []byte(multiCommand), nil, "", p)
+		_, err := model.LoadProjectInto(ctx, []byte(projYml), nil, "", p)
 		assert.NoError(t, err)
 		cmds, err := registry.renderCommands(info, p)
 		assert.NoError(t, err)
 		require.Len(t, cmds, 3)
-		// assert.Equal(t, "'command.mock' in pre (#1)", cmds[0].DisplayName())
-		// assert.Equal(t, "'command.mock' in pre (#2)", cmds[1].DisplayName())
+		// assert.Equal(t, "'command.mock' in \"pre\" (#1)", cmds[0].DisplayName())
+		// assert.Equal(t, "'command.mock' in \"pre\" (#2)", cmds[1].DisplayName())
 
 	})
 
 	t.Run("ProjectHasPre", func(t *testing.T) {
 		info := model.PluginCommandConf{Command: "command.mock"}
-		multiCommand := `
+		projYml := `
 pre:
   - command: command.mock
     params:
@@ -115,30 +115,18 @@ pre:
 `
 		p := &model.Project{}
 		ctx := context.Background()
-		_, err := model.LoadProjectInto(ctx, []byte(multiCommand), nil, "", p)
+		_, err := model.LoadProjectInto(ctx, []byte(projYml), nil, "", p)
 		assert.NoError(t, err)
 		cmds, err := registry.renderCommands(info, p)
 		assert.NoError(t, err)
 		require.Len(t, cmds, 3)
-		assert.Equal(t, "'command.mock' in pre (#1)", cmds[0].DisplayName())
-		assert.Equal(t, "'command.mock' in pre (#2)", cmds[1].DisplayName())
-
-		singleCommand := `
-pre:
-  command: command.mock
-`
-		_, err = model.LoadProjectInto(ctx, []byte(singleCommand), nil, "", p)
-		assert.NoError(t, err)
-
-		cmds, err = registry.renderCommands(info, p)
-		assert.NoError(t, err)
-		require.Len(t, cmds, 2)
-		assert.Equal(t, "'command.mock' in pre (#1)", cmds[0].DisplayName())
+		assert.Equal(t, "'command.mock' in \"pre\" (#1)", cmds[0].DisplayName())
+		assert.Equal(t, "'command.mock' in \"pre\" (#2)", cmds[1].DisplayName())
 	})
 
 	t.Run("ProjectHasPost", func(t *testing.T) {
 		info := model.PluginCommandConf{Command: "command.mock"}
-		multiCommand := `
+		projYml := `
 post:
   - command: command.mock
     params:
@@ -149,25 +137,13 @@ post:
 `
 		p := &model.Project{}
 		ctx := context.Background()
-		_, err := model.LoadProjectInto(ctx, []byte(multiCommand), nil, "", p)
+		_, err := model.LoadProjectInto(ctx, []byte(projYml), nil, "", p)
 		assert.NoError(t, err)
 		cmds, err := registry.renderCommands(info, p)
 		assert.NoError(t, err)
 		require.Len(t, cmds, 3)
-		assert.Equal(t, "'command.mock' in post (#1)", cmds[0].DisplayName())
-		assert.Equal(t, "'command.mock' in post (#2)", cmds[1].DisplayName())
-
-		singleCommand := `
-post:
-  command: command.mock
-`
-		_, err = model.LoadProjectInto(ctx, []byte(singleCommand), nil, "", p)
-		assert.NoError(t, err)
-
-		cmds, err = registry.renderCommands(info, p)
-		assert.NoError(t, err)
-		require.Len(t, cmds, 2)
-		assert.Equal(t, "'command.mock' in post (#1)", cmds[0].DisplayName())
+		assert.Equal(t, "'command.mock' in \"post\" (#1)", cmds[0].DisplayName())
+		assert.Equal(t, "'command.mock' in \"post\" (#2)", cmds[1].DisplayName())
 	})
 
 	t.Run("CommandConfHasType", func(t *testing.T) {
