@@ -140,6 +140,10 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 	)
 	catcher := grip.NewBasicCatcher()
 
+	if block != "" {
+		block = fmt.Sprintf(`in "%v"`, block)
+	}
+
 	if name := commandInfo.Function; name != "" {
 		cmds, ok := project.Functions[name]
 		if !ok {
@@ -157,9 +161,6 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 				}
 
 				if c.DisplayName == "" {
-					if block != "" {
-						block = fmt.Sprintf(`in "%v"`, block)
-					}
 					c.DisplayName = fmt.Sprintf(`'%v' in "%v" %s (#%d)`, c.Command, name, block, i+1)
 				}
 
@@ -171,6 +172,9 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 			}
 		}
 	} else {
+		if commandInfo.DisplayName == "" {
+			commandInfo.DisplayName = fmt.Sprintf(`'%v' %s `, commandInfo.Command, block)
+		}
 		parsed = append(parsed, commandInfo)
 	}
 
