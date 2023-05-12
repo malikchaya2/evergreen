@@ -15,12 +15,15 @@ type Volume struct {
 	CreatedBy        string    `bson:"created_by" json:"created_by"`
 	Type             string    `bson:"type" json:"type"`
 	Size             int       `bson:"size" json:"size"`
+	Throughput       int       `bson:"throughput,omitempty" json:"throughput,omitempty"`
+	IOPS             int       `bson:"iops,omitempty" json:"iops,omitempty"`
 	AvailabilityZone string    `bson:"availability_zone" json:"availability_zone"`
 	Expiration       time.Time `bson:"expiration" json:"expiration"`
 	NoExpiration     bool      `bson:"no_expiration" json:"no_expiration"`
 	CreationDate     time.Time `bson:"created_at" json:"created_at"`
 	Host             string    `bson:"host,omitempty" json:"host"`
 	HomeVolume       bool      `bson:"home_volume" json:"home_volume"`
+	Migrating        bool      `bson:"migrating" json:"migrating"`
 }
 
 // Insert a volume into the volumes collection.
@@ -67,6 +70,17 @@ func (v *Volume) SetSize(size int) error {
 		return errors.WithStack(err)
 	}
 	v.Size = size
+	return nil
+}
+
+func (v *Volume) SetMigrating(migrating bool) error {
+	err := db.Update(VolumesCollection,
+		bson.M{VolumeIDKey: v.ID},
+		bson.M{"$set": bson.M{VolumeMigratingKey: migrating}})
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	v.Migrating = migrating
 	return nil
 }
 

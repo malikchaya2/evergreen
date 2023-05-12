@@ -14,6 +14,12 @@
             <button class="pull-right plus-button btn btn-primary" type="button" ng-click="addSubscription()">
                 <i class="fa fa-plus"></i>
             </button>
+            <div class="muted small" >
+                Private slack channels may require further Slack configuration.
+            </div>
+            <div class="muted small" ng-show="slackAppName">
+                Invite evergreen to your private Slack channels by running 'invite [[slackAppName]]' in the channel.
+            </div>
         </h4>
         <div ng-show="subscriptions.length === 0">
             No event subscriptions. Click the plus to add some.

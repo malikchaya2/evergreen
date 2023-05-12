@@ -2,13 +2,18 @@ package build
 
 import (
 	"context"
+	"fmt"
+	"net/url"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/utility"
 	adb "github.com/mongodb/anser/db"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -23,8 +28,8 @@ type TaskCache struct {
 }
 
 // Build represents a set of tasks on one variant of a Project
-// 	e.g. one build might be "Ubuntu with Python 2.4" and
-//  another might be "OSX with Python 3.0", etc.
+// e.g. one build might be "Ubuntu with Python 2.4" and
+// another might be "OSX with Python 3.0", etc.
 type Build struct {
 	Id                  string        `bson:"_id" json:"_id"`
 	CreateTime          time.Time     `bson:"create_time" json:"create_time,omitempty"`
@@ -82,8 +87,7 @@ func (b *Build) UnmarshalBSON(in []byte) error { return mgobson.Unmarshal(in, b)
 // In spite of the name, a build with status BuildFailed may still be in
 // progress; use AllCachedTasksFinished
 func (b *Build) IsFinished() bool {
-	return b.Status == evergreen.BuildFailed ||
-		b.Status == evergreen.BuildSucceeded
+	return evergreen.IsFinishedBuildStatus(b.Status)
 }
 
 // AllUnblockedTasksOrCompileFinished returns true when all activated tasks in the build have
@@ -122,19 +126,6 @@ func (b *Build) FindBuildOnBaseCommit() (*Build, error) {
 	return FindOne(ByRevisionAndVariant(b.Revision, b.BuildVariant))
 }
 
-// Find all builds on the same project + variant + requester between
-// the current b and the specified previous build.
-func (b *Build) FindIntermediateBuilds(previous *Build) ([]Build, error) {
-	return Find(ByBetweenBuilds(b, previous))
-}
-
-// Find the most recent activated build with the same variant +
-// requester + project as the current build.
-func (b *Build) PreviousActivated(project string, requester string) (*Build, error) {
-	return FindOne(ByRecentlyActivatedForProjectAndVariant(
-		b.RevisionOrderNumber, project, b.BuildVariant, requester))
-}
-
 // Find the most recent b on with the same build variant + requester +
 // project as the current build, with any of the specified statuses.
 func (b *Build) PreviousSuccessful() (*Build, error) {
@@ -142,22 +133,29 @@ func (b *Build) PreviousSuccessful() (*Build, error) {
 		b.RevisionOrderNumber, b.Project, b.BuildVariant))
 }
 
+func getSetBuildActivatedUpdate(active bool, caller string) bson.M {
+	return bson.M{
+		ActivatedKey:     active,
+		ActivatedTimeKey: time.Now(),
+		ActivatedByKey:   caller,
+	}
+}
+
 // UpdateActivation updates builds with the given ids
 // to the given activation setting.
 func UpdateActivation(buildIds []string, active bool, caller string) error {
+	if len(buildIds) == 0 {
+		return nil
+	}
 	query := bson.M{IdKey: bson.M{"$in": buildIds}}
 	if !active && evergreen.IsSystemActivator(caller) {
 		query[ActivatedByKey] = bson.M{"$in": evergreen.SystemActivators}
 	}
 
-	_, err := UpdateAllBuilds(
+	err := UpdateAllBuilds(
 		query,
 		bson.M{
-			"$set": bson.M{
-				ActivatedKey:     active,
-				ActivatedTimeKey: time.Now(),
-				ActivatedByKey:   caller,
-			},
+			"$set": getSetBuildActivatedUpdate(active, caller),
 		},
 	)
 	return errors.Wrapf(err, "setting build activation to %t", active)
@@ -184,6 +182,18 @@ func (b *Build) SetAborted(aborted bool) error {
 	return UpdateOne(
 		bson.M{IdKey: b.Id},
 		bson.M{"$set": bson.M{AbortedKey: aborted}},
+	)
+}
+
+// SetActivated sets the build activated field to the given boolean.
+func (b *Build) SetActivated(activated bool) error {
+	if b.Activated == activated {
+		return nil
+	}
+	b.Activated = activated
+	return UpdateOne(
+		bson.M{IdKey: b.Id},
+		bson.M{"$set": bson.M{ActivatedKey: activated}},
 	)
 }
 
@@ -288,13 +298,14 @@ func (b *Build) GetTimeSpent() (time.Duration, time.Duration, error) {
 	return timeTaken, makespan, nil
 }
 
+// GetURL returns a url to the build page.
+func (b *Build) GetURL(uiBase string) string {
+	return fmt.Sprintf("%s/build/%s?redirect_spruce_users=true", uiBase, url.PathEscape(b.Id))
+}
+
 // Insert writes the b to the db.
 func (b *Build) Insert() error {
 	return db.Insert(Collection, b)
-}
-
-func (b *Build) IsPatchBuild() bool {
-	return evergreen.IsPatchRequester(b.Requester)
 }
 
 type Builds []*Build
@@ -314,4 +325,69 @@ func (b Builds) InsertMany(ctx context.Context, ordered bool) error {
 	}
 	_, err := evergreen.GetEnvironment().DB().Collection(Collection).InsertMany(ctx, b.getPayload(), &options.InsertManyOptions{Ordered: &ordered})
 	return errors.Wrap(err, "bulk inserting builds")
+}
+
+// GetFinishedNotificationDescription returns a description of successful/failed tasks for the build,
+// to be used by jobs and notification processing.
+func (b *Build) GetFinishedNotificationDescription(tasks []task.Task) string {
+	success := 0
+	failed := 0
+	systemError := 0
+	other := 0
+	noReport := 0
+	for _, t := range tasks {
+		switch {
+		case t.Status == evergreen.TaskSucceeded:
+			success++
+
+		case t.Status == evergreen.TaskFailed:
+			failed++
+
+		case evergreen.IsSystemFailedTaskStatus(t.Status):
+			systemError++
+
+		case utility.StringSliceContains(evergreen.TaskUncompletedStatuses, t.Status):
+			noReport++
+
+		default:
+			other++
+		}
+	}
+
+	grip.ErrorWhen(other > 0, message.Fields{
+		"source":   "status updates",
+		"message":  "unknown task status",
+		"build_id": b.Id,
+	})
+
+	if success == 0 && failed == 0 && systemError == 0 && other == 0 {
+		return "no tasks were run"
+	}
+
+	desc := fmt.Sprintf("%s, %s", taskStatusSubformat(success, "succeeded"),
+		taskStatusSubformat(failed, "failed"))
+	if systemError > 0 {
+		desc += fmt.Sprintf(", %d internal errors", systemError)
+	}
+	if other > 0 {
+		desc += fmt.Sprintf(", %d other", other)
+	}
+
+	return b.appendTime(desc)
+}
+
+func taskStatusSubformat(n int, verb string) string {
+	if n == 0 {
+		return fmt.Sprintf("none %s", verb)
+	}
+	return fmt.Sprintf("%d %s", n, verb)
+}
+
+func (b *Build) appendTime(txt string) string {
+	finish := b.FinishTime
+	// In case the build is actually blocked, but we are triggering the finish event
+	if utility.IsZeroTime(b.FinishTime) {
+		finish = time.Now()
+	}
+	return fmt.Sprintf("%s in %s", txt, finish.Sub(b.StartTime).String())
 }

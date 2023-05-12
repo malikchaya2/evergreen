@@ -5,29 +5,10 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/model"
-	"github.com/evergreen-ci/evergreen/model/testresult"
+	"github.com/evergreen-ci/evergreen/model/patch"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 )
-
-// FindTestsByTaskIdOpts contains filtering, sorting and pagination options for TestResults.
-type FindTestsByTaskIdOpts struct {
-	Execution int
-	GroupID   string
-	Limit     int
-	Page      int
-	// SortBy should equal a bson tag from the TestResults struct.
-	SortBy   string
-	SortDir  int
-	Statuses []string
-	// TaskID is the only required field.
-	TaskID string
-	// ExecutionTasks is required for display tasks.
-	ExecutionTasks []string
-	// TestID matches all IDs >= TestID.
-	TestID   string
-	TestName string
-}
 
 // Connector is an interface that contains all of the methods which
 // connect to the service layer of evergreen. These methods abstract the link
@@ -38,9 +19,9 @@ type Connector interface {
 	GetURL() string
 	SetURL(string)
 	GetProjectFromFile(context.Context, model.ProjectRef, string, string) (model.ProjectInfo, error)
-	CreateVersionFromConfig(context.Context, *model.ProjectInfo, model.VersionMetadata, bool) (*model.Version, error)
-	FindTestsByTaskId(FindTestsByTaskIdOpts) ([]testresult.TestResult, error)
+	CreateVersionFromConfig(context.Context, *model.ProjectInfo, model.VersionMetadata) (*model.Version, error)
 	GetGitHubPR(context.Context, string, string, int) (*github.PullRequest, error)
-	AddPatchForPr(ctx context.Context, projectRef model.ProjectRef, prNum int, modules []restModel.APIModule, messageOverride string) (string, error)
+	AddPatchForPR(context.Context, model.ProjectRef, int, []restModel.APIModule, string) (*patch.Patch, error)
+	AddCommentToPR(context.Context, string, string, int, string) error
 	IsAuthorizedToPatchAndMerge(context.Context, *evergreen.Settings, UserRepoInfo) (bool, error)
 }

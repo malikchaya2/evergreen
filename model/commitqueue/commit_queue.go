@@ -1,19 +1,15 @@
 package commitqueue
 
 import (
-	"strings"
 	"time"
 
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
-	"github.com/evergreen-ci/evergreen/model/event"
-	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
 const (
-	triggerComment    = "evergreen merge"
 	SourcePullRequest = "PR"
 	SourceDiff        = "diff"
 	GithubContext     = "evergreen/commitqueue"
@@ -37,6 +33,9 @@ type CommitQueueItem struct {
 	Modules             []Module  `bson:"modules"`
 	MessageOverride     string    `bson:"message_override"`
 	Source              string    `bson:"source"`
+	// QueueLengthAtEnqueue is the length of the queue when the item was enqueued. Used for tracking the speed of the
+	// commit queue as this value is logged when a commit queue item is processed.
+	QueueLengthAtEnqueue int `bson:"queue_length_at_enqueue"`
 }
 
 func (i *CommitQueueItem) MarshalBSON() ([]byte, error)  { return mgobson.Marshal(i) }
@@ -61,18 +60,19 @@ func (q *CommitQueue) Enqueue(item CommitQueueItem) (int, error) {
 	}
 
 	item.EnqueueTime = time.Now()
-	if err := add(q.ProjectID, q.Queue, item); err != nil {
+	item.QueueLengthAtEnqueue = len(q.Queue)
+	if err := add(q.ProjectID, item); err != nil {
 		return 0, errors.Wrapf(err, "adding '%s' to queue for project '%s'", item.Issue, q.ProjectID)
 	}
+
+	q.Queue = append(q.Queue, item)
 	grip.Info(message.Fields{
 		"source":       "commit queue",
-		"item_id":      item.Issue,
+		"item":         item,
 		"project_id":   q.ProjectID,
 		"queue_length": len(q.Queue),
 		"message":      "enqueued commit queue item",
 	})
-
-	q.Queue = append(q.Queue, item)
 	return len(q.Queue) - 1, nil
 }
 
@@ -92,23 +92,24 @@ func (q *CommitQueue) EnqueueAtFront(item CommitQueueItem) (int, error) {
 		}
 	}
 	item.EnqueueTime = time.Now()
-	if err := addAtPosition(q.ProjectID, q.Queue, item, newPos); err != nil {
+	item.QueueLengthAtEnqueue = len(q.Queue)
+	if err := addAtPosition(q.ProjectID, item, newPos); err != nil {
 		return 0, errors.Wrapf(err, "force adding '%s' to queue for project '%s'", item.Issue, q.ProjectID)
 	}
-
-	grip.Warning(message.Fields{
-		"source":       "commit queue",
-		"item_id":      item.Issue,
-		"project_id":   q.ProjectID,
-		"queue_length": len(q.Queue) + 1,
-		"position":     newPos,
-		"message":      "enqueued commit queue item at front",
-	})
 	if len(q.Queue) == 0 {
 		q.Queue = append(q.Queue, item)
 		return newPos, nil
 	}
 	q.Queue = append(q.Queue[:newPos], append([]CommitQueueItem{item}, q.Queue[newPos:]...)...)
+
+	grip.Info(message.Fields{
+		"source":       "commit queue",
+		"item":         item,
+		"project_id":   q.ProjectID,
+		"queue_length": len(q.Queue),
+		"position":     newPos,
+		"message":      "enqueued commit queue item at front",
+	})
 	return newPos, nil
 }
 
@@ -157,17 +158,24 @@ func (q *CommitQueue) Remove(issue string) (*CommitQueueItem, error) {
 	}
 
 	q.Queue = append(q.Queue[:itemIndex], q.Queue[itemIndex+1:]...)
-
+	grip.Info(message.Fields{
+		"source":       "commit queue",
+		"item":         item,
+		"project_id":   q.ProjectID,
+		"queue_length": len(q.Queue),
+		"message":      "removed item from commit queue",
+	})
 	return &item, nil
 }
 
-func (q *CommitQueue) UpdateVersion(item CommitQueueItem) error {
+func (q *CommitQueue) UpdateVersion(item *CommitQueueItem) error {
 	for i, currentEntry := range q.Queue {
 		if currentEntry.Issue == item.Issue {
 			q.Queue[i].Version = item.Version
+			q.Queue[i].ProcessingStartTime = item.ProcessingStartTime
 		}
 	}
-	return errors.Wrap(addVersionID(q.ProjectID, item), "updating version")
+	return errors.Wrap(addVersionAndTime(q.ProjectID, *item), "updating version")
 }
 
 func (q *CommitQueue) FindItem(issue string) int {
@@ -194,13 +202,6 @@ func EnsureCommitQueueExistsForProject(id string) error {
 	return nil
 }
 
-func TriggersCommitQueue(commentAction string, comment string) bool {
-	if commentAction == "deleted" {
-		return false
-	}
-	return strings.HasPrefix(comment, triggerComment)
-}
-
 func ClearAllCommitQueues() (int, error) {
 	clearedCount, err := clearAll()
 	if err != nil {
@@ -210,57 +211,11 @@ func ClearAllCommitQueues() (int, error) {
 	return clearedCount, nil
 }
 
-func RemoveCommitQueueItemForVersion(projectId, version string, user string) (*CommitQueueItem, error) {
-	cq, err := FindOneId(projectId)
-	if err != nil {
-		return nil, errors.Wrapf(err, "getting commit queue for project '%s'", projectId)
-	}
-	if cq == nil {
-		return nil, errors.Errorf("no commit queue found for project '%s'", projectId)
-	}
-
-	issue := ""
-	for _, item := range cq.Queue {
-		if item.Version == version {
-			issue = item.Issue
-		}
-	}
-	if issue == "" {
-		return nil, nil
-	}
-
-	return cq.RemoveItemAndPreventMerge(issue, true, user)
-}
-
-func (cq *CommitQueue) RemoveItemAndPreventMerge(issue string, versionExists bool, user string) (*CommitQueueItem, error) {
-	removed, err := cq.Remove(issue)
-	if err != nil {
-		return removed, errors.Wrapf(err, "removing item '%s' from commit queue for project '%s'", issue, cq.ProjectID)
-	}
-
-	if removed == nil {
-		return nil, nil
-	}
-	if versionExists {
-		err = preventMergeForItem(*removed, user)
-	}
-
-	return removed, errors.Wrapf(err, "preventing merge for item '%s' in commit queue for project '%s'", issue, cq.ProjectID)
-}
-
-func preventMergeForItem(item CommitQueueItem, user string) error {
-	// Disable the merge task
-	mergeTask, err := task.FindMergeTaskForVersion(item.Version)
-	if err != nil {
-		return errors.Wrapf(err, "finding merge task for '%s'", item.Issue)
-	}
-	if mergeTask == nil {
-		return errors.New("merge task doesn't exist")
-	}
-	event.LogMergeTaskUnscheduled(mergeTask.Id, mergeTask.Execution, user)
-	if err = mergeTask.SetDisabledPriority(user); err != nil {
-		return errors.Wrap(err, "disabling merge task")
-	}
-
-	return nil
+// EnqueuePRInfo holds information necessary to enqueue a PR to the commit queue.
+type EnqueuePRInfo struct {
+	Username      string
+	Owner         string
+	Repo          string
+	PR            int
+	CommitMessage string
 }

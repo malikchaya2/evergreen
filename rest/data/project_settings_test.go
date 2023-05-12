@@ -2,11 +2,18 @@ package data
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/service/secretsmanager"
+	"github.com/evergreen-ci/cocoa"
+	cocoaMock "github.com/evergreen-ci/cocoa/mock"
 	"github.com/evergreen-ci/evergreen"
+	"github.com/evergreen-ci/evergreen/cloud"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/evergreen/model/event"
 	"github.com/evergreen-ci/evergreen/model/user"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
@@ -25,8 +32,12 @@ func TestSaveProjectSettingsForSectionForRepo(t *testing.T) {
 
 	for name, test := range map[string]func(t *testing.T, ref model.RepoRef){
 		model.ProjectPageGeneralSection: func(t *testing.T, ref model.RepoRef) {
-			assert.Empty(t, ref.SpawnHostScriptPath)
+			config, err := evergreen.GetConfig()
+			assert.NoError(t, err)
+			config.GithubOrgs = []string{ref.Owner}
+			assert.NoError(t, config.Set())
 
+			assert.Empty(t, ref.SpawnHostScriptPath)
 			ref.SpawnHostScriptPath = "my script path"
 			ref.Owner = "something different"
 			apiProjectRef := restModel.APIProjectRef{}
@@ -34,8 +45,17 @@ func TestSaveProjectSettingsForSectionForRepo(t *testing.T) {
 			apiChanges := &restModel.APIProjectSettings{
 				ProjectRef: apiProjectRef,
 			}
-			// ensure that we're saving settings without a special case
+
+			// Shouldn't succeed if the new owner isn't in the config.
 			settings, err := SaveProjectSettingsForSection(ctx, ref.Id, apiChanges, model.ProjectPageGeneralSection, true, "me")
+			assert.Error(t, err)
+			assert.Nil(t, settings)
+
+			config.GithubOrgs = append(config.GithubOrgs, ref.Owner) // Add the new owner
+			assert.NoError(t, config.Set())
+
+			// Ensure that we're saving settings without a special case
+			settings, err = SaveProjectSettingsForSection(ctx, ref.Id, apiChanges, model.ProjectPageGeneralSection, true, "me")
 			assert.NoError(t, err)
 			assert.NotNil(t, settings)
 			repoRefFromDB, err := model.FindOneRepoRef(ref.Id)
@@ -125,13 +145,13 @@ func TestSaveProjectSettingsForSectionForRepo(t *testing.T) {
 		},
 		model.ProjectPageVariablesSection: func(t *testing.T, ref model.RepoRef) {
 			// remove a variable, modify a variable, add a variable
-			updatedVars := &model.ProjectVars{
+			updatedVars := model.ProjectVars{
 				Id:          ref.Id,
 				Vars:        map[string]string{"it": "me", "banana": "phone"},
 				PrivateVars: map[string]bool{"banana": true},
 			}
 			apiProjectVars := restModel.APIProjectVars{}
-			assert.NoError(t, apiProjectVars.BuildFromService(updatedVars))
+			apiProjectVars.BuildFromService(updatedVars)
 			apiChanges := &restModel.APIProjectSettings{
 				Vars: apiProjectVars,
 			}
@@ -150,7 +170,7 @@ func TestSaveProjectSettingsForSectionForRepo(t *testing.T) {
 		},
 	} {
 		assert.NoError(t, db.ClearCollections(model.ProjectRefCollection, model.ProjectVarsCollection,
-			event.SubscriptionsCollection, event.AllLogCollection, evergreen.ScopeCollection, user.Collection))
+			event.SubscriptionsCollection, event.EventCollection, evergreen.ScopeCollection, user.Collection))
 		require.NoError(t, db.CreateCollections(evergreen.ScopeCollection))
 
 		repoRef := model.RepoRef{ProjectRef: model.ProjectRef{
@@ -241,7 +261,10 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 	for name, test := range map[string]func(t *testing.T, ref model.ProjectRef){
 		model.ProjectPageGeneralSection: func(t *testing.T, ref model.ProjectRef) {
 			assert.Empty(t, ref.SpawnHostScriptPath)
-
+			config, err := evergreen.GetConfig()
+			assert.NoError(t, err)
+			config.GithubOrgs = []string{ref.Owner}
+			assert.NoError(t, config.Set())
 			ref.SpawnHostScriptPath = "my script path"
 			ref.Owner = "something different"
 			apiProjectRef := restModel.APIProjectRef{}
@@ -249,8 +272,16 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 			apiChanges := &restModel.APIProjectSettings{
 				ProjectRef: apiProjectRef,
 			}
-			// ensure that we're saving settings without a special case
+			// Shouldn't succeed if the new owner isn't in the config.
 			settings, err := SaveProjectSettingsForSection(ctx, ref.Id, apiChanges, model.ProjectPageGeneralSection, false, "me")
+			assert.Error(t, err)
+			assert.Nil(t, settings)
+
+			config.GithubOrgs = append(config.GithubOrgs, ref.Owner) // Add the new owner
+			assert.NoError(t, config.Set())
+
+			// Ensure that we're saving settings without a special case
+			settings, err = SaveProjectSettingsForSection(ctx, ref.Id, apiChanges, model.ProjectPageGeneralSection, false, "me")
 			assert.NoError(t, err)
 			assert.NotNil(t, settings)
 			assert.Equal(t, "myRepoId", utility.FromStringPtr(settings.ProjectRef.RepoRefId))
@@ -265,7 +296,7 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 				Owner:               ref.Owner,
 				Repo:                ref.Repo,
 				Branch:              ref.Branch,
-				Enabled:             utility.TruePtr(),
+				Enabled:             true,
 				PRTestingEnabled:    utility.TruePtr(),
 				GithubChecksEnabled: utility.TruePtr(),
 				CommitQueue: model.CommitQueueParams{
@@ -276,7 +307,7 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 			ref.PRTestingEnabled = utility.TruePtr()
 			ref.GithubChecksEnabled = utility.TruePtr()
 			assert.NoError(t, ref.Upsert())
-			ref.Enabled = utility.TruePtr()
+			ref.Enabled = true
 			apiProjectRef := restModel.APIProjectRef{}
 			assert.NoError(t, apiProjectRef.BuildFromService(ref))
 			apiChanges := &restModel.APIProjectSettings{
@@ -292,7 +323,7 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 				Owner:               ref.Owner,
 				Repo:                ref.Repo,
 				Branch:              ref.Branch,
-				Enabled:             utility.TruePtr(),
+				Enabled:             true,
 				PRTestingEnabled:    utility.TruePtr(),
 				GithubChecksEnabled: utility.TruePtr(),
 				CommitQueue: model.CommitQueueParams{
@@ -316,6 +347,44 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 			assert.Contains(t, err.Error(), "PR testing")
 			assert.NotContains(t, err.Error(), "the commit queue")
 			assert.NotContains(t, err.Error(), "commit checks")
+		},
+		"a commit queue document exists after the feature is turned on": func(t *testing.T, ref model.ProjectRef) {
+			oldRef := model.ProjectRef{
+				Owner:   ref.Owner,
+				Repo:    ref.Repo,
+				Branch:  ref.Branch,
+				Enabled: true,
+			}
+			assert.NoError(t, oldRef.Insert())
+
+			changes := model.ProjectRef{
+				Id: ref.Id,
+				CommitQueue: model.CommitQueueParams{
+					Enabled: utility.TruePtr(),
+				},
+			}
+			apiProjectRef := restModel.APIProjectRef{}
+			assert.NoError(t, apiProjectRef.BuildFromService(changes))
+			apiChanges := &restModel.APIProjectSettings{
+				ProjectRef: apiProjectRef,
+				Aliases: []restModel.APIProjectAlias{
+					{
+						Alias:   utility.ToStringPtr(evergreen.CommitQueueAlias),
+						Task:    utility.ToStringPtr("new_task"),
+						Variant: utility.ToStringPtr("new_variant"),
+					},
+					{
+						Alias:   utility.ToStringPtr(evergreen.GithubPRAlias),
+						Task:    utility.ToStringPtr("new_task"),
+						Variant: utility.ToStringPtr("new_variant"),
+					},
+				},
+			}
+			_, err := SaveProjectSettingsForSection(ctx, changes.Id, apiChanges, model.ProjectPageGithubAndCQSection, false, "me")
+			assert.NoError(t, err)
+			cq, err := commitqueue.FindOneId(ref.Id)
+			assert.NoError(t, err)
+			assert.NotNil(t, cq)
 		},
 		model.ProjectPageAccessSection: func(t *testing.T, ref model.ProjectRef) {
 			newAdmin := user.DBUser{
@@ -388,6 +457,19 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NotNil(t, oldAdminFromDB)
 			assert.NotContains(t, oldAdminFromDB.Roles(), model.GetRepoAdminRole(ref.Id))
+		},
+		"errors saving enabled project with no branch": func(t *testing.T, ref model.ProjectRef) {
+			ref.Enabled = true
+			ref.Branch = ""
+			apiProjectRef := restModel.APIProjectRef{}
+			assert.NoError(t, apiProjectRef.BuildFromService(ref))
+			apiChanges := &restModel.APIProjectSettings{
+				ProjectRef: apiProjectRef,
+			}
+			settings, err := SaveProjectSettingsForSection(ctx, ref.Id, apiChanges, model.ProjectPageGeneralSection, false, "me")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "branch not set on enabled repo")
+			assert.Nil(t, settings)
 		},
 		model.ProjectPageVariablesSection: func(t *testing.T, ref model.ProjectRef) {
 			// remove a variable, modify a variable, delete/add a private variable, add a variable, leave a private variable unchanged
@@ -466,7 +548,8 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 		},
 	} {
 		assert.NoError(t, db.ClearCollections(model.ProjectRefCollection, model.ProjectVarsCollection,
-			event.SubscriptionsCollection, event.AllLogCollection, evergreen.ScopeCollection, user.Collection))
+			event.SubscriptionsCollection, event.EventCollection, evergreen.ScopeCollection, user.Collection,
+			model.GithubHooksCollection, evergreen.ConfigCollection))
 		require.NoError(t, db.CreateCollections(evergreen.ScopeCollection))
 
 		pRef := model.ProjectRef{
@@ -554,6 +637,192 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 	}
 }
 
+func TestPromoteVarsToRepo(t *testing.T) {
+	for name, test := range map[string]func(t *testing.T, ref model.ProjectRef){
+		"SuccessfullyPromotesAllVariables": func(t *testing.T, ref model.ProjectRef) {
+			varsToPromote := []string{"a", "b", "c"}
+			err := PromoteVarsToRepo(ref.Id, varsToPromote, "u")
+			assert.NoError(t, err)
+
+			projectVarsFromDB, err := model.FindOneProjectVars(ref.Id)
+			assert.NoError(t, err)
+			assert.Len(t, projectVarsFromDB.Vars, 0)
+			assert.Len(t, projectVarsFromDB.PrivateVars, 0)
+			assert.Len(t, projectVarsFromDB.AdminOnlyVars, 0)
+
+			repoVarsFromDB, err := model.FindOneProjectVars(ref.RepoRefId)
+			assert.NoError(t, err)
+			assert.Len(t, repoVarsFromDB.Vars, 4)
+			assert.Len(t, repoVarsFromDB.PrivateVars, 2)
+			assert.Len(t, repoVarsFromDB.AdminOnlyVars, 1)
+			assert.Equal(t, repoVarsFromDB.Vars["a"], "1")
+			assert.Equal(t, repoVarsFromDB.Vars["b"], "2")
+			assert.Equal(t, repoVarsFromDB.Vars["c"], "3")
+
+			projectEvents, err := model.MostRecentProjectEvents(ref.Id, 10)
+			assert.NoError(t, err)
+			assert.Len(t, projectEvents, 1)
+
+			repoEvents, err := model.MostRecentProjectEvents(ref.RepoRefId, 10)
+			assert.NoError(t, err)
+			assert.Len(t, repoEvents, 1)
+		},
+		"SuccessfullyPromotesSomeVariables": func(t *testing.T, ref model.ProjectRef) {
+			varsToPromote := []string{"a", "b"}
+			err := PromoteVarsToRepo(ref.Id, varsToPromote, "u")
+			assert.NoError(t, err)
+
+			varsFromDB, err := model.FindOneProjectVars(ref.Id)
+			assert.NoError(t, err)
+			assert.Len(t, varsFromDB.Vars, 1)
+			assert.Equal(t, varsFromDB.Vars["c"], "3")
+			assert.Len(t, varsFromDB.PrivateVars, 0)
+			assert.Len(t, varsFromDB.AdminOnlyVars, 0)
+
+			repoVarsFromDB, err := model.FindOneProjectVars(ref.RepoRefId)
+			assert.NoError(t, err)
+			assert.Len(t, repoVarsFromDB.Vars, 3)
+			assert.Len(t, repoVarsFromDB.PrivateVars, 2)
+			assert.Len(t, repoVarsFromDB.AdminOnlyVars, 1)
+			assert.NotContains(t, repoVarsFromDB.Vars, "c")
+			assert.Equal(t, repoVarsFromDB.Vars["a"], "1")
+			assert.Equal(t, repoVarsFromDB.Vars["b"], "2")
+
+			projectEvents, err := model.MostRecentProjectEvents(ref.Id, 10)
+			assert.NoError(t, err)
+			assert.Len(t, projectEvents, 1)
+
+			repoEvents, err := model.MostRecentProjectEvents(ref.RepoRefId, 10)
+			assert.NoError(t, err)
+			assert.Len(t, repoEvents, 1)
+		},
+		"CorrectlyPromotesNoVariables": func(t *testing.T, ref model.ProjectRef) {
+			varsToPromote := []string{}
+			err := PromoteVarsToRepo(ref.Id, varsToPromote, "u")
+			assert.NoError(t, err)
+
+			varsFromDB, err := model.FindOneProjectVars(ref.Id)
+			assert.NoError(t, err)
+			assert.Len(t, varsFromDB.Vars, 3)
+			assert.Equal(t, varsFromDB.Vars["a"], "1")
+			assert.Equal(t, varsFromDB.Vars["b"], "2")
+			assert.Equal(t, varsFromDB.Vars["c"], "3")
+			assert.Len(t, varsFromDB.PrivateVars, 1)
+			assert.True(t, varsFromDB.PrivateVars["a"])
+			assert.Len(t, varsFromDB.AdminOnlyVars, 0)
+
+			repoVarsFromDB, err := model.FindOneProjectVars(ref.RepoRefId)
+			assert.NoError(t, err)
+			assert.Len(t, repoVarsFromDB.Vars, 1)
+			assert.Len(t, repoVarsFromDB.PrivateVars, 1)
+			assert.True(t, repoVarsFromDB.PrivateVars["d"])
+			assert.True(t, repoVarsFromDB.AdminOnlyVars["d"])
+
+			projectEvents, err := model.MostRecentProjectEvents(ref.Id, 10)
+			assert.NoError(t, err)
+			assert.Len(t, projectEvents, 0)
+
+			repoEvents, err := model.MostRecentProjectEvents(ref.RepoRefId, 10)
+			assert.NoError(t, err)
+			assert.Len(t, repoEvents, 0)
+		},
+		"FailsOnUnattachedRepo": func(t *testing.T, ref model.ProjectRef) {
+			varsToPromote := []string{"test"}
+			err := PromoteVarsToRepo("pUnattached", varsToPromote, "u")
+			assert.Error(t, err)
+		},
+		"IgnoresNonexistentVars": func(t *testing.T, ref model.ProjectRef) {
+			varsToPromote := []string{"test"}
+			err := PromoteVarsToRepo(ref.Id, varsToPromote, "u")
+			assert.NoError(t, err)
+
+			varsFromDB, err := model.FindOneProjectVars(ref.Id)
+			assert.NoError(t, err)
+			assert.Len(t, varsFromDB.Vars, 3)
+			assert.Equal(t, varsFromDB.Vars["a"], "1")
+			assert.Equal(t, varsFromDB.Vars["b"], "2")
+			assert.Equal(t, varsFromDB.Vars["c"], "3")
+			assert.Len(t, varsFromDB.PrivateVars, 1)
+			assert.True(t, varsFromDB.PrivateVars["a"])
+			assert.Len(t, varsFromDB.AdminOnlyVars, 0)
+
+			repoVarsFromDB, err := model.FindOneProjectVars(ref.RepoRefId)
+			assert.NoError(t, err)
+			assert.Len(t, repoVarsFromDB.Vars, 1)
+			assert.Len(t, repoVarsFromDB.PrivateVars, 1)
+			assert.True(t, repoVarsFromDB.PrivateVars["d"])
+			assert.True(t, repoVarsFromDB.AdminOnlyVars["d"])
+
+			projectEvents, err := model.MostRecentProjectEvents(ref.Id, 10)
+			assert.NoError(t, err)
+			assert.Len(t, projectEvents, 0)
+
+			repoEvents, err := model.MostRecentProjectEvents(ref.RepoRefId, 10)
+			assert.NoError(t, err)
+			assert.Len(t, repoEvents, 0)
+		},
+	} {
+		assert.NoError(t, db.ClearCollections(model.ProjectRefCollection, model.ProjectVarsCollection,
+			user.Collection, model.RepoRefCollection, event.EventCollection))
+		require.NoError(t, db.CreateCollections(evergreen.ScopeCollection))
+
+		repoRef := model.RepoRef{ProjectRef: model.ProjectRef{
+			Id:         "rId",
+			Owner:      "evergreen-ci",
+			Repo:       "evergreen",
+			Restricted: utility.FalsePtr(),
+			Admins:     []string{"u"},
+		}}
+		assert.NoError(t, repoRef.Upsert())
+
+		rVars := model.ProjectVars{
+			Id:            repoRef.Id,
+			Vars:          map[string]string{"d": "4"},
+			PrivateVars:   map[string]bool{"d": true},
+			AdminOnlyVars: map[string]bool{"d": true},
+		}
+		assert.NoError(t, rVars.Insert())
+
+		pRef := model.ProjectRef{
+			Id:         "pId",
+			Owner:      "evergreen-ci",
+			Repo:       "evergreen",
+			Branch:     "main",
+			Restricted: utility.FalsePtr(),
+			Admins:     []string{"u"},
+			RepoRefId:  "rId",
+		}
+		assert.NoError(t, pRef.Insert())
+
+		pUnattached := model.ProjectRef{
+			Id:         "pUnattached",
+			Owner:      "evergreen-ci",
+			Repo:       "evergreen",
+			Branch:     "main",
+			Restricted: utility.FalsePtr(),
+		}
+		assert.NoError(t, pUnattached.Insert())
+
+		pVars := model.ProjectVars{
+			Id:            pRef.Id,
+			Vars:          map[string]string{"a": "1", "b": "2", "c": "3"},
+			PrivateVars:   map[string]bool{"a": true},
+			AdminOnlyVars: map[string]bool{},
+		}
+		assert.NoError(t, pVars.Insert())
+
+		usr := user.DBUser{
+			Id:          "u",
+			SystemRoles: []string{"admin"},
+		}
+		require.NoError(t, usr.Insert())
+
+		t.Run(name, func(t *testing.T) {
+			test(t, pRef)
+		})
+	}
+}
+
 func TestCopyProject(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -561,42 +830,94 @@ func TestCopyProject(t *testing.T) {
 	env := testutil.NewEnvironment(ctx, t)
 	rm := env.RoleManager()
 
+	defer cocoaMock.ResetGlobalSecretCache()
+
+	smClient := &cocoaMock.SecretsManagerClient{}
+	defer func() {
+		assert.NoError(t, smClient.Close(ctx))
+	}()
+
 	for name, test := range map[string]func(t *testing.T, ref model.ProjectRef){
-		"Successfully copies project": func(t *testing.T, ref model.ProjectRef) {
+		"SuccessfullyCopiesProject": func(t *testing.T, ref model.ProjectRef) {
 			copyProjectOpts := CopyProjectOpts{
 				ProjectIdToCopy:      ref.Id,
 				NewProjectIdentifier: "myNewProject",
 				NewProjectId:         "12345",
 			}
-			newProject, err := CopyProject(ctx, copyProjectOpts)
+			newProject, err := CopyProject(ctx, env, copyProjectOpts)
 			assert.NoError(t, err)
-			assert.NotNil(t, newProject)
-			assert.Equal(t, *newProject.Identifier, "myNewProject")
-			assert.Equal(t, *newProject.Id, "12345")
+			require.NotNil(t, newProject)
+			assert.Equal(t, "myNewProject", utility.FromStringPtr(newProject.Identifier))
+			assert.Equal(t, "12345", utility.FromStringPtr(newProject.Id))
+
+			dbProjRef, err := model.FindBranchProjectRef(utility.FromStringPtr(newProject.Id))
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			require.Len(t, dbProjRef.ContainerSecrets, 2, "should create a new pod secret for the project and copy the existing repo creds from the old project")
+			for _, newSecret := range dbProjRef.ContainerSecrets {
+				if newSecret.Name == ref.ContainerSecrets[0].Name {
+					assert.Equal(t, model.ContainerSecretRepoCreds, newSecret.Type)
+					assert.NotZero(t, newSecret.ExternalName)
+					assert.NotZero(t, newSecret.ExternalID)
+					assert.NotEqual(t, ref.ContainerSecrets[0].ExternalName, newSecret.ExternalName, "should create a copy of the existing repo creds")
+					assert.NotEqual(t, ref.ContainerSecrets[0].ExternalID, newSecret.ExternalID)
+
+					getValOut, err := smClient.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
+						SecretId: utility.ToStringPtr(newSecret.ExternalID),
+					})
+					require.NoError(t, err, "copied secret should be stored")
+					assert.NotZero(t, utility.FromStringPtr(getValOut.SecretString))
+				} else {
+					assert.NotZero(t, newSecret.Name)
+					assert.EqualValues(t, model.ContainerSecretPodSecret, newSecret.Type)
+					assert.NotZero(t, newSecret.ExternalID)
+					assert.NotZero(t, newSecret.ExternalName)
+					getValOut, err := smClient.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
+						SecretId: utility.ToStringPtr(newSecret.ExternalID),
+					})
+					require.NoError(t, err, "copied secret should be stored")
+					assert.NotZero(t, utility.FromStringPtr(getValOut.SecretString))
+				}
+			}
 		},
-		"Copies project with partial error": func(t *testing.T, ref model.ProjectRef) {
+		"CopiesProjectWithPartialError": func(t *testing.T, ref model.ProjectRef) {
 			copyProjectOpts := CopyProjectOpts{
 				ProjectIdToCopy:      "myIdTwo",
 				NewProjectIdentifier: "mySecondProject",
 			}
-			newProject, err := CopyProject(ctx, copyProjectOpts)
+			newProject, err := CopyProject(ctx, env, copyProjectOpts)
 			assert.Error(t, err)
-			assert.NotNil(t, newProject)
-			assert.Equal(t, *newProject.Identifier, "mySecondProject")
+			require.NotNil(t, newProject)
+			assert.Equal(t, "mySecondProject", utility.FromStringPtr(newProject.Identifier))
 		},
-		"Does not copy project with fatal error": func(t *testing.T, ref model.ProjectRef) {
+		"DoesNotCopyProjectWithFatalError": func(t *testing.T, ref model.ProjectRef) {
 			copyProjectOpts := CopyProjectOpts{
 				ProjectIdToCopy:      "nonexistentId",
 				NewProjectIdentifier: "myThirdProject",
 			}
-			newProject, err := CopyProject(ctx, copyProjectOpts)
+			newProject, err := CopyProject(ctx, env, copyProjectOpts)
 			assert.Error(t, err)
 			assert.Nil(t, newProject)
 		},
 	} {
-		assert.NoError(t, db.ClearCollections(model.ProjectRefCollection, model.ProjectVarsCollection,
-			event.SubscriptionsCollection, event.AllLogCollection, evergreen.ScopeCollection, user.Collection))
+		assert.NoError(t, db.ClearCollections(model.ProjectRefCollection, model.ProjectVarsCollection, model.ProjectAliasCollection,
+			event.SubscriptionsCollection, event.EventCollection, evergreen.ScopeCollection, user.Collection, commitqueue.Collection))
 		require.NoError(t, db.CreateCollections(evergreen.ScopeCollection))
+
+		cocoaMock.ResetGlobalSecretCache()
+
+		const secretName = "secret_stored_name"
+		repoCreds := restModel.APIRepositoryCredentials{
+			Username: utility.ToStringPtr("username"),
+			Password: utility.ToStringPtr("password"),
+		}
+		storedRepoCreds, err := json.Marshal(repoCreds)
+		require.NoError(t, err)
+		createSecretOut, err := smClient.CreateSecret(ctx, &secretsmanager.CreateSecretInput{
+			Name:         aws.String(secretName),
+			SecretString: aws.String(string(storedRepoCreds)),
+		})
+		require.NoError(t, err)
 
 		pRef := model.ProjectRef{
 			Id:         "myId",
@@ -604,7 +925,16 @@ func TestCopyProject(t *testing.T) {
 			Repo:       "evergreen",
 			Branch:     "main",
 			Restricted: utility.FalsePtr(),
+			Enabled:    true,
 			Admins:     []string{"oldAdmin"},
+			ContainerSecrets: []model.ContainerSecret{
+				{
+					Name:         "super_secret",
+					Type:         model.ContainerSecretRepoCreds,
+					ExternalName: secretName,
+					ExternalID:   utility.FromStringPtr(createSecretOut.ARN),
+				},
+			},
 		}
 		assert.NoError(t, pRef.Insert())
 
@@ -676,6 +1006,243 @@ func TestCopyProject(t *testing.T) {
 		assert.NoError(t, existingSub.Upsert())
 		t.Run(name, func(t *testing.T) {
 			test(t, pRef)
+		})
+	}
+}
+
+func TestDeleteContainerSecrets(t *testing.T) {
+	defer func() {
+		cocoaMock.ResetGlobalSecretCache()
+
+		assert.NoError(t, db.ClearCollections(model.ProjectRefCollection))
+	}()
+
+	for tName, tCase := range map[string]func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef){
+		"NoopsForNoNames": func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef) {
+			remaining, err := DeleteContainerSecrets(ctx, mv, &pRef, nil)
+			require.NoError(t, err)
+			assert.Len(t, remaining, len(pRef.ContainerSecrets))
+
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			assert.Equal(t, dbProjRef.ContainerSecrets, pRef.ContainerSecrets)
+		},
+		"DeletesMatchingContainerSecretsByName": func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef) {
+			remaining, err := DeleteContainerSecrets(ctx, mv, &pRef, []string{
+				pRef.ContainerSecrets[0].Name,
+				pRef.ContainerSecrets[3].Name,
+			})
+			require.NoError(t, err)
+			require.Len(t, remaining, 2)
+
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			require.Len(t, dbProjRef.ContainerSecrets, 2)
+			assert.Equal(t, pRef.ContainerSecrets[1], dbProjRef.ContainerSecrets[0])
+			assert.Equal(t, pRef.ContainerSecrets[2], dbProjRef.ContainerSecrets[1])
+		},
+		"IgnoresNamesThatDoNotMatchAnyContainerSecrets": func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef) {
+			remaining, err := DeleteContainerSecrets(ctx, mv, &pRef, []string{"nonexistent"})
+			require.NoError(t, err)
+			assert.Len(t, remaining, len(pRef.ContainerSecrets))
+
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			assert.Equal(t, dbProjRef.ContainerSecrets, pRef.ContainerSecrets)
+		},
+		"RemovesContainerSecretsMissingExternalIDsWithoutModifyingDBProjectRef": func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef) {
+			pRef.ContainerSecrets[0].ExternalID = ""
+			require.NoError(t, pRef.Upsert())
+			remaining, err := DeleteContainerSecrets(ctx, mv, &pRef, []string{pRef.ContainerSecrets[0].Name})
+			require.NoError(t, err)
+			assert.Len(t, remaining, len(pRef.ContainerSecrets)-1)
+
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			assert.Equal(t, dbProjRef.ContainerSecrets, pRef.ContainerSecrets)
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			cocoaMock.ResetGlobalSecretCache()
+
+			require.NoError(t, db.ClearCollections(model.ProjectRefCollection))
+
+			pRef := model.ProjectRef{
+				Id:         "project_id",
+				Identifier: "project_identifier",
+				ContainerSecrets: []model.ContainerSecret{
+					{
+						Name:         "celadon",
+						ExternalName: "celadon",
+						Type:         model.ContainerSecretRepoCreds,
+					},
+					{
+						Name:         "minium",
+						ExternalName: "minium",
+						Type:         model.ContainerSecretPodSecret,
+					},
+					{
+						Name:         "orpiment",
+						ExternalName: "orpiment",
+						Type:         model.ContainerSecretRepoCreds,
+					},
+					{
+						Name:         "fuchsia",
+						ExternalName: "fuchsia",
+						Type:         model.ContainerSecretRepoCreds,
+					},
+				},
+			}
+			require.NoError(t, pRef.Insert())
+
+			smClient := &cocoaMock.SecretsManagerClient{}
+			v, err := cloud.MakeSecretsManagerVault(smClient)
+			require.NoError(t, err)
+			mv := cocoaMock.NewVault(v)
+
+			for _, secret := range pRef.ContainerSecrets {
+				_, err := mv.CreateSecret(ctx, *cocoa.NewNamedSecret().
+					SetName(secret.ExternalName).
+					SetValue(utility.RandomString()))
+				require.NoError(t, err)
+			}
+
+			// Re-find the project ref because creating the secret will update
+			// the container secret.
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			pRef = *dbProjRef
+			for _, secret := range pRef.ContainerSecrets {
+				require.NotZero(t, secret.ExternalID, "creating the container secret should have set the external ID")
+			}
+
+			tCase(ctx, t, mv, pRef)
+		})
+	}
+}
+
+func TestUpsertContainerSecrets(t *testing.T) {
+	defer func() {
+		cocoaMock.ResetGlobalSecretCache()
+
+		assert.NoError(t, db.ClearCollections(model.ProjectRefCollection))
+	}()
+
+	for tName, tCase := range map[string]func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef){
+		"NoopsWithoutAnyUpdatedContainerSecrets": func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef) {
+			require.NoError(t, UpsertContainerSecrets(ctx, mv, pRef.ContainerSecrets))
+
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			assert.Equal(t, dbProjRef.ContainerSecrets, pRef.ContainerSecrets)
+		},
+		"AddsNewContainerSecretToProjectRef": func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef) {
+			newSecret := model.ContainerSecret{
+				Name:         "churros",
+				ExternalName: "fried dough",
+				Type:         model.ContainerSecretRepoCreds,
+				Value:        "is yummy",
+			}
+			pRef.ContainerSecrets = append(pRef.ContainerSecrets, newSecret)
+			require.NoError(t, pRef.Upsert())
+			require.NoError(t, UpsertContainerSecrets(ctx, mv, pRef.ContainerSecrets))
+
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			require.Len(t, dbProjRef.ContainerSecrets, 2)
+			assert.Equal(t, pRef.ContainerSecrets[0], dbProjRef.ContainerSecrets[0])
+			assert.Equal(t, pRef.ContainerSecrets[1].Name, dbProjRef.ContainerSecrets[1].Name)
+			assert.Equal(t, pRef.ContainerSecrets[1].ExternalName, dbProjRef.ContainerSecrets[1].ExternalName)
+			assert.Equal(t, pRef.ContainerSecrets[1].Type, dbProjRef.ContainerSecrets[1].Type)
+			assert.NotZero(t, dbProjRef.ContainerSecrets[1].ExternalID)
+
+			value, err := mv.GetValue(ctx, dbProjRef.ContainerSecrets[1].ExternalID)
+			require.NoError(t, err)
+			assert.Equal(t, newSecret.Value, value, "stored value should match the given one")
+		},
+		"UpdatesExistingContainerSecretValue": func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef) {
+			const newValue = "new_secret_value"
+			pRef.ContainerSecrets[0].Value = newValue
+			require.NoError(t, pRef.Upsert())
+			require.NoError(t, UpsertContainerSecrets(ctx, mv, pRef.ContainerSecrets))
+
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			assert.Equal(t, pRef.ContainerSecrets[0].Name, dbProjRef.ContainerSecrets[0].Name)
+			assert.Equal(t, pRef.ContainerSecrets[0].Type, dbProjRef.ContainerSecrets[0].Type)
+			assert.Equal(t, pRef.ContainerSecrets[0].ExternalName, dbProjRef.ContainerSecrets[0].ExternalName)
+			assert.Equal(t, pRef.ContainerSecrets[0].ExternalID, dbProjRef.ContainerSecrets[0].ExternalID)
+
+			value, err := mv.GetValue(ctx, pRef.ContainerSecrets[0].ExternalID)
+			require.NoError(t, err)
+			assert.Equal(t, newValue, value, "stored value for existing secret should be updated")
+		},
+		"FailsWithoutContainerSecretInDBProjectRef": func(ctx context.Context, t *testing.T, mv *cocoaMock.Vault, pRef model.ProjectRef) {
+			newSecret := model.ContainerSecret{
+				Name:  "new_secret",
+				Value: "new_value",
+			}
+			pRef.ContainerSecrets = append(pRef.ContainerSecrets, newSecret)
+			assert.Error(t, UpsertContainerSecrets(ctx, mv, pRef.ContainerSecrets))
+
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			require.Len(t, dbProjRef.ContainerSecrets, 1)
+			assert.Equal(t, pRef.ContainerSecrets[0], dbProjRef.ContainerSecrets[0])
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+
+			cocoaMock.ResetGlobalSecretCache()
+
+			require.NoError(t, db.ClearCollections(model.ProjectRefCollection))
+
+			pRef := model.ProjectRef{
+				Id:         "project_id",
+				Identifier: "project_identifier",
+				ContainerSecrets: []model.ContainerSecret{
+					{
+						Name:         "torta",
+						ExternalName: "cake",
+						Type:         model.ContainerSecretPodSecret,
+					},
+				},
+			}
+			require.NoError(t, pRef.Insert())
+
+			smClient := &cocoaMock.SecretsManagerClient{}
+			v, err := cloud.MakeSecretsManagerVault(smClient)
+			require.NoError(t, err)
+			mv := cocoaMock.NewVault(v)
+
+			_, err = v.CreateSecret(ctx, *cocoa.NewNamedSecret().
+				SetName(pRef.ContainerSecrets[0].ExternalName).
+				SetValue("is a lie"))
+			require.NoError(t, err)
+
+			// Re-find the project ref because creating the secret will update
+			// the container secret.
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			pRef = *dbProjRef
+			require.NotZero(t, dbProjRef.ContainerSecrets[0].ExternalID, "creating the container secret should have set the external ID")
+
+			tCase(ctx, t, mv, pRef)
 		})
 	}
 }

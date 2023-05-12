@@ -3,7 +3,7 @@ package command
 import (
 	"bytes"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -11,6 +11,7 @@ import (
 
 	"github.com/evergreen-ci/evergreen/testutil"
 	. "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -90,7 +91,7 @@ func TestParserFunctionality(t *testing.T) {
 	cwd := testutil.GetDirectoryOfFile()
 
 	Convey("With a simple log file and parser", t, func() {
-		logdata, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "gotest", "1_simple.log"))
+		logdata, err := os.ReadFile(filepath.Join(cwd, "testdata", "gotest", "1_simple.log"))
 		require.NoError(t, err, "couldn't open log file")
 		parser := &goTestParser{}
 
@@ -125,7 +126,7 @@ func TestParserFunctionality(t *testing.T) {
 		})
 	})
 	Convey("With a gocheck log file and parser", t, func() {
-		logdata, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "gotest", "2_simple.log"))
+		logdata, err := os.ReadFile(filepath.Join(cwd, "testdata", "gotest", "2_simple.log"))
 		require.NoError(t, err, "couldn't open log file")
 		parser := &goTestParser{}
 
@@ -154,7 +155,7 @@ func TestParserFunctionality(t *testing.T) {
 		})
 	})
 	Convey("un-terminated tests are failures", t, func() {
-		logdata, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "gotest", "3_simple.log"))
+		logdata, err := os.ReadFile(filepath.Join(cwd, "testdata", "gotest", "3_simple.log"))
 		require.NoError(t, err, "couldn't open log file")
 		parser := &goTestParser{}
 		err = parser.Parse(bytes.NewBuffer(logdata))
@@ -166,7 +167,7 @@ func TestParserFunctionality(t *testing.T) {
 		So(results[0].Status, ShouldEqual, FAIL)
 	})
 	Convey("testify suites with leading spaces", t, func() {
-		logdata, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "gotest", "4_simple.log"))
+		logdata, err := os.ReadFile(filepath.Join(cwd, "testdata", "gotest", "4_simple.log"))
 		So(err, ShouldBeNil)
 
 		parser := &goTestParser{}
@@ -179,7 +180,7 @@ func TestParserFunctionality(t *testing.T) {
 		So(results[18].Status, ShouldEqual, PASS)
 	})
 	Convey("gotest log with multiple executions of the same test", t, func() {
-		logdata, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "gotest", "5_simple.log"))
+		logdata, err := os.ReadFile(filepath.Join(cwd, "testdata", "gotest", "5_simple.log"))
 		So(err, ShouldBeNil)
 
 		parser := &goTestParser{}
@@ -196,7 +197,7 @@ func TestParserFunctionality(t *testing.T) {
 	})
 
 	Convey("gotest log with negative duration", t, func() {
-		logdata, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "gotest", "6_simple.log"))
+		logdata, err := os.ReadFile(filepath.Join(cwd, "testdata", "gotest", "6_simple.log"))
 		So(err, ShouldBeNil)
 
 		parser := &goTestParser{}
@@ -209,7 +210,7 @@ func TestParserFunctionality(t *testing.T) {
 	})
 
 	Convey("deeply nested Subtests", t, func() {
-		logdata, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "gotest", "7_simple.log"))
+		logdata, err := os.ReadFile(filepath.Join(cwd, "testdata", "gotest", "7_simple.log"))
 		So(err, ShouldBeNil)
 
 		parser := &goTestParser{}
@@ -234,12 +235,20 @@ func TestParserFunctionality(t *testing.T) {
 	})
 
 	Convey("gotest log with failed build", t, func() {
-		logdata, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "gotest", "8_simple.log"))
+		logdata, err := os.ReadFile(filepath.Join(cwd, "testdata", "gotest", "8_simple.log"))
 		So(err, ShouldBeNil)
 
 		parser := &goTestParser{}
 		err = parser.Parse(bytes.NewBuffer(logdata))
 		So(err, ShouldNotBeNil)
 		So(err.Error(), ShouldContainSubstring, "github.com/evergreen-ci/evergreen/model/host")
+	})
+
+	t.Run("LargeLogLine", func(t *testing.T) {
+		logdata, err := os.ReadFile(filepath.Join(cwd, "testdata", "gotest", "large_line.log"))
+		require.NoError(t, err)
+
+		parser := &goTestParser{}
+		assert.Error(t, parser.Parse(bytes.NewBuffer(logdata)))
 	})
 }

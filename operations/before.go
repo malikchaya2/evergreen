@@ -5,7 +5,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/send"
@@ -38,13 +37,13 @@ var (
 		path := c.String(pathFlagName)
 		if path == "" {
 			if c.NArg() != 1 {
-				return errors.New("must specify the path to an evergreen configuration")
+				return errors.New("must specify the path to an Evergreen configuration")
 			}
 			path = c.Args().Get(0)
 		}
 
 		if _, err := os.Stat(path); os.IsNotExist(err) {
-			return errors.Errorf("configuration file %s does not exist", path)
+			return errors.Errorf("configuration file '%s' does not exist", path)
 		}
 
 		return c.Set(pathFlagName, path)
@@ -54,12 +53,22 @@ var (
 		host := c.String(hostFlagName)
 		if host == "" {
 			if c.NArg() != 1 {
-				return errors.New("must specify a host id")
+				return errors.New("must specify a host ID")
 			}
 			host = c.Args().Get(0)
 		}
 
 		return c.Set(hostFlagName, host)
+	}
+
+	checkCommitMessageFlag = func(c *cli.Context) error {
+		message := c.String(commitMessageFlag)
+		if message != "" {
+			if c.NArg() > 1 {
+				return errors.New("multiple arguments passed in for commit message, please consider using quotations")
+			}
+		}
+		return nil
 	}
 
 	requireProjectFlag = func(c *cli.Context) error {
@@ -72,7 +81,7 @@ var (
 	requirePatchIDFlag = func(c *cli.Context) error {
 		patch := c.String(patchIDFlagName)
 		if patch == "" {
-			return errors.New("must specify a patch id")
+			return errors.New("must specify a patch ID")
 		}
 		return nil
 	}
@@ -102,11 +111,31 @@ var (
 	// Some functions that one would expect to return quickly have been omitted from having this as a 'before' function since downloading and installing
 	// takes time that would be cumbersome to the user (e.g. list functions, delete functions).
 	autoUpdateCLI = func(c *cli.Context) error {
-		confPath := c.String("conf")
-		// we do not return an error in case of failure to find a valid config path because we do not want to block the underlying CLI operation.
+		rootCtx := c
+		var i int
+		// Since this could be used at any sub-command context level, walk up
+		// the parent contexts until the root context containing the config flag
+		// is found.
+		// Parent() should return either nil (no parent) or the exact
+		// same context (the root context's parent is self-referential).
+		for parentCtx := rootCtx.Parent(); parentCtx != nil && parentCtx != rootCtx; parentCtx = rootCtx.Parent() {
+			if i > 10 {
+				// This is just to avoid a potential infinite loop. It seems
+				// really unlikely the CLI will have more than 10 nested
+				// sub-commands.
+				break
+			}
+			rootCtx = parentCtx
+			i++
+		}
+
+		confPath := rootCtx.String(confFlagName)
+		// we do not return an error in case of failure to find the config path flag because we do not want to block the underlying CLI operation.
 		if confPath == "" {
+			grip.Warning("Config path flag had no config set, skipping auto upgrade CLI check.")
 			return nil
 		}
+
 		conf, err := NewClientSettings(confPath)
 		if err != nil {
 			grip.Errorf("Problem loading configuration: %s", err.Error())
@@ -142,7 +171,7 @@ func requireStringFlag(name string) cli.BeforeFunc {
 	}
 }
 
-// nolint: unused, deadcode
+//nolint:unused
 func requireStringSliceValueChoices(name string, options []string) cli.BeforeFunc {
 	return func(c *cli.Context) error {
 		catcher := grip.NewBasicCatcher()
@@ -252,21 +281,9 @@ func requireWorkingDirFlag(dirFlagName string) cli.BeforeFunc {
 			var err error
 			wd, err = os.Getwd()
 			if err != nil {
-				return errors.Wrap(err, "cannot find working directory")
+				return errors.Wrap(err, "finding working directory")
 			}
 			return c.Set(dirFlagName, wd)
-		}
-		return nil
-	}
-}
-
-// cleanupFilePathSeparators fixes the file path separators to ensure they are
-// forward slashes (i.e. to clean up Windows file paths).
-func cleanupFilePathSeparators(names ...string) cli.BeforeFunc {
-	return func(c *cli.Context) error {
-		for _, name := range names {
-			cleanPath := util.ConsistentFilepath(c.String(name))
-			return errors.Wrapf(c.Set(name, cleanPath), "cleaning up flag '%s'", name)
 		}
 		return nil
 	}

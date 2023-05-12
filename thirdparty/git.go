@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -34,9 +33,9 @@ type Commit struct {
 // GitApplyNumstat attempts to apply a given patch; it returns the patch's bytes
 // if it is successful
 func GitApplyNumstat(patch string) (*bytes.Buffer, error) {
-	handle, err := ioutil.TempFile("", utility.RandomString())
+	handle, err := os.CreateTemp("", utility.RandomString())
 	if err != nil {
-		return nil, errors.New("Unable to create local patch file")
+		return nil, errors.Wrapf(err, "creating local patch file")
 	}
 	defer func() {
 		grip.Error(handle.Close())
@@ -49,14 +48,14 @@ func GitApplyNumstat(patch string) (*bytes.Buffer, error) {
 		// read a chunk
 		n, err := buffer.Read(buf)
 		if err != nil && err != io.EOF {
-			return nil, errors.New("Unable to read supplied patch file")
+			return nil, errors.Wrapf(err, "reading supplied patch file")
 		}
 		if n == 0 {
 			break
 		}
 		// write a chunk
 		if _, err := handle.Write(buf[:n]); err != nil {
-			return nil, errors.New("Unable to write supplied patch file")
+			return nil, errors.Wrapf(err, "writing supplied patch file")
 		}
 	}
 
@@ -69,13 +68,13 @@ func GitApplyNumstat(patch string) (*bytes.Buffer, error) {
 
 	// this should never happen if patch is initially validated
 	if err := cmd.Start(); err != nil {
-		return nil, errors.Wrapf(err, "Error validating patch: 424 - %v",
+		return nil, errors.Wrapf(err, "starting 'git apply --numstat': 424 - %v",
 			summaryBuffer.String())
 	}
 
 	// this should never happen if patch is initially validated
 	if err := cmd.Wait(); err != nil {
-		return nil, errors.Wrapf(err, "Error waiting on patch: 562 - %v",
+		return nil, errors.Wrapf(err, "running 'git apply --numstat': 562 - %v",
 			summaryBuffer.String())
 	}
 	return &summaryBuffer, nil
@@ -139,15 +138,15 @@ func GetPatchSummaries(patchContent string) ([]Summary, error) {
 	if patchContent != "" {
 		gitOutput, err := GitApplyNumstat(patchContent)
 		if err != nil {
-			return nil, errors.Wrap(err, "couldn't validate patch")
+			return nil, errors.Wrap(err, "validating patch")
 		}
 		if gitOutput == nil {
-			return nil, errors.New("couldn't validate patch: git apply --numstat returned empty")
+			return nil, errors.New("validating patch: `git apply --numstat` returned empty")
 		}
 
 		summaries, err = ParseGitSummary(gitOutput)
 		if err != nil {
-			return nil, errors.Wrap(err, "couldn't parse git summary")
+			return nil, errors.Wrap(err, "parsing git summary")
 		}
 	}
 	return summaries, nil
@@ -187,7 +186,7 @@ func GetDiffsFromMboxPatch(patchContent string) (string, error) {
 
 // getCommitsFromMboxPatch returns commit information from an mbox patch
 func getCommitsFromMboxPatch(mboxPatch string) ([]Commit, error) {
-	tmpDir, err := ioutil.TempDir("", "patch_summaries_by_commit")
+	tmpDir, err := os.MkdirTemp("", "patch_summaries_by_commit")
 	if err != nil {
 		return nil, errors.Wrap(err, "problem creating temporary directory")
 	}
@@ -200,7 +199,7 @@ func getCommitsFromMboxPatch(mboxPatch string) ([]Commit, error) {
 	}
 
 	commits := []Commit{}
-	files, err := ioutil.ReadDir(tmpDir)
+	files, err := os.ReadDir(tmpDir)
 	if err != nil {
 		return nil, errors.Wrap(err, "problem listing split patches")
 	}
@@ -235,7 +234,7 @@ func getCommitsFromMboxPatch(mboxPatch string) ([]Commit, error) {
 			commitMessage = fmt.Sprintf("%s...", commitMessage)
 		}
 
-		patchBytes, err := ioutil.ReadFile(patchFile)
+		patchBytes, err := os.ReadFile(patchFile)
 		if err != nil {
 			return nil, errors.Wrap(err, "problem reading patch file")
 		}

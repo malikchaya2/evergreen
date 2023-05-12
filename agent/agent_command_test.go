@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 	"strings"
 	"testing"
@@ -17,6 +16,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
+	"go.opentelemetry.io/otel"
 )
 
 type CommandSuite struct {
@@ -39,13 +39,13 @@ func (s *CommandSuite) SetupTest() {
 			StatusPort: 2286,
 			LogPrefix:  evergreen.LocalLoggingOverride,
 		},
-		comm: client.NewMock("url"),
+		comm:   client.NewMock("url"),
+		tracer: otel.GetTracerProvider().Tracer("noop_tracer"),
 	}
 	s.mockCommunicator = s.a.comm.(*client.Mock)
 
 	var err error
-	s.tmpDirName, err = ioutil.TempDir("", "agent-command-suite-")
-	s.Require().NoError(err)
+	s.tmpDirName = s.T().TempDir()
 	s.a.jasper, err = jasper.NewSynchronizedManager(false)
 	s.Require().NoError(err)
 
@@ -58,12 +58,30 @@ func (s *CommandSuite) SetupTest() {
 	}
 }
 
-func (s *CommandSuite) TearDownTest() {
-	s.Require().NoError(os.RemoveAll(s.tmpDirName))
+func (s *CommandSuite) TestPreErrorFailsWithSetup() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	taskID := "pre_error"
+	s.tc.task.ID = taskID
+	s.tc.ranSetupGroup = false
+
+	defer s.a.removeTaskDirectory(s.tc)
+	_, err := s.a.runTask(ctx, s.tc)
+	s.NoError(err)
+	detail := s.mockCommunicator.GetEndTaskDetail()
+	s.Equal(evergreen.TaskFailed, detail.Status)
+	s.Equal(evergreen.CommandTypeSetup, detail.Type)
+	s.Contains(detail.Description, "shell.exec")
+	s.False(detail.TimedOut)
+
+	taskData := s.mockCommunicator.EndTaskResult.TaskData
+	s.Equal(taskID, taskData.ID)
+	s.Equal(s.tc.task.Secret, taskData.Secret)
 }
 
 func (s *CommandSuite) TestShellExec() {
-	f, err := ioutil.TempFile(s.tmpDirName, "shell-exec-")
+	f, err := os.CreateTemp(s.tmpDirName, "shell-exec-")
 	s.Require().NoError(err)
 	defer os.Remove(f.Name())
 
@@ -92,7 +110,7 @@ func (s *CommandSuite) TestShellExec() {
 		if msg.Message == "Task completed - SUCCESS." {
 			foundSuccessLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Finished 'shell.exec'") {
+		if strings.HasPrefix(msg.Message, "Finished command 'shell.exec'") {
 			foundShellLogMessage = true
 		}
 	}
@@ -105,7 +123,7 @@ func (s *CommandSuite) TestShellExec() {
 	s.Contains(detail.Description, "shell.exec")
 	s.False(detail.TimedOut)
 
-	data, err := ioutil.ReadFile(tmpFile)
+	data, err := os.ReadFile(tmpFile)
 	s.Require().NoError(err)
 	s.Equal("shell.exec test message", strings.Trim(string(data), "\r\n"))
 

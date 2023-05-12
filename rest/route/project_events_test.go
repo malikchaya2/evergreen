@@ -29,7 +29,7 @@ func getTestProjectSettings(projectId string) model.ProjectSettings {
 	return model.ProjectSettings{
 		ProjectRef: model.ProjectRef{
 			Owner:      "admin",
-			Enabled:    utility.TruePtr(),
+			Enabled:    true,
 			Private:    utility.TruePtr(),
 			Identifier: projectId,
 			Admins:     []string{},
@@ -62,23 +62,27 @@ func (s *ProjectEventsTestSuite) SetupSuite() {
 	beforeSettings := getTestProjectSettings(s.projectId)
 
 	afterSettings := getTestProjectSettings(s.projectId)
-	afterSettings.ProjectRef.Enabled = utility.FalsePtr()
+	afterSettings.ProjectRef.Enabled = false
 
 	s.event = model.ProjectChangeEvent{
-		User:   "me",
-		Before: beforeSettings,
-		After:  afterSettings,
+		User: "me",
+		Before: model.ProjectSettingsEvent{
+			ProjectSettings: beforeSettings,
+		},
+		After: model.ProjectSettingsEvent{
+			ProjectSettings: afterSettings,
+		},
 	}
 
-	s.NoError(db.ClearCollections(event.AllLogCollection, model.ProjectRefCollection))
+	s.NoError(db.ClearCollections(event.EventCollection, model.ProjectRefCollection))
 
 	projectRef := &model.ProjectRef{
 		Id:      "mci2",
-		Enabled: utility.TruePtr(),
+		Enabled: true,
 	}
 	s.NoError(projectRef.Insert())
 
-	s.NoError(model.LogProjectEvent(model.EventTypeProjectAdded, "mci2", s.event))
+	s.NoError(model.LogProjectEvent(event.EventTypeProjectAdded, "mci2", s.event))
 }
 
 func (s *ProjectEventsTestSuite) TestGetProjectEvents() {

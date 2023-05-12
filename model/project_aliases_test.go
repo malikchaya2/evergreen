@@ -7,7 +7,9 @@ import (
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
+	"github.com/evergreen-ci/utility"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -27,10 +29,11 @@ func (s *ProjectAliasSuite) SetupTest() {
 	s.aliases = []ProjectAlias{}
 	for i := 0; i < 10; i++ {
 		s.aliases = append(s.aliases, ProjectAlias{
-			ProjectID: fmt.Sprintf("project-%d", i),
-			Alias:     fmt.Sprintf("alias-%d", i),
-			Variant:   fmt.Sprintf("variant-%d", i),
-			Task:      fmt.Sprintf("task-%d", i),
+			ProjectID:   fmt.Sprintf("project-%d", i),
+			Alias:       fmt.Sprintf("alias-%d", i),
+			Variant:     fmt.Sprintf("variant-%d", i),
+			Task:        fmt.Sprintf("task-%d", i),
+			Description: fmt.Sprintf("description-%d", i),
 		})
 	}
 }
@@ -48,6 +51,7 @@ func (s *ProjectAliasSuite) TestInsertTaskAndVariantWithNoTags() {
 		s.Equal(a.Alias, out.Alias)
 		s.Equal(a.Variant, out.Variant)
 		s.Equal(a.Task, out.Task)
+		s.Equal(a.Description, out.Description)
 	}
 }
 
@@ -70,6 +74,7 @@ func (s *ProjectAliasSuite) TestInsertTagsAndNoTask() {
 		s.Empty(out.VariantTags)
 		s.Equal("", out.Task)
 		s.Equal(tags, out.TaskTags)
+		s.Equal(a.Description, out.Description)
 	}
 }
 
@@ -138,6 +143,7 @@ func (s *ProjectAliasSuite) TestInsertTagsAndNoVariant() {
 		s.Empty(out.TaskTags)
 		s.Equal("", out.Variant)
 		s.Equal(tags, out.VariantTags)
+		s.Equal(a.Description, out.Description)
 	}
 }
 
@@ -201,17 +207,17 @@ func (s *ProjectAliasSuite) TestFindAliasInProject() {
 	s.NoError(a2.Upsert())
 	s.NoError(a3.Upsert())
 
-	found, shouldExit, err := findMatchingAliasForProjectRef("project-1", "alias-1")
+	found, err := findMatchingAliasForProjectRef("project-1", "alias-1")
 	s.NoError(err)
-	s.True(shouldExit)
 	s.Len(found, 2)
 }
 
-func (s *ProjectAliasSuite) TestMergeAliasesWithProjectConfig() {
+func (s *ProjectAliasSuite) TestFindAliasInProjectOrConfig() {
 	s.Require().NoError(db.ClearCollections(ProjectAliasCollection, ProjectConfigCollection, ProjectRefCollection))
 	pRef := ProjectRef{
-		Id:        "project-1",
-		RepoRefId: "r1",
+		Id:                    "project-1",
+		RepoRefId:             "r1",
+		VersionControlEnabled: utility.TruePtr(),
 	}
 	s.NoError(pRef.Upsert())
 	a1 := ProjectAlias{
@@ -230,10 +236,16 @@ func (s *ProjectAliasSuite) TestMergeAliasesWithProjectConfig() {
 		ProjectID: "project-1",
 		Alias:     "alias-0",
 	}
+	duplicateAlias := ProjectAlias{
+		ProjectID:   "project-1",
+		Alias:       "duplicate",
+		Description: "from UI",
+	}
 	s.NoError(a1.Upsert())
 	s.NoError(a2.Upsert())
 	s.NoError(a3.Upsert())
 	s.NoError(patchAlias.Upsert())
+	s.NoError(duplicateAlias.Upsert())
 
 	projectConfig := &ProjectConfig{
 		Id:      "project-1",
@@ -241,14 +253,17 @@ func (s *ProjectAliasSuite) TestMergeAliasesWithProjectConfig() {
 		ProjectConfigFields: ProjectConfigFields{
 			PatchAliases: []ProjectAlias{
 				{
-					ID:        mgobson.NewObjectId(),
-					ProjectID: "project-1",
-					Alias:     "alias-2",
+					ID:    mgobson.NewObjectId(),
+					Alias: "alias-2",
 				},
 				{
-					ID:        mgobson.NewObjectId(),
-					ProjectID: "project-1",
-					Alias:     "alias-1",
+					ID:    mgobson.NewObjectId(),
+					Alias: "alias-1",
+				},
+				{
+					ID:          mgobson.NewObjectId(),
+					Alias:       "duplicate",
+					Description: "from project config",
 				},
 			},
 			CommitQueueAliases: []ProjectAlias{
@@ -281,32 +296,136 @@ func (s *ProjectAliasSuite) TestMergeAliasesWithProjectConfig() {
 	projectAliases, err = FindAliasInProjectRepoOrConfig("project-1", "alias-0")
 	s.NoError(err)
 	s.Len(projectAliases, 1)
-
-	projectAliases, err = FindAliasInProjectRepoOrConfig("project-1", "alias-2")
-	s.NoError(err)
-	s.Len(projectAliases, 0)
-
-	projectAliases, err = FindAliasInProjectRepoOrConfig("project-1", "alias-2")
-	s.NoError(err)
-	s.Len(projectAliases, 0)
-
-	projectAliases, err = FindAliasInProjectRepoOrConfig("project-1", "nonexistent")
-	s.NoError(err)
-	s.Len(projectAliases, 0)
-}
-
-func (s *ProjectAliasSuite) TestFindAliasInProjectOrPatchedConfig() {
-	projYml := `
-patch_aliases:
-  - alias: "test"
-    variant: "^ubuntu1604$"
-    task: "^test.*$"
-    remote_path: ""
-`
-	projectAliases, err := FindAliasInProjectRepoOrPatchedConfig("", "test", projYml)
+	projectAliases, err = FindAliasInProjectRepoOrConfig("project-1", "alias-1")
 	s.NoError(err)
 	s.Len(projectAliases, 1)
-	s.Equal("^ubuntu1604$", projectAliases[0].Variant)
+	projectAliases, err = FindAliasInProjectRepoOrConfig("project-1", "alias-2")
+	s.NoError(err)
+	s.Len(projectAliases, 1)
+
+	// If the same alias is defined in both UI and project config,
+	// UI takes precedence.
+	projectAliases, err = FindAliasInProjectRepoOrConfig("project-1", "duplicate")
+	s.NoError(err)
+	s.Len(projectAliases, 1)
+	s.Equal("from UI", projectAliases[0].Description)
+
+}
+
+func TestFindMergedAliasesFromProjectRepoOrProjectConfig(t *testing.T) {
+	pRef := ProjectRef{
+		Id:                    "p1",
+		RepoRefId:             "r1",
+		VersionControlEnabled: utility.TruePtr(),
+	}
+	cqAliases := []ProjectAlias{
+		{
+			Alias:       evergreen.CommitQueueAlias,
+			Description: "first",
+		},
+		{
+			Alias:       evergreen.CommitQueueAlias,
+			Description: "second",
+		},
+	}
+	gitTagAliases := []ProjectAlias{
+		{
+			Alias:       evergreen.GitTagAlias,
+			Description: "first",
+		},
+		{
+			Alias:       evergreen.GitTagAlias,
+			Description: "second",
+		},
+	}
+	patchAliases := []ProjectAlias{
+		{
+			Alias: "something rad",
+		},
+		{
+			Alias: "something dastardly",
+		},
+	}
+	projectConfig := ProjectConfig{ProjectConfigFields: ProjectConfigFields{
+		PatchAliases: []ProjectAlias{
+			{
+				Alias: "something cool",
+			},
+		},
+		CommitQueueAliases: []ProjectAlias{
+			{
+				Alias: "something useless",
+			},
+		},
+	}}
+
+	for testName, testCase := range map[string]func(t *testing.T){
+		"nothing enabled": func(t *testing.T) {
+			assert.NoError(t, UpsertAliasesForProject(cqAliases, pRef.Id))
+			assert.NoError(t, UpsertAliasesForProject(gitTagAliases, pRef.RepoRefId))
+			tempRef := ProjectRef{ // This ref has nothing else enabled so merging should only return project aliases
+				Id: pRef.Id,
+			}
+			res, err := ConstructMergedAliasesByPrecedence(&tempRef, &projectConfig, "")
+			assert.NoError(t, err)
+			require.Len(t, res, 2)
+			assert.Equal(t, res[0].ProjectID, pRef.Id)
+			assert.Equal(t, res[1].ProjectID, pRef.Id)
+		},
+		"all enabled": func(t *testing.T) {
+			assert.NoError(t, UpsertAliasesForProject(cqAliases, pRef.Id))
+			assert.NoError(t, UpsertAliasesForProject(cqAliases, pRef.RepoRefId))
+			assert.NoError(t, UpsertAliasesForProject(gitTagAliases, pRef.RepoRefId))
+			res, err := ConstructMergedAliasesByPrecedence(&pRef, &projectConfig, pRef.RepoRefId)
+			assert.NoError(t, err)
+			// Uses aliases from project, repo, and config
+			require.Len(t, res, 5)
+			cqCount := 0
+			// There should only be two commit queue aliases, and they should all be from the project
+			for _, a := range res {
+				if a.Alias == evergreen.CommitQueueAlias {
+					cqCount++
+					assert.Equal(t, a.ProjectID, pRef.Id)
+					assert.Equal(t, a.Source, AliasSourceProject)
+				} else if a.Alias == evergreen.GitTagAlias {
+					assert.Equal(t, a.ProjectID, pRef.RepoRefId)
+					assert.Equal(t, a.Source, AliasSourceRepo)
+				} else {
+					assert.Equal(t, a.Source, AliasSourceConfig)
+				}
+			}
+			assert.Equal(t, cqCount, 2)
+		},
+		"project and repo only used": func(t *testing.T) {
+			assert.NoError(t, UpsertAliasesForProject(cqAliases, pRef.Id))
+			assert.NoError(t, UpsertAliasesForProject(cqAliases, pRef.RepoRefId))
+			assert.NoError(t, UpsertAliasesForProject(patchAliases, pRef.RepoRefId))
+			res, err := ConstructMergedAliasesByPrecedence(&pRef, &projectConfig, pRef.RepoRefId)
+			assert.NoError(t, err)
+			// Ignores config aliases because they're already used
+			require.Len(t, res, 4)
+			cqCount := 0
+			patchCount := 0
+			for _, a := range res {
+				if a.Alias == evergreen.CommitQueueAlias {
+					cqCount++
+					assert.Equal(t, a.ProjectID, pRef.Id)
+					assert.Equal(t, a.Source, AliasSourceProject)
+				} else {
+					patchCount++
+					assert.Equal(t, a.ProjectID, pRef.RepoRefId)
+					assert.Equal(t, a.Source, AliasSourceRepo)
+				}
+			}
+			assert.Equal(t, cqCount, 2)
+			assert.Equal(t, patchCount, 2)
+		},
+	} {
+		assert.NoError(t, db.ClearCollections(ProjectRefCollection, RepoRefCollection,
+			ProjectConfigCollection, ProjectAliasCollection))
+
+		t.Run(testName, testCase)
+	}
 }
 
 func (s *ProjectAliasSuite) TestFindAliasInProjectOrRepo() {
@@ -364,11 +483,6 @@ func (s *ProjectAliasSuite) TestFindAliasInProjectOrRepo() {
 	found, err = FindAliasInProjectRepoOrConfig(pRef2.Id, "alias-1")
 	s.NoError(err)
 	s.Len(found, 2)
-
-	// Test project doesn't match alias but other patch aliases are defined so we don't continue to repo
-	found, err = FindAliasInProjectRepoOrConfig(pRef1.Id, "alias-1")
-	s.NoError(err)
-	s.Len(found, 0)
 
 	// Test non-existent project
 	found, err = FindAliasInProjectRepoOrConfig("bad-project", "alias-1")

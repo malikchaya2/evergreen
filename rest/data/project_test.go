@@ -1,15 +1,24 @@
 package data
 
 import (
+	"context"
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go/service/secretsmanager"
+	cocoaMock "github.com/evergreen-ci/cocoa/mock"
+	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
+	"github.com/evergreen-ci/evergreen/mock"
 	"github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/evergreen/model/event"
+	"github.com/evergreen-ci/evergreen/model/notification"
+	"github.com/evergreen-ci/evergreen/model/user"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/utility"
+	"github.com/mongodb/grip/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/stretchr/testify/suite"
@@ -35,11 +44,16 @@ const (
 func getMockProjectSettings() model.ProjectSettings {
 	return model.ProjectSettings{
 		ProjectRef: model.ProjectRef{
-			Owner:   "admin",
-			Enabled: utility.TruePtr(),
-			Private: utility.TruePtr(),
-			Id:      projectId,
-			Admins:  []string{},
+			Owner:          "admin",
+			Enabled:        true,
+			Private:        utility.TruePtr(),
+			Id:             projectId,
+			Admins:         []string{},
+			PeriodicBuilds: nil,
+			WorkstationConfig: model.WorkstationConfig{
+				SetupCommands: nil,
+				GitClone:      nil,
+			},
 		},
 		GithubHooksEnabled: true,
 		Vars: model.ProjectVars{
@@ -77,7 +91,7 @@ func TestProjectConnectorGetSuite(t *testing.T) {
 			{
 				Id:          "projectA",
 				Private:     utility.FalsePtr(),
-				Enabled:     utility.TruePtr(),
+				Enabled:     true,
 				CommitQueue: model.CommitQueueParams{Enabled: utility.TruePtr()},
 				Owner:       "evergreen-ci",
 				Repo:        "gimlet",
@@ -86,7 +100,7 @@ func TestProjectConnectorGetSuite(t *testing.T) {
 			{
 				Id:          "projectB",
 				Private:     utility.TruePtr(),
-				Enabled:     utility.TruePtr(),
+				Enabled:     true,
 				CommitQueue: model.CommitQueueParams{Enabled: utility.TruePtr()},
 				Owner:       "evergreen-ci",
 				Repo:        "evergreen",
@@ -95,7 +109,7 @@ func TestProjectConnectorGetSuite(t *testing.T) {
 			{
 				Id:          "projectC",
 				Private:     utility.TruePtr(),
-				Enabled:     utility.TruePtr(),
+				Enabled:     true,
 				CommitQueue: model.CommitQueueParams{Enabled: utility.TruePtr()},
 				Owner:       "mongodb",
 				Repo:        "mongo",
@@ -118,7 +132,7 @@ func TestProjectConnectorGetSuite(t *testing.T) {
 
 		vars := &model.ProjectVars{
 			Id:          projectId,
-			Vars:        map[string]string{"a": "1", "b": "3"},
+			Vars:        map[string]string{"a": "1", "b": "3", "d": "4"},
 			PrivateVars: map[string]bool{"b": true},
 		}
 		s.NoError(vars.Insert())
@@ -131,27 +145,33 @@ func TestProjectConnectorGetSuite(t *testing.T) {
 		before := getMockProjectSettings()
 		after := getMockProjectSettings()
 		after.GithubHooksEnabled = false
+		after.ProjectRef.WorkstationConfig.SetupCommands = []model.WorkstationSetupCommand{}
 		s.NotEmpty(before.Aliases[0].ID)
 		s.NotEmpty(after.Aliases[0].ID)
 
 		h :=
 			event.EventLogEntry{
 				Timestamp:    time.Now(),
-				ResourceType: model.EventResourceTypeProject,
-				EventType:    model.EventTypeProjectModified,
+				ResourceType: event.EventResourceTypeProject,
+				EventType:    event.EventTypeProjectModified,
 				ResourceId:   projectId,
 				Data: &model.ProjectChangeEvent{
-					User:   username,
-					Before: before,
-					After:  after,
+					User: username,
+					Before: model.ProjectSettingsEvent{
+						PeriodicBuildsDefault:      true,
+						WorkstationCommandsDefault: true,
+						ProjectSettings:            before,
+					},
+					After: model.ProjectSettingsEvent{
+						ProjectSettings: after,
+					},
 				},
 			}
 
-		s.Require().NoError(db.ClearCollections(event.AllLogCollection))
-		logger := event.NewDBEventLogger(event.AllLogCollection)
+		s.Require().NoError(db.ClearCollections(event.EventCollection))
 		for i := 0; i < projEventCount; i++ {
 			eventShallowCpy := h
-			s.NoError(logger.LogEvent(&eventShallowCpy))
+			s.NoError(eventShallowCpy.Log())
 		}
 
 		return nil
@@ -179,13 +199,16 @@ func (s *ProjectConnectorGetSuite) TestGetProjectEvents() {
 		s.Len(eventLog.After.Aliases, 1)
 		s.NotEmpty(eventLog.Before.Aliases[0].ID)
 		s.NotEmpty(eventLog.After.Aliases[0].ID)
+		s.Nil(eventLog.Before.ProjectRef.PeriodicBuilds)
+		s.Nil(eventLog.Before.ProjectRef.WorkstationConfig.SetupCommands)
+		s.NotNil(eventLog.After.ProjectRef.WorkstationConfig.SetupCommands)
+		s.Len(eventLog.After.ProjectRef.WorkstationConfig.SetupCommands, 0)
 	}
 
 	// No error for empty events
 	events, err = GetProjectEventLog("projectA", time.Now(), 0)
 	s.NoError(err)
 	s.Equal(0, len(events))
-
 }
 
 func (s *ProjectConnectorGetSuite) TestFindProjectVarsById() {
@@ -236,13 +259,14 @@ func (s *ProjectConnectorGetSuite) TestUpdateProjectVars() {
 	//successful update
 	varsToDelete := []string{"a"}
 	newVars := restModel.APIProjectVars{
-		Vars:         map[string]string{"b": "2", "c": "3"},
+		Vars:         map[string]string{"b": "2", "c": "3", "d": ""},
 		PrivateVars:  map[string]bool{"b": false, "c": true},
 		VarsToDelete: varsToDelete,
 	}
 	s.NoError(UpdateProjectVars(projectId, &newVars, false))
 	s.Equal(newVars.Vars["b"], "") // can't unredact previously redacted  variables
 	s.Equal(newVars.Vars["c"], "")
+	s.Equal(newVars.Vars["d"], "4") // can't overwrite a value with the empty string
 	_, ok := newVars.Vars["a"]
 	s.False(ok)
 
@@ -256,7 +280,7 @@ func (s *ProjectConnectorGetSuite) TestUpdateProjectVars() {
 }
 
 func TestUpdateProjectVarsByValue(t *testing.T) {
-	require.NoError(t, db.ClearCollections(model.ProjectVarsCollection, event.AllLogCollection))
+	require.NoError(t, db.ClearCollections(model.ProjectVarsCollection, event.EventCollection))
 
 	vars := &model.ProjectVars{
 		Id:          projectId,
@@ -314,8 +338,8 @@ func TestGetProjectAliasResults(t *testing.T) {
 	p := model.Project{
 		Identifier: "helloworld",
 		BuildVariants: model.BuildVariants{
-			{Name: "bv1", Tasks: []model.BuildVariantTaskUnit{{Name: "task1"}}},
-			{Name: "bv2", Tasks: []model.BuildVariantTaskUnit{{Name: "task2"}, {Name: "task3"}}},
+			{Name: "bv1", Tasks: []model.BuildVariantTaskUnit{{Name: "task1", Variant: "bv1"}}},
+			{Name: "bv2", Tasks: []model.BuildVariantTaskUnit{{Name: "task2", Variant: "bv2"}, {Name: "task3", Variant: "bv2"}}},
 		},
 		Tasks: []model.ProjectTask{
 			{Name: "task1"},
@@ -347,4 +371,139 @@ func TestGetProjectAliasResults(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, variantTasks, 1)
 	assert.Len(t, variantTasks[0].Tasks, 2)
+}
+
+func TestCreateProject(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	defer func() {
+		assert.NoError(t, db.ClearCollections(model.ProjectRefCollection, model.ProjectVarsCollection, commitqueue.Collection, event.EventCollection, user.Collection))
+
+		cocoaMock.ResetGlobalSecretCache()
+	}()
+
+	smClient := &cocoaMock.SecretsManagerClient{}
+	defer func() {
+		assert.NoError(t, smClient.Close(ctx))
+	}()
+
+	for tName, tCase := range map[string]func(ctx context.Context, t *testing.T, env *mock.Environment, pRef model.ProjectRef, u user.DBUser){
+		"Succeeds": func(ctx context.Context, t *testing.T, env *mock.Environment, pRef model.ProjectRef, u user.DBUser) {
+			created, err := CreateProject(ctx, env, &pRef, &u)
+			require.NoError(t, err)
+			require.True(t, created)
+
+			dbProjRef, err := model.FindBranchProjectRef(pRef.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbProjRef)
+			require.Len(t, dbProjRef.ContainerSecrets, 1, "should create pod secret for new project")
+			assert.NotZero(t, dbProjRef.ContainerSecrets[0].Name)
+			assert.Equal(t, model.ContainerSecretPodSecret, dbProjRef.ContainerSecrets[0].Type)
+			assert.NotZero(t, dbProjRef.ContainerSecrets[0].ExternalName)
+			assert.NotZero(t, dbProjRef.ContainerSecrets[0].ExternalID)
+
+			getValOut, err := smClient.GetSecretValue(ctx, &secretsmanager.GetSecretValueInput{
+				SecretId: utility.ToStringPtr(dbProjRef.ContainerSecrets[0].ExternalID),
+			})
+			require.NoError(t, err, "new pod secret should be stored")
+			assert.NotZero(t, utility.FromStringPtr(getValOut.SecretString))
+		},
+		"FailsWithAlreadyExistingID": func(ctx context.Context, t *testing.T, env *mock.Environment, pRef model.ProjectRef, u user.DBUser) {
+			require.NoError(t, pRef.Insert())
+			created, err := CreateProject(ctx, env, &pRef, &u)
+			require.Error(t, err)
+			require.False(t, created)
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			tctx, tcancel := context.WithCancel(context.Background())
+			defer tcancel()
+
+			require.NoError(t, db.ClearCollections(model.ProjectRefCollection, model.ProjectVarsCollection, commitqueue.Collection, event.EventCollection, user.Collection))
+
+			cocoaMock.ResetGlobalSecretCache()
+
+			env := &mock.Environment{}
+			require.NoError(t, env.Configure(ctx))
+
+			pRef := model.ProjectRef{
+				Id:    "new_project",
+				Owner: "evergreen-ci",
+				Repo:  "treepo",
+			}
+
+			adminUser := user.DBUser{
+				Id: "the_evergreen_admin",
+			}
+			require.NoError(t, adminUser.Insert())
+
+			tCase(tctx, t, env, pRef, adminUser)
+		})
+	}
+}
+
+func TestGetLegacyProjectEvents(t *testing.T) {
+	require.NoError(t, db.ClearCollections(event.EventCollection))
+
+	project := &model.ProjectRef{Id: projectId}
+	require.NoError(t, project.Insert())
+
+	before := getMockProjectSettings()
+	after := getMockProjectSettings()
+
+	// Use an interface{} to mimic legacy data that was not inserted as a ProjectSettingsEvent
+	h := event.EventLogEntry{
+		Timestamp:    time.Now(),
+		ResourceType: event.EventResourceTypeProject,
+		EventType:    event.EventTypeProjectModified,
+		ResourceId:   projectId,
+		Data: map[string]interface{}{
+			"user":   username,
+			"before": before,
+			"after":  after,
+		},
+	}
+
+	require.NoError(t, h.Log())
+
+	events, err := GetProjectEventLog(projectId, time.Now(), 0)
+	require.NoError(t, err)
+	require.Equal(t, len(events), 1)
+	eventLog := events[0]
+	require.NotNil(t, eventLog)
+
+	// Because this document does not use <Fieldname>Default flags, it returns empty arrays instead of nil
+	require.NotNil(t, eventLog.Before.ProjectRef.PeriodicBuilds)
+	require.Len(t, eventLog.Before.ProjectRef.PeriodicBuilds, 0)
+	require.NotNil(t, eventLog.Before.ProjectRef.WorkstationConfig.SetupCommands)
+	require.Len(t, eventLog.Before.ProjectRef.WorkstationConfig.SetupCommands, 0)
+}
+
+func TestRequestS3Creds(t *testing.T) {
+	assert.NoError(t, db.ClearCollections(notification.Collection, evergreen.ConfigCollection))
+	assert.Error(t, RequestS3Creds("", ""))
+	assert.NoError(t, RequestS3Creds("identifier", "user@email.com"))
+	n, err := notification.FindUnprocessed()
+	assert.NoError(t, err)
+	assert.Len(t, n, 0)
+	projectCreationConfig := evergreen.ProjectCreationConfig{
+		JiraProject: "BUILD",
+	}
+	assert.NoError(t, projectCreationConfig.Set())
+	assert.NoError(t, RequestS3Creds("identifier", "user@email.com"))
+	n, err = notification.FindUnprocessed()
+	assert.NoError(t, err)
+	assert.Len(t, n, 1)
+	assert.Equal(t, event.JIRAIssueSubscriberType, n[0].Subscriber.Type)
+	target := n[0].Subscriber.Target.(*event.JIRAIssueSubscriber)
+	assert.Equal(t, "BUILD", target.Project)
+	payload := n[0].Payload.(*message.JiraIssue)
+	summary := "Create AWS key for s3 uploads for 'identifier' project"
+	description := "Could you create an s3 key for the new [identifier|/project/identifier/settings/general] project?"
+	assert.Equal(t, "BUILD", payload.Project)
+	assert.Equal(t, summary, payload.Summary)
+	assert.Equal(t, description, payload.Description)
+	assert.Equal(t, []string{"Access"}, payload.Components)
+	assert.Equal(t, "user@email.com", payload.Reporter)
 }

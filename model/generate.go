@@ -134,7 +134,7 @@ func (g *GeneratedProject) NewVersion(p *Project, pp *ParserProject, v *Version)
 		return nil, pp, v, errors.Wrap(err, "generated project is invalid")
 	}
 
-	newPP, err := g.addGeneratedProjectToConfig(pp, v.Config, cachedProject)
+	newPP, err := g.addGeneratedProjectToConfig(pp, cachedProject)
 	if err != nil {
 		return nil, nil, nil, errors.Wrap(err, "creating config from generated config")
 	}
@@ -146,7 +146,7 @@ func (g *GeneratedProject) NewVersion(p *Project, pp *ParserProject, v *Version)
 	return p, newPP, v, nil
 }
 
-func (g *GeneratedProject) Save(ctx context.Context, p *Project, pp *ParserProject, v *Version) error {
+func (g *GeneratedProject) Save(ctx context.Context, settings *evergreen.Settings, p *Project, pp *ParserProject, v *Version) error {
 	// Get task again, to exit early if another generator finished early.
 	t, err := task.FindOneId(g.Task.Id)
 	if err != nil {
@@ -166,7 +166,9 @@ func (g *GeneratedProject) Save(ctx context.Context, p *Project, pp *ParserProje
 		return mongo.ErrNoDocuments
 	}
 
-	if err := updateParserProject(v, pp, t.Id); err != nil {
+	ppCtx, ppCancel := context.WithTimeout(ctx, DefaultParserProjectAccessTimeout)
+	defer ppCancel()
+	if err := updateParserProject(ppCtx, settings, v, pp, t.Id); err != nil {
 		return errors.WithStack(err)
 	}
 
@@ -176,22 +178,24 @@ func (g *GeneratedProject) Save(ctx context.Context, p *Project, pp *ParserProje
 	return nil
 }
 
-// updateParserProject updates the parser project along with generated task ID and updated config number
-// (if using legacy version config, this comes from version).
-func updateParserProject(v *Version, pp *ParserProject, taskId string) error {
+// updateParserProject updates the parser project along with generated task ID
+// and updated config number.
+func updateParserProject(ctx context.Context, settings *evergreen.Settings, v *Version, pp *ParserProject, taskId string) error {
 	if utility.StringSliceContains(pp.UpdatedByGenerators, taskId) {
 		// This generator has already updated the parser project so continue.
 		return nil
 	}
-	updateNum := pp.ConfigUpdateNumber + 1
-	// Legacy: most likely a version for which no parser project exists.
-	if pp.ConfigUpdateNumber < v.ConfigUpdateNumber {
-		updateNum = v.ConfigUpdateNumber + 1
-	}
+
 	pp.UpdatedByGenerators = append(pp.UpdatedByGenerators, taskId)
-	if err := pp.UpsertWithConfigNumber(updateNum); err != nil {
+
+	ppStorageMethod, err := ParserProjectUpsertOneWithS3Fallback(ctx, settings, v.ProjectStorageMethod, pp)
+	if err != nil {
 		return errors.Wrapf(err, "upserting parser project '%s'", pp.Id)
 	}
+	if err := v.UpdateProjectStorageMethod(ppStorageMethod); err != nil {
+		return errors.Wrapf(err, "updating version's parser project storage method from '%s' to '%s'", v.ProjectStorageMethod, ppStorageMethod)
+	}
+
 	return nil
 }
 
@@ -205,8 +209,8 @@ func cacheProjectData(p *Project) projectMaps {
 	for _, bv := range p.BuildVariants {
 		cachedProject.buildVariants[bv.Name] = struct{}{}
 	}
-	for _, t := range p.Tasks {
-		cachedProject.tasks[t.Name] = &t
+	for i, t := range p.Tasks {
+		cachedProject.tasks[t.Name] = &p.Tasks[i]
 	}
 	// functions is already a map, cache it anyway for convenience
 	cachedProject.functions = p.Functions
@@ -215,7 +219,7 @@ func cacheProjectData(p *Project) projectMaps {
 
 // saveNewBuildsAndTasks saves new builds and tasks to the db.
 func (g *GeneratedProject) saveNewBuildsAndTasks(ctx context.Context, v *Version, p *Project) error {
-	// inherit priority from the parent task
+	// Inherit priority from the parent generator task.
 	for i, projBv := range p.BuildVariants {
 		for j := range projBv.Tasks {
 			p.BuildVariants[i].Tasks[j].Priority = g.Task.Priority
@@ -224,7 +228,7 @@ func (g *GeneratedProject) saveNewBuildsAndTasks(ctx context.Context, v *Version
 	// Only consider batchtime for mainline builds. We should always respect activate if it is set.
 	activationInfo := g.findTasksAndVariantsWithSpecificActivations(v.Requester)
 
-	newTVPairs := g.getNewTasksWithDependencies(v, p)
+	newTVPairs := g.getNewTasksWithDependencies(v, p, &activationInfo)
 
 	existingBuilds, err := build.Find(build.ByVersion(v.Id))
 	if err != nil {
@@ -269,14 +273,22 @@ func (g *GeneratedProject) saveNewBuildsAndTasks(ctx context.Context, v *Version
 		return errors.Errorf("project '%s' not found", p.Identifier)
 	}
 
-	activatedTasksInExistingBuilds, err := addNewTasks(ctx, activationInfo, v, p, projectRef, newTVPairsForExistingVariants,
-		existingBuilds, syncAtEndOpts, g.Task.Id)
+	creationInfo := TaskCreationInfo{
+		Project:        p,
+		ProjectRef:     projectRef,
+		Version:        v,
+		Pairs:          newTVPairsForExistingVariants,
+		ActivationInfo: activationInfo,
+		SyncAtEndOpts:  syncAtEndOpts,
+		GeneratedBy:    g.Task.Id,
+	}
+	activatedTasksInExistingBuilds, err := addNewTasks(ctx, creationInfo, existingBuilds)
 	if err != nil {
 		return errors.Wrap(err, "adding new tasks")
 	}
 
-	activatedTasksInNewBuilds, err := addNewBuilds(ctx, activationInfo, v, p, newTVPairsForNewVariants,
-		existingBuilds, syncAtEndOpts, projectRef, g.Task.Id)
+	creationInfo.Pairs = newTVPairsForNewVariants
+	activatedTasksInNewBuilds, err := addNewBuilds(ctx, creationInfo, existingBuilds)
 	if err != nil {
 		return errors.Wrap(err, "adding new builds")
 	}
@@ -313,9 +325,15 @@ func (g *GeneratedProject) CheckForCycles(v *Version, p *Project, projectRef *Pr
 // simulateNewTasks adds the tasks we're planning to add to the version to the graph and
 // adds simulated edges from each task that depends on the generator to each of the generated tasks.
 func (g *GeneratedProject) simulateNewTasks(graph task.DependencyGraph, v *Version, p *Project, projectRef *ProjectRef) (task.DependencyGraph, error) {
-	newTasks := g.getNewTasksWithDependencies(v, p)
+	newTasks := g.getNewTasksWithDependencies(v, p, nil)
 
-	taskIDs, err := getTaskIdTables(v, p, newTasks, projectRef.Identifier)
+	creationInfo := TaskCreationInfo{
+		Project:    p,
+		ProjectRef: projectRef,
+		Version:    v,
+		Pairs:      newTasks,
+	}
+	taskIDs, err := getTaskIdTables(creationInfo)
 	if err != nil {
 		return graph, errors.Wrap(err, "getting task ids")
 	}
@@ -325,14 +343,14 @@ func (g *GeneratedProject) simulateNewTasks(graph task.DependencyGraph, v *Versi
 }
 
 // getNewTasksWithDependencies returns the generated tasks and their recursive dependencies.
-func (g *GeneratedProject) getNewTasksWithDependencies(v *Version, p *Project) TaskVariantPairs {
+func (g *GeneratedProject) getNewTasksWithDependencies(v *Version, p *Project, activationInfo *specificActivationInfo) TaskVariantPairs {
 	newTVPairs := TaskVariantPairs{}
 	for _, bv := range g.BuildVariants {
 		newTVPairs = appendTasks(newTVPairs, bv, p)
 	}
 
 	var err error
-	newTVPairs.ExecTasks, err = IncludeDependencies(p, newTVPairs.ExecTasks, v.Requester)
+	newTVPairs.ExecTasks, err = IncludeDependenciesWithGenerated(p, newTVPairs.ExecTasks, v.Requester, activationInfo, g.BuildVariants)
 	grip.Warning(message.WrapError(err, message.Fields{
 		"message": "error including dependencies for generator",
 		"task":    g.Task.Id,
@@ -435,14 +453,19 @@ func (g *GeneratedProject) filterInactiveTasks(tasks TVPairSet, v *Version, p *P
 }
 
 type specificActivationInfo struct {
-	stepbackTasks      map[string][]string
-	activationTasks    map[string][]string // tasks by variant that have batchtime or activate specified
-	activationVariants []string            // variants that have batchtime or activate specified
+	stepbackTasks      map[string][]specificStepbackInfo // tasks by variant that are being stepped back, along with the stepback depth to use
+	activationTasks    map[string][]string               // tasks by variant that have batchtime or activate specified
+	activationVariants []string                          // variants that have batchtime or activate specified
+}
+
+type specificStepbackInfo struct {
+	task  string
+	depth int // store the depth that the new stepback task should use
 }
 
 func newSpecificActivationInfo() specificActivationInfo {
 	return specificActivationInfo{
-		stepbackTasks:      map[string][]string{},
+		stepbackTasks:      map[string][]specificStepbackInfo{},
 		activationTasks:    map[string][]string{},
 		activationVariants: []string{},
 	}
@@ -461,30 +484,53 @@ func (b *specificActivationInfo) hasActivationTasks() bool {
 }
 
 func (b *specificActivationInfo) isStepbackTask(variant, task string) bool {
-	return utility.StringSliceContains(b.stepbackTasks[variant], task)
+	for _, stepbackInfo := range b.stepbackTasks[variant] {
+		if stepbackInfo.task == task {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *specificActivationInfo) getStepbackTaskDepth(variant, task string) int {
+	for _, stepbackInfo := range b.stepbackTasks[variant] {
+		if stepbackInfo.task == task {
+			return stepbackInfo.depth
+		}
+	}
+	return 0
 }
 
 func (b *specificActivationInfo) taskHasSpecificActivation(variant, task string) bool {
 	return utility.StringSliceContains(b.activationTasks[variant], task)
 }
 
+func (b *specificActivationInfo) taskOrVariantHasSpecificActivation(variant, task string) bool {
+	if b == nil {
+		return false
+	}
+	return b.taskHasSpecificActivation(variant, task) || b.variantHasSpecificActivation(variant)
+}
+
 func (g *GeneratedProject) findTasksAndVariantsWithSpecificActivations(requester string) specificActivationInfo {
 	res := newSpecificActivationInfo()
 	for _, bv := range g.BuildVariants {
-		// only consider batchtime for certain requesters
-		if evergreen.ShouldConsiderBatchtime(requester) && (bv.BatchTime != nil || bv.CronBatchTime != "") {
+		// Only consider batchtime for certain requesters
+		if evergreen.ShouldConsiderBatchtime(requester) && bv.hasSpecificActivation() {
 			res.activationVariants = append(res.activationVariants, bv.name())
 		} else if bv.Activate != nil {
 			res.activationVariants = append(res.activationVariants, bv.name())
 		}
-		// regardless of whether the build variant has batchtime, there may be tasks with different batchtime
+		// Regardless of whether the build variant has batchtime, there may be tasks with different batchtime
 		batchTimeTasks := []string{}
 		for _, bvt := range bv.Tasks {
 			if isStepbackTask(g.Task, bv.Name, bvt.Name) {
-				res.stepbackTasks[bv.Name] = append(res.stepbackTasks[bv.Name], bvt.Name)
-				continue // don't consider batchtime/activation if we're stepping back this generated task
+				// If it's a stepback task, it should store the same stepback depth as the generator.
+				stepbackInfo := specificStepbackInfo{task: bvt.Name, depth: g.Task.StepbackDepth}
+				res.stepbackTasks[bv.Name] = append(res.stepbackTasks[bv.Name], stepbackInfo)
+				continue // Don't consider batchtime/activation if we're stepping back this generated task
 			}
-			if evergreen.ShouldConsiderBatchtime(requester) && (bvt.BatchTime != nil || bvt.CronBatchTime != "") {
+			if evergreen.ShouldConsiderBatchtime(requester) && bvt.hasSpecificActivation() {
 				batchTimeTasks = append(batchTimeTasks, bvt.Name)
 			} else if bvt.Activate != nil {
 				batchTimeTasks = append(batchTimeTasks, bvt.Name)
@@ -540,15 +586,7 @@ func appendTasks(pairs TaskVariantPairs, bv parserBV, p *Project) TaskVariantPai
 
 // addGeneratedProjectToConfig takes a ParserProject and a YML config and returns a new one with the GeneratedProject included.
 // support for YML config will be degraded.
-func (g *GeneratedProject) addGeneratedProjectToConfig(intermediateProject *ParserProject, config string, cachedProject projectMaps) (*ParserProject, error) {
-	var err error
-	if intermediateProject == nil {
-		intermediateProject, err = createIntermediateProject([]byte(config), false)
-		if err != nil {
-			return nil, errors.Wrap(err, "creating intermediate project")
-		}
-	}
-
+func (g *GeneratedProject) addGeneratedProjectToConfig(intermediateProject *ParserProject, cachedProject projectMaps) (*ParserProject, error) {
 	// Append buildvariants, tasks, and functions to the config.
 	intermediateProject.TaskGroups = append(intermediateProject.TaskGroups, g.TaskGroups...)
 	intermediateProject.Tasks = append(intermediateProject.Tasks, g.Tasks...)
@@ -588,6 +626,15 @@ func (g *GeneratedProject) addGeneratedProjectToConfig(intermediateProject *Pars
 		}
 	}
 	return intermediateProject, nil
+}
+
+func variantExistsInGeneratedProject(variants []parserBV, variant string) bool {
+	for bv := range variants {
+		if variants[bv].Name == variant {
+			return true
+		}
+	}
+	return false
 }
 
 // projectMaps is a struct of maps of project fields, which allows efficient comparisons of generated projects to projects.
@@ -636,9 +683,13 @@ func (g *GeneratedProject) validateNoRedefine(cachedProject projectMaps) error {
 }
 
 func isNonZeroBV(bv parserBV) bool {
+	// TODO (EVG-19783): this omits activate from consideration, but it's
+	// unclear if it's intentional or not.
 	if bv.DisplayName != "" || len(bv.Expansions) > 0 || len(bv.Modules) > 0 ||
-		bv.Disabled || len(bv.Tags) > 0 || bv.Push ||
-		bv.BatchTime != nil || bv.Stepback != nil || len(bv.RunOn) > 0 {
+		bv.Disable != nil || len(bv.Tags) > 0 ||
+		bv.BatchTime != nil || bv.Patchable != nil || bv.PatchOnly != nil ||
+		bv.AllowForGitTag != nil || bv.GitTagOnly != nil ||
+		bv.Stepback != nil || len(bv.RunOn) > 0 {
 		return true
 	}
 	return false

@@ -3,12 +3,12 @@ package operations
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/pkg/errors"
 	"github.com/urfave/cli"
-	yaml "gopkg.in/yaml.v3"
+	"gopkg.in/yaml.v3"
 )
 
 func Evaluate() cli.Command {
@@ -28,16 +28,17 @@ func Evaluate() cli.Command {
 			cli.BoolFlag{
 				Name:  variantsFlagName,
 				Usage: "only show variant definitions",
-			}),
-		Before: mergeBeforeFuncs(autoUpdateCLI, requirePathFlag),
+			},
+		),
+		Before: mergeBeforeFuncs(requirePathFlag),
 		Action: func(c *cli.Context) error {
 			path := c.String(pathFlagName)
 			showTasks := c.Bool(taskFlagName)
 			showVariants := c.Bool(variantsFlagName)
 
-			configBytes, err := ioutil.ReadFile(path)
+			configBytes, err := os.ReadFile(path)
 			if err != nil {
-				return errors.Wrap(err, "error reading project config")
+				return errors.Wrap(err, "reading project config")
 			}
 
 			p := &model.Project{}
@@ -47,7 +48,7 @@ func Evaluate() cli.Command {
 			}
 			_, err = model.LoadProjectInto(ctx, configBytes, opts, "", p)
 			if err != nil {
-				return errors.Wrap(err, "error loading project")
+				return errors.Wrap(err, "loading project")
 			}
 
 			var out interface{}
@@ -71,7 +72,7 @@ func Evaluate() cli.Command {
 
 			outYAML, err := yaml.Marshal(out)
 			if err != nil {
-				return errors.Wrap(err, "error marshaling evaluated project YAML")
+				return errors.Wrap(err, "marshalling evaluated project YAML")
 			}
 
 			fmt.Println(string(outYAML))

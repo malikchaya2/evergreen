@@ -17,7 +17,9 @@ import (
 )
 
 const (
-	testDir      = "config_test"
+	testDir = "config_test"
+	// testSettings contains the default admin settings suitable for testing
+	// that depends on the global environment.
 	testSettings = "evg_settings.yml"
 )
 
@@ -39,8 +41,8 @@ func testConfig() *Settings {
 	return settings
 }
 
-//Checks that the test settings file can be parsed
-//and returns a settings object.
+// Checks that the test settings file can be parsed
+// and returns a settings object.
 func TestInitSettings(t *testing.T) {
 	assert := assert.New(t)
 
@@ -50,7 +52,7 @@ func TestInitSettings(t *testing.T) {
 	assert.NotNil(settings)
 }
 
-//Checks that trying to parse a non existent file returns non-nil err
+// Checks that trying to parse a non existent file returns non-nil err
 func TestBadInit(t *testing.T) {
 	assert := assert.New(t)
 
@@ -93,7 +95,9 @@ func TestGetGithubSettings(t *testing.T) {
 }
 
 type AdminSuite struct {
-	env Environment
+	env              Environment
+	originalEnv      Environment
+	originalSettings *Settings
 	suite.Suite
 }
 
@@ -105,21 +109,31 @@ func TestAdminSuite(t *testing.T) {
 	if configFile == "" {
 		configFile = testConfigFile()
 	}
+
 	originalEnv := GetEnvironment()
+	originalSettings, err := GetConfig()
+	require.NoError(t, err)
+
 	env, err := NewEnvironment(ctx, configFile, nil)
 	require.NoError(t, err)
-	SetEnvironment(env)
-	defer func() {
-		SetEnvironment(originalEnv)
-	}()
 
 	s := new(AdminSuite)
 	s.env = env
+	s.originalEnv = originalEnv
+	s.originalSettings = originalSettings
 	suite.Run(t, s)
 }
 
 func (s *AdminSuite) SetupTest() {
+	SetEnvironment(s.env)
 	s.NoError(resetRegistry())
+}
+
+func (s *AdminSuite) TearDownTest() {
+	// Reset the global env and admin settings after modifications to avoid
+	// affecting other tests that depend on the global test env.
+	SetEnvironment(s.originalEnv)
+	s.NoError(UpdateConfig(s.originalSettings))
 }
 
 func (s *AdminSuite) TestBanner() {
@@ -142,27 +156,23 @@ func (s *AdminSuite) TestBanner() {
 
 func (s *AdminSuite) TestBaseConfig() {
 	config := Settings{
-		ApiUrl:             "api",
-		Banner:             "banner",
-		BannerTheme:        Important,
-		ClientBinariesDir:  "bin_dir",
-		ConfigDir:          "cfg_dir",
-		Credentials:        map[string]string{"k1": "v1"},
-		DomainName:         "example.com",
-		Expansions:         map[string]string{"k2": "v2"},
-		GithubPRCreatorOrg: "org",
-		GithubOrgs:         []string{"evergreen-ci"},
-		Keys:               map[string]string{"k3": "v3"},
-		LogPath:            "logpath",
-		Plugins:            map[string]map[string]interface{}{"k4": {"k5": "v5"}},
-		PprofPort:          "port",
-		SSHKeyDirectory:    "/ssh_key_directory",
-		SSHKeyPairs:        []SSHKeyPair{{Name: "key", Public: "public", Private: "private"}},
-		Splunk: send.SplunkConnectionInfo{
-			ServerURL: "server",
-			Token:     "token",
-			Channel:   "channel",
-		},
+		ApiUrl:              "api",
+		AWSInstanceRole:     "role",
+		Banner:              "banner",
+		BannerTheme:         Important,
+		ClientBinariesDir:   "bin_dir",
+		ConfigDir:           "cfg_dir",
+		Credentials:         map[string]string{"k1": "v1"},
+		DomainName:          "example.com",
+		Expansions:          map[string]string{"k2": "v2"},
+		GithubPRCreatorOrg:  "org",
+		GithubOrgs:          []string{"evergreen-ci"},
+		Keys:                map[string]string{"k3": "v3"},
+		LogPath:             "logpath",
+		Plugins:             map[string]map[string]interface{}{"k4": {"k5": "v5"}},
+		PprofPort:           "port",
+		SSHKeyDirectory:     "/ssh_key_directory",
+		SSHKeyPairs:         []SSHKeyPair{{Name: "key", Public: "public", Private: "private"}},
 		ShutdownWaitSeconds: 15,
 	}
 
@@ -172,6 +182,7 @@ func (s *AdminSuite) TestBaseConfig() {
 	s.NoError(err)
 	s.NotNil(settings)
 	s.Equal(config.ApiUrl, settings.ApiUrl)
+	s.Equal(config.AWSInstanceRole, settings.AWSInstanceRole)
 	s.Equal(config.Banner, settings.Banner)
 	s.Equal(config.BannerTheme, settings.BannerTheme)
 	s.Equal(config.ClientBinariesDir, settings.ClientBinariesDir)
@@ -204,7 +215,7 @@ func (s *AdminSuite) TestServiceFlags() {
 			f := v.Field(i)
 			f.SetBool(true)
 		}
-	}, "error setting all fields to true")
+	})
 
 	err := testFlags.Set()
 	s.NoError(err)
@@ -246,9 +257,14 @@ func (s *AdminSuite) TestAlertsConfig() {
 
 func (s *AdminSuite) TestAmboyConfig() {
 	config := AmboyConfig{
-		Name:                                  "amboy",
-		SingleName:                            "single",
-		DB:                                    "db",
+		Name:       "amboy",
+		SingleName: "single",
+		DBConnection: AmboyDBConfig{
+			URL:      "mongodb://localhost:27017",
+			Database: "db",
+			Username: "user",
+			Password: "password",
+		},
 		PoolSizeLocal:                         10,
 		PoolSizeRemote:                        20,
 		LocalStorage:                          30,
@@ -363,9 +379,12 @@ func (s *AdminSuite) TestJiraConfig() {
 	s.Equal(config, settings.Jira)
 }
 
-func (s *AdminSuite) TestPodinitConfig() {
-	config := PodInitConfig{
-		S3BaseURL: "s3_base_url",
+func (s *AdminSuite) TestPodLifecycleConfig() {
+	config := PodLifecycleConfig{
+		S3BaseURL:                   "s3_base_url",
+		MaxParallelPodRequests:      1000,
+		MaxPodDefinitionCleanupRate: 100,
+		MaxSecretCleanupRate:        100,
 	}
 
 	err := config.Set()
@@ -373,7 +392,7 @@ func (s *AdminSuite) TestPodinitConfig() {
 	settings, err := GetConfig()
 	s.Require().NoError(err)
 	s.Require().NotNil(settings)
-	s.Equal(config, settings.PodInit)
+	s.Equal(config, settings.PodLifecycle)
 }
 
 func (s *AdminSuite) TestProvidersConfig() {
@@ -464,6 +483,23 @@ func (s *AdminSuite) TestSlackConfig() {
 	s.NoError(err)
 	s.NotNil(settings)
 	s.Equal(config, settings.Slack)
+}
+
+func (s *AdminSuite) TestSplunkConfig() {
+	config := SplunkConfig{
+		SplunkConnectionInfo: send.SplunkConnectionInfo{
+			ServerURL: "splunk_url",
+			Token:     "splunk_token",
+			Channel:   "splunk_channel",
+		},
+	}
+
+	err := config.Set()
+	s.NoError(err)
+	settings, err := GetConfig()
+	s.NoError(err)
+	s.NotNil(settings)
+	s.Equal(config, settings.Splunk)
 }
 
 func (s *AdminSuite) TestUiConfig() {
@@ -600,7 +636,7 @@ func (s *AdminSuite) TestContainerPoolsConfig() {
 	}
 
 	err := invalidConfig.ValidateAndDefault()
-	s.EqualError(err, "container pool field max_containers must be positive integer")
+	s.EqualError(err, "container pool max containers must be positive integer")
 
 	validConfig := ContainerPoolsConfig{
 		Pools: []ContainerPool{
@@ -698,7 +734,7 @@ func (s *AdminSuite) TestJIRANotificationsConfig() {
 			},
 		},
 	}
-	s.EqualError(c.ValidateAndDefault(), "template: this-is:1: unexpected \"}\" in operand")
+	s.EqualError(c.ValidateAndDefault(), "template: this-is:1: bad character U+007D '}'")
 }
 
 func (s *AdminSuite) TestCommitQueueConfig() {
@@ -860,4 +896,75 @@ func (s *AdminSuite) TestSSHKeysAppendOnly() {
 		Private: "private",
 	}}
 	s.NoError(newSettings.Validate(), "should be able to append new key pair")
+}
+
+func (s *AdminSuite) TestCedarConfig() {
+	config := CedarConfig{
+		BaseURL: "url.com",
+		RPCPort: "9090",
+		User:    "username",
+		APIKey:  "key",
+	}
+
+	err := config.Set()
+	s.NoError(err)
+	settings, err := GetConfig()
+	s.NoError(err)
+	s.NotNil(settings)
+	s.Equal(config, settings.Cedar)
+
+	config.RPCPort = "7070"
+	s.NoError(config.Set())
+
+	settings, err = GetConfig()
+	s.NoError(err)
+	s.NotNil(settings)
+	s.Equal(config, settings.Cedar)
+}
+
+func (s *AdminSuite) TestTracerConfig() {
+	config := TracerConfig{
+		Enabled:           true,
+		CollectorEndpoint: "localhost:4316",
+	}
+
+	err := config.Set()
+	s.NoError(err)
+	settings, err := GetConfig()
+	s.NoError(err)
+	s.NotNil(settings)
+	s.Equal(config, settings.Tracer)
+
+	config.Enabled = false
+	s.NoError(config.Set())
+
+	settings, err = GetConfig()
+	s.NoError(err)
+	s.NotNil(settings)
+	s.Equal(config, settings.Tracer)
+}
+
+func (s *AdminSuite) TestDataPipesConfig() {
+	config := DataPipesConfig{
+		Host:         "https://url.com",
+		Region:       "us-east-1",
+		AWSAccessKey: "access",
+		AWSSecretKey: "secret",
+		AWSToken:     "token",
+	}
+
+	err := config.Set()
+	s.NoError(err)
+	settings, err := GetConfig()
+	s.NoError(err)
+	s.NotNil(settings)
+	s.Equal(config, settings.DataPipes)
+
+	config.Region = "us-west-1"
+	s.NoError(config.Set())
+
+	settings, err = GetConfig()
+	s.NoError(err)
+	s.NotNil(settings)
+	s.Equal(config, settings.DataPipes)
 }

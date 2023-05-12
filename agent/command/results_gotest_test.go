@@ -18,7 +18,7 @@ import (
 )
 
 func reset(t *testing.T) {
-	require.NoError(t, db.ClearCollections(task.Collection, model.TestLogCollection), "error clearing test collections")
+	require.NoError(t, db.ClearCollections(task.Collection, model.TestLogCollection))
 }
 
 func TestGotestPluginOnFailingTests(t *testing.T) {
@@ -35,22 +35,22 @@ func TestGotestPluginOnFailingTests(t *testing.T) {
 
 		configPath := filepath.Join(currentDirectory, "testdata", "gotest", "bad.yml")
 		modelData, err := modelutil.SetupAPITestData(testConfig, "test", "rhel55", configPath, modelutil.NoPatch)
-		require.NoError(t, err, "failed to setup test data")
-		conf, err := agentutil.MakeTaskConfigFromModelData(testConfig, modelData)
+		require.NoError(t, err)
+		conf, err := agentutil.MakeTaskConfigFromModelData(ctx, testConfig, modelData)
 		require.NoError(t, err)
 		logger, err := comm.GetLoggerProducer(ctx, client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}, nil)
 		So(err, ShouldBeNil)
 
 		Convey("all commands in test project should execute successfully", func() {
 			curWD, err := os.Getwd()
-			require.NoError(t, err, "Couldn't get working directory: %s", curWD)
+			require.NoError(t, err)
 			conf.WorkDir = curWD
 
 			for _, testTask := range conf.Project.Tasks {
 				So(len(testTask.Commands), ShouldNotEqual, 0)
 				for _, command := range testTask.Commands {
-					pluginCmds, err := Render(command, conf.Project)
-					require.NoError(t, err, "Couldn't get plugin command: %s", command.Command)
+					pluginCmds, err := Render(command, conf.Project, "")
+					require.NoError(t, err)
 					So(pluginCmds, ShouldNotBeNil)
 					So(err, ShouldBeNil)
 					err = pluginCmds[0].Execute(ctx, comm, logger, conf)
@@ -94,9 +94,9 @@ func TestGotestPluginOnPassingTests(t *testing.T) {
 		configPath := filepath.Join(currentDirectory, "testdata", "bad.yml")
 
 		modelData, err := modelutil.SetupAPITestData(testConfig, "test", "rhel55", configPath, modelutil.NoPatch)
-		require.NoError(t, err, "failed to setup test data")
+		require.NoError(t, err)
 
-		conf, err := agentutil.MakeTaskConfigFromModelData(testConfig, modelData)
+		conf, err := agentutil.MakeTaskConfigFromModelData(ctx, testConfig, modelData)
 		require.NoError(t, err)
 		comm := client.NewMock("http://localhost.com")
 
@@ -105,14 +105,14 @@ func TestGotestPluginOnPassingTests(t *testing.T) {
 
 		Convey("all commands in test project should execute successfully", func() {
 			curWD, err := os.Getwd()
-			require.NoError(t, err, "Couldn't get working directory: %s", curWD)
+			require.NoError(t, err)
 			conf.WorkDir = curWD
 
 			for _, testTask := range conf.Project.Tasks {
 				So(len(testTask.Commands), ShouldNotEqual, 0)
 				for _, command := range testTask.Commands {
-					pluginCmds, err := Render(command, conf.Project)
-					require.NoError(t, err, "Couldn't get plugin command: %s", command.Command)
+					pluginCmds, err := Render(command, conf.Project, "")
+					require.NoError(t, err)
 					So(pluginCmds, ShouldNotBeNil)
 					So(err, ShouldBeNil)
 
@@ -129,12 +129,12 @@ func TestGotestPluginOnPassingTests(t *testing.T) {
 				So(len(updatedTask.LocalTestResults), ShouldEqual, 2)
 				So(updatedTask.LocalTestResults[0].Status, ShouldEqual, "pass")
 				So(updatedTask.LocalTestResults[1].Status, ShouldEqual, "pass")
-				So(updatedTask.LocalTestResults[0].TestFile, ShouldEqual, "TestPass01")
-				So(updatedTask.LocalTestResults[1].TestFile, ShouldEqual, "TestPass02")
-				So(updatedTask.LocalTestResults[0].StartTime, ShouldBeLessThan,
-					updatedTask.LocalTestResults[0].EndTime)
-				So(updatedTask.LocalTestResults[1].StartTime, ShouldBeLessThan,
-					updatedTask.LocalTestResults[1].EndTime)
+				So(updatedTask.LocalTestResults[0].TestName, ShouldEqual, "TestPass01")
+				So(updatedTask.LocalTestResults[1].TestName, ShouldEqual, "TestPass02")
+				So(updatedTask.LocalTestResults[0].TestStartTime, ShouldBeLessThan,
+					updatedTask.LocalTestResults[0].TestEndTime)
+				So(updatedTask.LocalTestResults[1].TestStartTime, ShouldBeLessThan,
+					updatedTask.LocalTestResults[1].TestEndTime)
 
 				Convey("with relevant logs present in the DB as well", func() {
 					log, err := model.FindOneTestLog("0_goodpkg", "testTaskId", 0)

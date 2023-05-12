@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/evergreen-ci/cocoa"
 	"github.com/evergreen-ci/cocoa/ecs"
 	cocoaMock "github.com/evergreen-ci/cocoa/mock"
 	"github.com/evergreen-ci/evergreen"
@@ -15,7 +14,6 @@ import (
 	"github.com/evergreen-ci/evergreen/mock"
 	"github.com/evergreen-ci/evergreen/model/host"
 	"github.com/evergreen-ci/evergreen/model/pod"
-	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/amboy/queue"
@@ -36,9 +34,6 @@ func TestBaseSNSRoute(t *testing.T) {
 		"ECS": func(base baseSNS) gimlet.RouteHandler {
 			return &ecsSNS{
 				baseSNS: base,
-				makeECSClient: func(*evergreen.Settings) (cocoa.ECSClient, error) {
-					return &cocoaMock.ECSClient{}, nil
-				},
 			}
 		},
 	} {
@@ -96,7 +91,9 @@ func TestHandleEC2SNSNotification(t *testing.T) {
 	defer cancel()
 	assert.NoError(t, db.Clear(host.Collection))
 	rh := ec2SNS{}
-	rh.env = testutil.NewEnvironment(ctx, t)
+	env := &mock.Environment{}
+	require.NoError(t, env.Configure(ctx))
+	rh.env = env
 	rh.queue = rh.env.LocalQueue()
 	rh.payload = sns.Payload{Message: `{"version":"0","id":"qwertyuiop","detail-type":"EC2 Instance State-change Notification","source":"sns.ec2","time":"2020-07-23T14:48:37Z","region":"us-east-1","resources":["arn:aws:ec2:us-east-1:1234567890:instance/i-0123456789"],"detail":{"instance-id":"i-0123456789","state":"terminated"}}`}
 
@@ -115,17 +112,23 @@ func TestHandleEC2SNSNotification(t *testing.T) {
 func TestEC2SNSNotificationHandlers(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	defer func() {
+		assert.NoError(t, db.Clear(host.Collection))
+	}()
 	assert.NoError(t, db.Clear(host.Collection))
+
 	agentHost := host.Host{
 		Id:        "agent_host",
 		StartTime: time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC),
 		StartedBy: evergreen.User,
 		Provider:  evergreen.ProviderNameMock,
+		Status:    evergreen.HostRunning,
 	}
 	spawnHost := host.Host{
 		Id:        "spawn_host",
 		StartedBy: "user",
 		UserHost:  true,
+		Status:    evergreen.HostRunning,
 	}
 	messageID := "m0"
 	rh := ec2SNS{}
@@ -133,24 +136,42 @@ func TestEC2SNSNotificationHandlers(t *testing.T) {
 	assert.NoError(t, agentHost.Insert())
 	assert.NoError(t, spawnHost.Insert())
 
-	for name, test := range map[string]func(*testing.T){
-		"InstanceTerminatedInitiatesInstanceStatusCheck": func(t *testing.T) {
+	checkStatus := func(t *testing.T, hostID, status string) {
+		dbHost, err := host.FindOneId(hostID)
+		require.NoError(t, err)
+		require.NotZero(t, dbHost)
+		assert.Equal(t, status, dbHost.Status)
+	}
+
+	for name, test := range map[string]func(ctx context.Context, t *testing.T){
+		"InstanceTerminatedInitiatesInstanceStatusCheck": func(ctx context.Context, t *testing.T) {
 			require.NoError(t, rh.handleInstanceTerminated(ctx, agentHost.Id))
+			checkStatus(t, agentHost.Id, evergreen.HostDecommissioned)
 			require.Equal(t, 1, rh.queue.Stats(ctx).Total)
 		},
-		"InstanceStoppedWithAgentHostInitiatesInstanceStatusCheck": func(t *testing.T) {
+		"InstanceStoppedWithAgentHostInitiatesInstanceStatusCheck": func(ctx context.Context, t *testing.T) {
 			require.NoError(t, rh.handleInstanceStopped(ctx, agentHost.Id))
+			checkStatus(t, agentHost.Id, evergreen.HostDecommissioned)
 			require.Equal(t, 1, rh.queue.Stats(ctx).Total)
 		},
-		"InstanceStoppedWithSpawnHostNoops": func(t *testing.T) {
+		"InstanceStoppedWithSpawnHostNoops": func(ctx context.Context, t *testing.T) {
+			originalStatus := spawnHost.Status
 			require.NoError(t, rh.handleInstanceStopped(ctx, spawnHost.Id))
+			checkStatus(t, spawnHost.Id, originalStatus)
 			assert.Zero(t, rh.queue.Stats(ctx).Total)
 		},
 	} {
-		rh.queue = queue.NewLocalLimitedSize(1, 1)
-		require.NoError(t, rh.queue.Start(ctx))
+		t.Run(name, func(t *testing.T) {
+			tctx, tcancel := context.WithTimeout(ctx, 5*time.Second)
+			defer tcancel()
 
-		t.Run(name, test)
+			queue, err := queue.NewLocalLimitedSizeSerializable(1, 1)
+			require.NoError(t, err)
+			rh.queue = queue
+			require.NoError(t, rh.queue.Start(ctx))
+
+			test(tctx, t)
+		})
 	}
 }
 
@@ -214,16 +235,12 @@ func TestECSSNSHandleNotification(t *testing.T) {
 			}
 			cocoaMock.GlobalECSService.Clusters[clusterID] = cocoaMock.ECSCluster{
 				taskID: cocoaMock.ECSTask{
-					ARN:        utility.ToStringPtr(taskID),
+					ARN:        taskID,
 					Cluster:    utility.ToStringPtr(clusterID),
 					Created:    utility.ToTimePtr(time.Now().Add(-10 * time.Minute)),
 					Status:     utility.ToStringPtr(status),
 					GoalStatus: utility.ToStringPtr(desiredStatus),
 				},
-			}
-			c := cocoaMock.ECSClient{}
-			rh.makeECSClient = func(*evergreen.Settings) (cocoa.ECSClient, error) {
-				return &c, nil
 			}
 
 			notification := ecsEventBridgeNotification{
@@ -238,9 +255,6 @@ func TestECSSNSHandleNotification(t *testing.T) {
 			assert.NoError(t, rh.handleNotification(ctx, notification))
 
 			assert.Len(t, cocoaMock.GlobalECSService.Clusters[clusterID], 1)
-			if assert.NotZero(t, c.StopTaskInput, "SNS notification should have triggered an API call to stop the unrecognized pod") {
-				assert.Equal(t, taskID, utility.FromStringPtr(c.StopTaskInput.Task), "SNS notification should have triggered an API call to stop the unrecognized pod")
-			}
 			assert.EqualValues(t, ecs.TaskStatusStopped, utility.FromStringPtr(cocoaMock.GlobalECSService.Clusters[clusterID][taskID].Status), "unrecognized cloud pod should have been stopped")
 		},
 		"NoopsWhenUnrecognizedPodIsTryingToStartInUnrecognizedCluster": func(ctx context.Context, t *testing.T, rh *ecsSNS) {
@@ -265,16 +279,12 @@ func TestECSSNSHandleNotification(t *testing.T) {
 			)
 			cocoaMock.GlobalECSService.Clusters[clusterID] = cocoaMock.ECSCluster{
 				taskID: cocoaMock.ECSTask{
-					ARN:        utility.ToStringPtr(taskID),
+					ARN:        taskID,
 					Cluster:    utility.ToStringPtr(clusterID),
 					Created:    utility.ToTimePtr(time.Now().Add(-10 * time.Minute)),
 					Status:     utility.ToStringPtr(status),
 					GoalStatus: utility.ToStringPtr(desiredStatus),
 				},
-			}
-			c := cocoaMock.ECSClient{}
-			rh.makeECSClient = func(*evergreen.Settings) (cocoa.ECSClient, error) {
-				return &c, nil
 			}
 
 			notification := ecsEventBridgeNotification{
@@ -289,7 +299,6 @@ func TestECSSNSHandleNotification(t *testing.T) {
 			assert.NoError(t, rh.handleNotification(ctx, notification))
 
 			assert.EqualValues(t, status, utility.FromStringPtr(cocoaMock.GlobalECSService.Clusters[clusterID][taskID].Status), "unrecognized cloud pod in unrecognized cluster should not have been stopped")
-			assert.Zero(t, c.StopTaskInput, "SNS notification should not have triggered an API call to stop the pod because it is already stopping")
 		},
 		"NoopsWhenUnrecognizedPodIsDetectedButAlreadyShuttingDown": func(ctx context.Context, t *testing.T, rh *ecsSNS) {
 			originalFlags, err := evergreen.GetServiceFlags()
@@ -319,16 +328,12 @@ func TestECSSNSHandleNotification(t *testing.T) {
 			}
 			cocoaMock.GlobalECSService.Clusters[clusterID] = cocoaMock.ECSCluster{
 				taskID: cocoaMock.ECSTask{
-					ARN:        utility.ToStringPtr(taskID),
+					ARN:        taskID,
 					Cluster:    utility.ToStringPtr(clusterID),
 					Created:    utility.ToTimePtr(time.Now().Add(-10 * time.Minute)),
 					Status:     utility.ToStringPtr(status),
 					GoalStatus: utility.ToStringPtr(desiredStatus),
 				},
-			}
-			c := cocoaMock.ECSClient{}
-			rh.makeECSClient = func(*evergreen.Settings) (cocoa.ECSClient, error) {
-				return &c, nil
 			}
 
 			notification := ecsEventBridgeNotification{
@@ -343,7 +348,6 @@ func TestECSSNSHandleNotification(t *testing.T) {
 			assert.NoError(t, rh.handleNotification(ctx, notification))
 
 			assert.EqualValues(t, status, utility.FromStringPtr(cocoaMock.GlobalECSService.Clusters[clusterID][taskID].Status), "unrecognized cloud pod in unrecognized cluster should not have been stopped")
-			assert.Zero(t, c.StopTaskInput, "SNS notification should not have triggered an API call to stop the pod because it is already stopping")
 		},
 		"NoopsWhenUnrecognizedPodIsDetectedButUnrecognizedPodCleanupIsDisabled": func(ctx context.Context, t *testing.T, rh *ecsSNS) {
 			originalFlags, err := evergreen.GetServiceFlags()
@@ -370,7 +374,7 @@ func TestECSSNSHandleNotification(t *testing.T) {
 			}
 			cocoaMock.GlobalECSService.Clusters[clusterID] = cocoaMock.ECSCluster{
 				taskID: cocoaMock.ECSTask{
-					ARN:        utility.ToStringPtr(taskID),
+					ARN:        taskID,
 					Cluster:    utility.ToStringPtr(clusterID),
 					Created:    utility.ToTimePtr(time.Now().Add(-10 * time.Minute)),
 					Status:     utility.ToStringPtr(status),
@@ -378,10 +382,6 @@ func TestECSSNSHandleNotification(t *testing.T) {
 				},
 			}
 
-			c := cocoaMock.ECSClient{}
-			rh.makeECSClient = func(*evergreen.Settings) (cocoa.ECSClient, error) {
-				return &c, nil
-			}
 			notification := ecsEventBridgeNotification{
 				DetailType: ecsTaskStateChangeType,
 				Detail: makeJSON(t, ecsTaskEventDetail{
@@ -394,7 +394,6 @@ func TestECSSNSHandleNotification(t *testing.T) {
 			assert.NoError(t, rh.handleNotification(ctx, notification))
 
 			assert.EqualValues(t, status, utility.FromStringPtr(cocoaMock.GlobalECSService.Clusters[clusterID][taskID].Status), "cloud pod should not be cleaned up when the service flag flag is disabled")
-			assert.Zero(t, c.StopTaskInput, "SNS notification should not have triggered an API call to stop the pod because the service flag is disabled")
 		},
 		"FailsWithoutStatus": func(ctx context.Context, t *testing.T, rh *ecsSNS) {
 			notification := ecsEventBridgeNotification{
@@ -456,16 +455,12 @@ func TestECSSNSHandleNotification(t *testing.T) {
 			}
 			cocoaMock.GlobalECSService.Clusters[clusterID] = cocoaMock.ECSCluster{
 				taskARN: cocoaMock.ECSTask{
-					ARN:               utility.ToStringPtr(taskARN),
+					ARN:               taskARN,
 					ContainerInstance: utility.ToStringPtr(containerInstanceID),
 					Cluster:           utility.ToStringPtr(clusterID),
 					Created:           utility.ToTimePtr(time.Now().Add(-10 * time.Minute)),
 					Status:            utility.ToStringPtr(status),
 				},
-			}
-			c := cocoaMock.ECSClient{}
-			rh.makeECSClient = func(*evergreen.Settings) (cocoa.ECSClient, error) {
-				return &c, nil
 			}
 
 			notification := ecsEventBridgeNotification{

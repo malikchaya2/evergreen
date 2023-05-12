@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"strconv"
 	"strings"
@@ -22,25 +21,16 @@ import (
 type requestInfo struct {
 	method   string
 	path     string
-	version  apiVersion
 	taskData *TaskData
 }
 
-// Version is an "enum" for the different API versions
-type apiVersion string
-
-const (
-	apiVersion1 apiVersion = "/api/2"
-	apiVersion2 apiVersion = evergreen.APIRoutePrefixV2
-)
-
 var HTTPConflictError = errors.New(evergreen.TaskConflict)
 
-func (c *baseCommunicator) newRequest(method, path, taskID, taskSecret, version string, data interface{}) (*http.Request, error) {
-	url := c.getPath(path, version)
+func (c *baseCommunicator) newRequest(method, path, taskID, taskSecret string, data interface{}) (*http.Request, error) {
+	url := c.getPath(path, evergreen.APIRoutePrefixV2)
 	r, err := http.NewRequest(method, url, nil)
 	if err != nil {
-		return nil, errors.New("Error building request")
+		return nil, errors.New("building request")
 	}
 	if data != nil {
 		if rc, ok := data.(io.ReadCloser); ok {
@@ -52,7 +42,7 @@ func (c *baseCommunicator) newRequest(method, path, taskID, taskSecret, version 
 				return nil, err
 			}
 			r.Header.Add(evergreen.ContentLengthHeader, strconv.Itoa(len(out)))
-			r.Body = ioutil.NopCloser(bytes.NewReader(out))
+			r.Body = io.NopCloser(bytes.NewReader(out))
 		}
 	}
 
@@ -72,10 +62,10 @@ func (c *baseCommunicator) newRequest(method, path, taskID, taskSecret, version 
 
 func (c *baseCommunicator) createRequest(info requestInfo, data interface{}) (*http.Request, error) {
 	if info.method == http.MethodPost && data == nil {
-		return nil, errors.New("Attempting to post a nil body")
+		return nil, errors.Errorf("cannot send '%s' request with a nil body", http.MethodPost)
 	}
 	if err := info.validateRequestInfo(); err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, "validating request info")
 	}
 
 	var taskID, secret string
@@ -83,9 +73,9 @@ func (c *baseCommunicator) createRequest(info requestInfo, data interface{}) (*h
 		taskID = info.taskData.ID
 		secret = info.taskData.Secret
 	}
-	r, err := c.newRequest(info.method, info.path, taskID, secret, string(info.version), data)
+	r, err := c.newRequest(info.method, info.path, taskID, secret, data)
 	if err != nil {
-		return nil, errors.Wrap(err, "Error creating request")
+		return nil, errors.Wrap(err, "creating request")
 	}
 
 	return r, nil
@@ -94,11 +84,11 @@ func (c *baseCommunicator) createRequest(info requestInfo, data interface{}) (*h
 func (c *baseCommunicator) request(ctx context.Context, info requestInfo, data interface{}) (*http.Response, error) {
 	r, err := c.createRequest(info, data)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, "creating request")
 	}
 	resp, err := c.doRequest(ctx, r)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, "sending request")
 	}
 
 	return resp, nil
@@ -146,9 +136,9 @@ func (c *baseCommunicator) retryRequest(ctx context.Context, info requestInfo, d
 		}
 	}
 
-	r, err := c.createRequest(info, ioutil.NopCloser(bytes.NewReader(out)))
+	r, err := c.createRequest(info, io.NopCloser(bytes.NewReader(out)))
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "creating request")
 	}
 
 	r.Header.Add(evergreen.ContentLengthHeader, strconv.Itoa(len(out)))
@@ -184,11 +174,7 @@ func (r *requestInfo) validateRequestInfo() error {
 	switch r.method {
 	case http.MethodGet, http.MethodPost, http.MethodPut, http.MethodDelete, http.MethodPatch:
 	default:
-		return errors.New("invalid HTTP method")
-	}
-
-	if r.version != apiVersion1 && r.version != apiVersion2 {
-		return errors.New("invalid API version")
+		return errors.Errorf("invalid HTTP method '%s'", r.method)
 	}
 
 	return nil

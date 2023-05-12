@@ -162,6 +162,36 @@ func (m *projectAdminMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Reque
 	next(rw, r)
 }
 
+func NewCanCreateMiddleware() gimlet.Middleware {
+	return &canCreateMiddleware{}
+}
+
+type canCreateMiddleware struct {
+}
+
+func (m *canCreateMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	ctx := r.Context()
+	user := MustHaveUser(ctx)
+
+	canCreate, err := user.HasProjectCreatePermission()
+	if err != nil {
+		gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
+			StatusCode: http.StatusInternalServerError,
+			Message:    "error checking permissions",
+		}))
+		return
+	}
+	if !canCreate {
+		gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
+			StatusCode: http.StatusUnauthorized,
+			Message:    "not authorized",
+		}))
+		return
+	}
+
+	next(rw, r)
+}
+
 // This middleware is more restrictive than checkProjectAdmin, as branch admins do not have access
 func NewRepoAdminMiddleware() gimlet.Middleware {
 	return &projectRepoMiddleware{}
@@ -293,13 +323,15 @@ func (m *hostAuthMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Request, 
 			return
 		}
 	}
-	if _, statusCode, err := model.ValidateHost(hostID, r); err != nil {
+	h, statusCode, err := model.ValidateHost(hostID, r)
+	if err != nil {
 		gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
 			StatusCode: statusCode,
 			Message:    errors.Wrapf(err, "invalid host '%s'", hostID).Error(),
 		}))
 		return
 	}
+	updateHostAccessTime(h)
 	next(rw, r)
 }
 
@@ -334,7 +366,7 @@ func (m *podOrHostAuthMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Requ
 
 	isHostMode := hostID != ""
 	if isHostMode {
-		h, statusCode, err := model.ValidateHost(gimlet.GetVars(r)["host_id"], r)
+		h, statusCode, err := model.ValidateHost(hostID, r)
 		if err != nil {
 			gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
 				StatusCode: statusCode,
@@ -342,20 +374,7 @@ func (m *podOrHostAuthMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Requ
 			}))
 			return
 		}
-		// update host access time
-		if err := h.UpdateLastCommunicated(); err != nil {
-			grip.Warningf("Could not update host last communication time for %s: %+v", h.Id, err)
-		}
-		// Since the host has contacted the app server, we should prevent the
-		// app server from attempting to deploy agents or agent monitors.
-		// Deciding whether we should redeploy agents or agent monitors
-		// is handled within the REST route handler.
-		if h.NeedsNewAgent {
-			grip.Warning(message.WrapError(h.SetNeedsNewAgent(false), "problem clearing host needs new agent"))
-		}
-		if h.NeedsNewAgentMonitor {
-			grip.Warning(message.WrapError(h.SetNeedsNewAgentMonitor(false), "problem clearing host needs new agent monitor"))
-		}
+		updateHostAccessTime(h)
 		next(rw, r)
 		return
 	}
@@ -428,12 +447,40 @@ func (m *TaskAuthMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Request, 
 		}))
 		return
 	}
-	if _, code, err := model.ValidateHost("", r); err != nil {
+
+	podID, ok := gimlet.GetVars(r)["pod_id"]
+	if !ok {
+		podID = r.Header.Get(evergreen.PodHeader)
+	}
+	hostID, ok := gimlet.GetVars(r)["host_id"]
+	if !ok {
+		hostID = r.Header.Get(evergreen.HostHeader)
+	}
+	if hostID == "" && podID == "" {
 		gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
-			StatusCode: code,
-			Message:    errors.Wrapf(err, "invalid host associated with task '%s'", taskID).Error(),
+			StatusCode: http.StatusUnauthorized,
+			Message:    "either host ID or pod ID must be set",
 		}))
 		return
+	}
+	if hostID != "" && podID != "" {
+		gimlet.WriteResponse(rw, gimlet.NewJSONErrorResponse("host ID and pod ID cannot both be set"))
+		return
+	}
+	isHostMode := hostID != ""
+	if isHostMode {
+		if _, code, err := model.ValidateHost(hostID, r); err != nil {
+			gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
+				StatusCode: code,
+				Message:    errors.Wrapf(err, "invalid host associated with task '%s'", taskID).Error(),
+			}))
+			return
+		}
+	} else {
+		if err := checkPodSecret(r, podID); err != nil {
+			gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(err))
+			return
+		}
 	}
 
 	next(rw, r)
@@ -525,6 +572,24 @@ func (m *CommitQueueItemOwnerMiddleware) ServeHTTP(rw http.ResponseWriter, r *ht
 	next(rw, r)
 }
 
+// updateHostAccessTime updates the host access time and disables the host's flags to deploy new a new agent
+// or agent monitor if they are set.
+func updateHostAccessTime(h *host.Host) {
+	if err := h.UpdateLastCommunicated(); err != nil {
+		grip.Warningf("Could not update host last communication time for %s: %+v", h.Id, err)
+	}
+	// Since the host has contacted the app server, we should prevent the
+	// app server from attempting to deploy agents or agent monitors.
+	// Deciding whether we should redeploy agents or agent monitors
+	// is handled within the REST route handler.
+	if h.NeedsNewAgent {
+		grip.Warning(message.WrapError(h.SetNeedsNewAgent(false), "problem clearing host needs new agent"))
+	}
+	if h.NeedsNewAgentMonitor {
+		grip.Warning(message.WrapError(h.SetNeedsNewAgentMonitor(false), "problem clearing host needs new agent monitor"))
+	}
+}
+
 // canAlwaysSubmitPatchesForProject returns true if the user is a superuser or project admin,
 // or is authorized specifically to patch on behalf of other users.
 func canAlwaysSubmitPatchesForProject(user *user.DBUser, projectId string) bool {
@@ -610,7 +675,7 @@ func urlVarsToProjectScopes(r *http.Request) ([]string, int, error) {
 	resourceType := strings.ToUpper(util.CoalesceStrings(query["resource_type"], vars["resource_type"]))
 	if resourceType != "" {
 		switch resourceType {
-		case model.EventResourceTypeProject:
+		case event.EventResourceTypeProject:
 			vars["project_id"] = vars["resource_id"]
 		case event.ResourceTypeTask:
 			vars["task_id"] = vars["resource_id"]
@@ -787,7 +852,7 @@ func (m *EventLogPermissionsMiddleware) ServeHTTP(rw http.ResponseWriter, r *htt
 		opts.ResourceType = evergreen.ProjectResourceType
 		opts.Permission = evergreen.PermissionTasks
 		opts.RequiredLevel = evergreen.TasksView.Value
-	case model.EventResourceTypeProject:
+	case event.EventResourceTypeProject:
 		resources, status, err = urlVarsToProjectScopes(r)
 		opts.ResourceType = evergreen.ProjectResourceType
 		opts.Permission = evergreen.PermissionProjectSettings

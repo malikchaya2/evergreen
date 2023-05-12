@@ -15,6 +15,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/event"
 	"github.com/evergreen-ci/evergreen/model/notification"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
@@ -46,7 +47,7 @@ type commonTemplateData struct {
 	URL             string
 	PastTenseStatus string
 	Headers         http.Header
-	FailedTests     []task.TestResult
+	FailedTests     []testresult.TestResult
 
 	Task       *task.Task
 	ProjectRef *model.ProjectRef
@@ -60,6 +61,11 @@ type commonTemplateData struct {
 	githubDescription string
 
 	emailContent *template.Template
+}
+
+type emailTemplateData struct {
+	commonTemplateData
+	Description template.HTML
 }
 
 const emailSubjectTemplateString string = `Evergreen: {{ .Object }} {{.DisplayName}} in '{{ .Project }}' has {{ .PastTenseStatus }}!`
@@ -121,7 +127,7 @@ const emailTaskFailTemplate = `
         <tr><td colspan="2" height="10"></td></tr>
         <tr>
           <td width="90%">
-            <a href="{{ .URL }}" style="font-family:Arial,sans-serif;font-weight:normal;font-size:13px;color:#006cbc" class="link">view logs</a>
+            <a href="{{ .LogURL }}" style="font-family:Arial,sans-serif;font-weight:normal;font-size:13px;color:#006cbc" class="link">view logs</a>
           </td>
           <td>&nbsp;</td>
         </tr>
@@ -189,6 +195,26 @@ const emailTaskFailTemplate = `
           </span>
         </td>
       </tr>
+      <tr>
+	     <td colspan="2"><span style="font-family:Arial,sans-serif;font-weight:bold;font-size:10px;color:#999999" class="label">SUBSCRIPTION ID</span></td>
+	  </tr>
+      <tr>
+        <td colspan="2">
+          <span style="font-family:Arial,sans-serif;font-weight:bold;font-size:36px;color:#333333" class="subscription">
+            {{ .SubscriptionID }}
+          </span>
+        </td>
+      </tr>
+      <tr>
+	     <td colspan="2"><span style="font-family:Arial,sans-serif;font-weight:bold;font-size:10px;color:#999999" class="label">EVENT ID</span></td>
+	  </tr>
+      <tr>
+        <td colspan="2">
+          <span style="font-family:Arial,sans-serif;font-weight:bold;font-size:36px;color:#333333" class="event">
+            {{ .EventID }}
+          </span>
+        </td>
+      </tr>
     </table>
   </td>
   <td width="20"></td>
@@ -203,6 +229,8 @@ const emailDefaultContentTemplateString = `{{ define "content"}}
 
 <p>Your Evergreen {{ .Object }} in '{{ .Project }}' <a href="{{ .URL }}">{{ .DisplayName }}</a> has {{ .PastTenseStatus }}.</p>
 <p>{{ .Description }}</p>
+
+<p>Subscription: {{ .SubscriptionID }}; Event: {{ .EventID }} </p>
 {{ end }}`
 
 var emailDefaultContentTemplate = template.Must(template.New("content").Parse(emailDefaultContentTemplateString))
@@ -224,29 +252,33 @@ func makeHeaders(headerMap map[string][]string) http.Header {
 }
 
 func emailPayload(t *commonTemplateData) (*message.Email, error) {
+	emailData := &emailTemplateData{
+		commonTemplateData: *t,
+		Description:        template.HTML(t.Description),
+	}
 	bodyTmpl, err := emailBodyTemplate.Clone()
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to clone emailBodyTemplate")
+		return nil, errors.Wrap(err, "cloning email body template")
 	}
-	if t.emailContent == nil {
+	if emailData.emailContent == nil {
 		_, err = bodyTmpl.AddParseTree("content", emailDefaultContentTemplate.Tree)
 	} else {
-		_, err = bodyTmpl.AddParseTree("content", t.emailContent.Tree)
+		_, err = bodyTmpl.AddParseTree("content", emailData.emailContent.Tree)
 	}
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to email content")
+		return nil, errors.Wrap(err, "adding email content")
 	}
 	buf := &bytes.Buffer{}
-	err = bodyTmpl.ExecuteTemplate(buf, "emailbody", t)
+	err = bodyTmpl.ExecuteTemplate(buf, "emailbody", emailData)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to execute email template")
+		return nil, errors.Wrap(err, "executing email template")
 	}
 	body := buf.String()
 
 	buf = &bytes.Buffer{}
-	err = subjectTmpl.Execute(buf, t)
+	err = subjectTmpl.Execute(buf, emailData)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to execute subject template")
+		return nil, errors.Wrap(err, "executing email subject template")
 	}
 	subject := buf.String()
 
@@ -254,13 +286,13 @@ func emailPayload(t *commonTemplateData) (*message.Email, error) {
 		Subject:           subject,
 		Body:              body,
 		PlainTextContents: false,
-		Headers:           t.Headers,
+		Headers:           emailData.Headers,
 	}
 
 	// prevent Gmail from threading notifications with similar subjects
-	m.Headers["X-Entity-Ref-Id"] = []string{fmt.Sprintf("%s-%s-%s", t.Object, t.SubscriptionID, t.EventID)}
-	m.Headers["X-Evergreen-Event-Id"] = []string{t.EventID}
-	m.Headers["X-Evergreen-Subscription-Id"] = []string{t.SubscriptionID}
+	m.Headers["X-Entity-Ref-Id"] = []string{fmt.Sprintf("%s-%s-%s", emailData.Object, emailData.SubscriptionID, emailData.EventID)}
+	m.Headers["X-Evergreen-Event-Id"] = []string{emailData.EventID}
+	m.Headers["X-Evergreen-Subscription-Id"] = []string{emailData.SubscriptionID}
 
 	return &m, nil
 }
@@ -268,7 +300,7 @@ func emailPayload(t *commonTemplateData) (*message.Email, error) {
 func webhookPayload(api interface{}, headers http.Header) (*util.EvergreenWebhook, error) {
 	bytes, err := json.Marshal(api)
 	if err != nil {
-		return nil, errors.Wrap(err, "error building json model")
+		return nil, errors.Wrap(err, "building JSON model")
 	}
 
 	return &util.EvergreenWebhook{
@@ -280,12 +312,12 @@ func webhookPayload(api interface{}, headers http.Header) (*util.EvergreenWebhoo
 func jiraComment(t *commonTemplateData) (*string, error) {
 	commentTmpl, err := ttemplate.New("jira-comment").Parse(jiraCommentTemplate)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse jira comment template")
+		return nil, errors.Wrap(err, "parsing Jira comment template")
 	}
 
 	buf := &bytes.Buffer{}
 	if err = commentTmpl.Execute(buf, t); err != nil {
-		return nil, errors.Wrap(err, "failed to make jira comment")
+		return nil, errors.Wrap(err, "generating Jira comment text from template")
 	}
 	comment := buf.String()
 
@@ -297,17 +329,17 @@ func jiraIssue(t *commonTemplateData) (*message.JiraIssue, error) {
 
 	comment, err := jiraComment(t)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to make jira issue")
+		return nil, errors.Wrap(err, "making Jira issue")
 	}
 
 	issueTmpl, err := ttemplate.New("jira-issue").Parse(jiraIssueTitle)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse jira issue template")
+		return nil, errors.Wrap(err, "parsing Jira issue template")
 	}
 
 	buf := &bytes.Buffer{}
 	if err = issueTmpl.Execute(buf, t); err != nil {
-		return nil, errors.Wrap(err, "failed to make jira issue")
+		return nil, errors.Wrap(err, "generating Jira ticket text from template")
 	}
 	title, remainder := truncateString(buf.String(), maxSummary)
 	desc := *comment
@@ -326,12 +358,12 @@ func jiraIssue(t *commonTemplateData) (*message.JiraIssue, error) {
 func slack(t *commonTemplateData) (*notification.SlackPayload, error) {
 	issueTmpl, err := ttemplate.New("slack").Parse(slackTemplate)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to parse slack template")
+		return nil, errors.Wrap(err, "parsing Slack template")
 	}
 
 	buf := &bytes.Buffer{}
 	if err = issueTmpl.Execute(buf, t); err != nil {
-		return nil, errors.Wrap(err, "failed to make slack message")
+		return nil, errors.Wrap(err, "generating Slack message text from template")
 	}
 	msg := buf.String()
 
@@ -375,14 +407,14 @@ func makeCommonPayload(sub *event.Subscription, eventAttributes event.Attributes
 	if data.Task != nil {
 		data.FailedTests, err = getFailedTestsFromTemplate(*data.Task)
 		if err != nil {
-			return nil, errors.Wrap(err, "error getting failed tests")
+			return nil, errors.Wrap(err, "getting failed tests")
 		}
 	}
 
 	switch sub.Subscriber.Type {
 	case event.GithubPullRequestSubscriberType, event.GithubCheckSubscriberType:
 		if len(data.githubDescription) == 0 {
-			return nil, errors.Errorf("Github subscriber not supported for trigger: '%s'", sub.Trigger)
+			return nil, errors.Errorf("GitHub subscriber not supported for trigger '%s'", sub.Trigger)
 		}
 		msg := &message.GithubStatus{
 			Context:     data.githubContext,
@@ -416,19 +448,20 @@ func makeCommonPayload(sub *event.Subscription, eventAttributes event.Attributes
 		return slack(data)
 	}
 
-	return nil, errors.Errorf("unknown type: '%s'", sub.Subscriber.Type)
+	return nil, errors.Errorf("unknown subscriber type '%s'", sub.Subscriber.Type)
 }
 
-func getFailedTestsFromTemplate(t task.Task) ([]task.TestResult, error) {
-	result := []task.TestResult{}
+func getFailedTestsFromTemplate(t task.Task) ([]testresult.TestResult, error) {
+	results := []testresult.TestResult{}
 	for i := range t.LocalTestResults {
 		if t.LocalTestResults[i].Status == evergreen.TestFailedStatus {
 			testResult := t.LocalTestResults[i]
-			testResult.URL = testResult.GetLogURL(evergreen.LogViewerHTML)
-			result = append(result, testResult)
+			testResult.LogURL = testResult.GetLogURL(evergreen.GetEnvironment(), evergreen.LogViewerHTML)
+			results = append(results, testResult)
 		}
 	}
-	return result, nil
+
+	return results, nil
 }
 
 func taskLink(uiBase string, taskID string, execution int) string {
@@ -437,14 +470,6 @@ func taskLink(uiBase string, taskID string, execution int) string {
 
 func taskLogLink(uiBase string, taskID string, execution int) string {
 	return fmt.Sprintf("%s/task_log_raw/%s/%d?type=T", uiBase, url.PathEscape(taskID), execution)
-}
-
-func buildLink(uiBase string, buildID string, hasPatch bool) string {
-	url := fmt.Sprintf("%s/build/%s", uiBase, url.PathEscape(buildID))
-	if hasPatch {
-		url += "?redirect_spruce_users=true"
-	}
-	return url
 }
 
 type versionLinkInput struct {
@@ -457,15 +482,16 @@ type versionLinkInput struct {
 func versionLink(i versionLinkInput) string {
 	url := fmt.Sprintf("%s/version/%s", i.uiBase, url.PathEscape(i.versionID))
 	if i.isChild {
-		url += "/downstream-tasks"
+		url += "/downstream-projects"
 	}
-	if i.hasPatch {
-		url += "?redirect_spruce_users=true"
-	}
+	url += "?redirect_spruce_users=true"
 	return url
 }
 
-func hostLink(uiBase string, hostID string) string {
-	return fmt.Sprintf("%s/host/%s", uiBase, hostID)
+func hostLink(uiBase, hostID string) string {
+	return fmt.Sprintf("%s/host/%s?redirect_spruce_users=true", uiBase, hostID)
+}
 
+func podLink(uiBase, podID string) string {
+	return fmt.Sprintf("%s/pod/%s?redirect_spruce_users=true", uiBase, podID)
 }

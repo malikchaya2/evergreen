@@ -293,13 +293,13 @@ func (h *Host) ForceReinstallJasperCommand(settings *evergreen.Settings) string 
 		params = append(params, fmt.Sprintf("--user=%s", h.User))
 	}
 
-	if settings.Splunk.Populated() && h.StartedBy == evergreen.User {
+	if settings.Splunk.SplunkConnectionInfo.Populated() && h.StartedBy == evergreen.User {
 		params = append(params,
-			fmt.Sprintf("--splunk_url=%s", settings.Splunk.ServerURL),
+			fmt.Sprintf("--splunk_url=%s", settings.Splunk.SplunkConnectionInfo.ServerURL),
 			fmt.Sprintf("--splunk_token_path=%s", h.Distro.AbsPathNotCygwinCompatible(h.splunkTokenFilePath())),
 		)
-		if settings.Splunk.Channel != "" {
-			params = append(params, fmt.Sprintf("--splunk_channel=%s", settings.Splunk.Channel))
+		if settings.Splunk.SplunkConnectionInfo.Channel != "" {
+			params = append(params, fmt.Sprintf("--splunk_channel=%s", settings.Splunk.SplunkConnectionInfo.Channel))
 		}
 	}
 
@@ -463,7 +463,7 @@ func (h *Host) GenerateUserDataProvisioningScript(settings *evergreen.Settings, 
 		return "", errors.Wrap(err, "creating setup script")
 	}
 
-	writeCredentialsCmds, err := h.WriteJasperCredentialsFilesCommands(settings.Splunk, creds)
+	writeCredentialsCmds, err := h.WriteJasperCredentialsFilesCommands(settings.Splunk.SplunkConnectionInfo, creds)
 	if err != nil {
 		return "", errors.Wrap(err, "creating commands to write Jasper credentials file")
 	}
@@ -555,7 +555,6 @@ func (h *Host) SetupServiceUserCommands() (string, error) {
 			cmd(fmt.Sprintf("net user %s %s /add", h.Distro.BootstrapSettings.ServiceUser, h.ServicePassword)),
 			// Add the user to the Administrators group.
 			cmd(fmt.Sprintf("net localgroup Administrators %s /add", h.Distro.BootstrapSettings.ServiceUser)),
-			cmd(fmt.Sprintf(`wmic useraccount where name="%s" set passwordexpires=false`, h.Distro.BootstrapSettings.ServiceUser)),
 			// Allow the user to run the service by granting the "Log on as a
 			// service" right.
 			loginServicePermCmd,

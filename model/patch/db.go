@@ -22,7 +22,8 @@ const (
 )
 
 // BSON fields for the patches
-//nolint: deadcode, megacheck, unused
+//
+//nolint:megacheck,unused
 var (
 	IdKey                   = bsonutil.MustHaveTag(Patch{}, "Id")
 	DescriptionKey          = bsonutil.MustHaveTag(Patch{}, "Description")
@@ -42,6 +43,7 @@ var (
 	PatchesKey              = bsonutil.MustHaveTag(Patch{}, "Patches")
 	ParametersKey           = bsonutil.MustHaveTag(Patch{}, "Parameters")
 	ActivatedKey            = bsonutil.MustHaveTag(Patch{}, "Activated")
+	ProjectStorageMethodKey = bsonutil.MustHaveTag(Patch{}, "ProjectStorageMethod")
 	PatchedParserProjectKey = bsonutil.MustHaveTag(Patch{}, "PatchedParserProject")
 	PatchedProjectConfigKey = bsonutil.MustHaveTag(Patch{}, "PatchedProjectConfig")
 	AliasKey                = bsonutil.MustHaveTag(Patch{}, "Alias")
@@ -318,8 +320,7 @@ func PatchesByProject(projectId string, ts time.Time, limit int) db.Q {
 	}).Sort([]string{"-" + CreateTimeKey}).Limit(limit)
 }
 
-// FindFailedCommitQueuePatchesInTimeRange returns failed patches if they started within range,
-// or if they were never started but finished within time range. (i.e. timed out)
+// FindFailedCommitQueuePatchesInTimeRange returns failed patches if they started or failed within range.
 func FindFailedCommitQueuePatchesInTimeRange(projectID string, startTime, endTime time.Time) ([]Patch, error) {
 	query := bson.M{
 		ProjectKey: projectID,
@@ -331,7 +332,6 @@ func FindFailedCommitQueuePatchesInTimeRange(projectID string, startTime, endTim
 				{StartTimeKey: bson.M{"$gte": startTime}},
 			}},
 			{"$and": []bson.M{
-				{StartTimeKey: time.Time{}},
 				{FinishTimeKey: bson.M{"$lte": endTime}},
 				{FinishTimeKey: bson.M{"$gte": startTime}},
 			}},
@@ -340,6 +340,8 @@ func FindFailedCommitQueuePatchesInTimeRange(projectID string, startTime, endTim
 	return Find(db.Query(query).Sort([]string{CreateTimeKey}))
 }
 
+// ByGithubPRAndCreatedBefore finds all patches that were created for a GitHub
+// PR before the given timestamp.
 func ByGithubPRAndCreatedBefore(t time.Time, owner, repo string, prNumber int) db.Q {
 	return db.Query(bson.M{
 		CreateTimeKey: bson.M{
@@ -351,6 +353,23 @@ func ByGithubPRAndCreatedBefore(t time.Time, owner, repo string, prNumber int) d
 	})
 }
 
+// FindLatestGithubPRPatch returns the latest PR patch for the given PR, if there is one.
+func FindLatestGithubPRPatch(owner, repo string, prNumber int) (*Patch, error) {
+	patches, err := Find(db.Query(bson.M{
+		AliasKey: bson.M{"$ne": evergreen.CommitQueueAlias},
+		bsonutil.GetDottedKeyName(githubPatchDataKey, thirdparty.GithubPatchBaseOwnerKey): owner,
+		bsonutil.GetDottedKeyName(githubPatchDataKey, thirdparty.GithubPatchBaseRepoKey):  repo,
+		bsonutil.GetDottedKeyName(githubPatchDataKey, thirdparty.GithubPatchPRNumberKey):  prNumber,
+	}).Sort([]string{"-" + CreateTimeKey}).Limit(1))
+	if err != nil {
+		return nil, err
+	}
+	if len(patches) == 0 {
+		return nil, nil
+	}
+	return &patches[0], nil
+}
+
 func FindProjectForPatch(patchID mgobson.ObjectId) (string, error) {
 	p, err := FindOne(ById(patchID).Project(bson.M{ProjectKey: 1}))
 	if err != nil {
@@ -360,4 +379,32 @@ func FindProjectForPatch(patchID mgobson.ObjectId) (string, error) {
 		return "", errors.New("patch not found")
 	}
 	return p.Project, nil
+}
+
+// GetFinalizedChildPatchIdsForPatch returns patchIds for any finalized children of the given patch.
+func GetFinalizedChildPatchIdsForPatch(patchID string) ([]string, error) {
+	withKey := bsonutil.GetDottedKeyName(TriggersKey, TriggerInfoChildPatchesKey)
+	//do the same for child patches
+	p, err := FindOne(ByStringId(patchID).WithFields(withKey))
+	if err != nil {
+		return nil, errors.Wrapf(err, "finding patch '%s'", patchID)
+	}
+	if p == nil {
+		return nil, errors.Wrapf(err, "patch '%s' not found", patchID)
+	}
+	if !p.IsParent() {
+		return nil, nil
+	}
+
+	childPatches, err := Find(ByStringIds(p.Triggers.ChildPatches).WithFields(VersionKey))
+	if err != nil {
+		return nil, errors.Wrap(err, "getting child patches")
+	}
+	res := []string{}
+	for _, child := range childPatches {
+		if child.Version != "" {
+			res = append(res, child.Id.Hex())
+		}
+	}
+	return res, nil
 }

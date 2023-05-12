@@ -3,10 +3,10 @@ package graphql
 // This test takes a specification and runs GraphQL queries, comparing the output of the query to what is expected.
 // To add a new test:
 // 1. Add a new directory in the tests directory. Name it after the query/mutation you are testing.
-// 2. Add a data.json file to the dir you created. The data for your tests goes here. See tests/patchTasks/data.json for example.
+// 2. Add a data.json file to the dir you created. The data for your tests goes here. See tests/versionTasks/data.json for example.
 // 3. (Optional) Add directory specific test setup within the directorySpecificTestSetup function.
 // 4. (Optional) Add directory specific test cleanup within the directorySpecificTestCleanup function.
-// 5. Add a results.json file to the dir you created. The results that your queries will be asserts against go here. See tests/patchTasks/results.json for example.
+// 5. Add a results.json file to the dir you created. The results that your queries will be asserts against go here. See tests/versionTasks/results.json for example.
 // 6. Create a queries dir in the dir you created. All the queries/mutations for your tests go in this dir.
 // 7. That's all! Start testing.
 
@@ -15,14 +15,16 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
+	"github.com/evergreen-ci/evergreen/cloud"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
@@ -30,7 +32,6 @@ import (
 	"github.com/evergreen-ci/evergreen/model/distro"
 	"github.com/evergreen-ci/evergreen/model/host"
 	"github.com/evergreen-ci/evergreen/model/task"
-	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/mongodb/grip"
@@ -57,6 +58,7 @@ const apiKey = "testapikey"
 
 func setup(t *testing.T, state *AtomicGraphQLState) {
 	const slackUsername = "testslackuser"
+	const slackMemberId = "12345member"
 	const email = "testuser@mongodb.com"
 	const accessToken = "access_token"
 	const refreshToken = "refresh_token"
@@ -67,19 +69,38 @@ func setup(t *testing.T, state *AtomicGraphQLState) {
 		{Name: "a", Key: "aKey", CreatedAt: time.Time{}},
 		{Name: "b", Key: "bKey", CreatedAt: time.Time{}},
 	}
-	systemRoles := []string{"unrestrictedTaskAccess", "modify_host", "modify_project_tasks", "superuser"}
+	systemRoles := []string{"unrestrictedTaskAccess", "modify_host", "modify_project_tasks", "superuser", "project_grumpyCat", "project_happyAbyssinian"}
 	env := evergreen.GetEnvironment()
 	ctx := context.Background()
 	require.NoError(t, env.DB().Drop(ctx))
 
-	usr, err := user.GetOrCreateUser(apiUser, apiUser, email, accessToken, refreshToken, []string{})
-	require.NoError(t, err)
+	require.NoError(t, db.Clear(user.Collection),
+		"unable to clear user collection")
+
+	usr := user.DBUser{
+		Id:           apiUser,
+		DispName:     apiUser,
+		EmailAddress: email,
+		Settings: user.UserSettings{
+			SlackUsername: "testuser",
+			SlackMemberId: "testuser",
+			UseSpruceOptions: user.UseSpruceOptions{
+				SpruceV1: true,
+			},
+		},
+		LoginCache: user.LoginCache{
+			AccessToken:  accessToken,
+			RefreshToken: refreshToken,
+		},
+		APIKey: apiKey,
+	}
+	assert.NoError(t, usr.Insert())
 
 	for _, pk := range pubKeys {
-		err = usr.AddPublicKey(pk.Name, pk.Key)
+		err := usr.AddPublicKey(pk.Name, pk.Key)
 		require.NoError(t, err)
 	}
-	err = usr.UpdateSettings(user.UserSettings{Timezone: "America/New_York", SlackUsername: slackUsername})
+	err := usr.UpdateSettings(user.UserSettings{Timezone: "America/New_York", SlackUsername: slackUsername, SlackMemberId: slackMemberId})
 	require.NoError(t, err)
 
 	for _, role := range systemRoles {
@@ -88,14 +109,6 @@ func setup(t *testing.T, state *AtomicGraphQLState) {
 	}
 
 	require.NoError(t, usr.UpdateAPIKey(apiKey))
-	require.NoError(t, db.CreateCollections(testresult.Collection))
-	require.NoError(t, db.EnsureIndex(testresult.Collection, mongo.IndexModel{
-		Keys: testresult.TestResultsIndex}))
-
-	// TODO (EVG-15499): Create scope and role collection because the
-	// RoleManager will try creating them in a transaction, which is not allowed
-	// for FCV < 4.4.
-	require.NoError(t, db.CreateCollections(evergreen.ScopeCollection, evergreen.RoleCollection))
 
 	require.NoError(t, setupData(*env.DB(), *env.Client().Database(state.TaskLogDB), state.TestData, *state))
 	roleManager := env.RoleManager()
@@ -158,6 +171,45 @@ func setup(t *testing.T, state *AtomicGraphQLState) {
 	err = roleManager.AddScope(superUserScope)
 	require.NoError(t, err)
 
+	// Scopes and roles for testing viewable projects for testuser
+	projectGrumpyCatScope := gimlet.Scope{
+		ID:        "project_grumpyCat_scope",
+		Name:      "grumpyCat",
+		Type:      evergreen.ProjectResourceType,
+		Resources: []string{"grumpyCat"},
+	}
+	err = roleManager.AddScope(projectGrumpyCatScope)
+	require.NoError(t, err)
+
+	projectGrumpyCatRole := gimlet.Role{
+		ID:          "project_grumpyCat",
+		Name:        "grumpyCat",
+		Scope:       projectGrumpyCatScope.ID,
+		Permissions: map[string]int{"project_settings": 20, "project_tasks": 30, "project_patches": 10, "project_logs": 10},
+		Owners:      []string{"testuser"},
+	}
+	err = roleManager.UpdateRole(projectGrumpyCatRole)
+	require.NoError(t, err)
+
+	projectHappyAbyssinianScope := gimlet.Scope{
+		ID:        "project_happyAbyssinian_scope",
+		Name:      "happyAbyssinian",
+		Type:      evergreen.ProjectResourceType,
+		Resources: []string{"happyAbyssinian"},
+	}
+	err = roleManager.AddScope(projectHappyAbyssinianScope)
+	require.NoError(t, err)
+
+	projectHappyAbyssinianRole := gimlet.Role{
+		ID:          "project_happyAbyssinian",
+		Name:        "happyAbyssinian",
+		Scope:       projectHappyAbyssinianScope.ID,
+		Permissions: map[string]int{"project_settings": 20, "project_tasks": 30, "project_patches": 10, "project_logs": 10},
+		Owners:      []string{"testuser"},
+	}
+	err = roleManager.UpdateRole(projectHappyAbyssinianRole)
+	require.NoError(t, err)
+
 	state.ApiKey = apiKey
 	state.ApiUser = apiUser
 
@@ -180,20 +232,22 @@ func escapeGQLQuery(in string) string {
 
 func MakeTestsInDirectory(state *AtomicGraphQLState, pathToTests string) func(t *testing.T) {
 	return func(t *testing.T) {
-		dataFile, err := ioutil.ReadFile(filepath.Join(pathToTests, "tests", state.Directory, "data.json"))
-		require.NoError(t, err)
+		dataFilePath := filepath.Join(pathToTests, "tests", state.Directory, "data.json")
+		dataFile, err := os.ReadFile(filepath.Join(pathToTests, "tests", state.Directory, "data.json"))
+		require.NoError(t, errors.Wrapf(err, "reading data file for %s", dataFilePath))
 
-		resultsFile, err := ioutil.ReadFile(filepath.Join(pathToTests, "tests", state.Directory, "results.json"))
-		require.NoError(t, err)
+		resultsFilePath := filepath.Join(pathToTests, "tests", state.Directory, "results.json")
+		resultsFile, err := os.ReadFile(resultsFilePath)
+		require.NoError(t, errors.Wrapf(err, "reading results file for %s", resultsFilePath))
 
 		var testData map[string]json.RawMessage
 		err = json.Unmarshal(dataFile, &testData)
-		require.NoError(t, err)
+		require.NoError(t, errors.Wrapf(err, "unmarshalling data file for %s", dataFilePath))
 		state.TestData = testData
 
 		var tests testsCases
 		err = json.Unmarshal(resultsFile, &tests)
-		require.NoError(t, err)
+		require.NoError(t, errors.Wrapf(err, "unmarshalling results file for %s", resultsFilePath))
 
 		// Delete exactly the documents added to the task_logg coll instead of dropping task log db
 		// we do this to minimize deleting data that was not added from this test suite
@@ -212,7 +266,7 @@ func MakeTestsInDirectory(state *AtomicGraphQLState, pathToTests string) func(t 
 		setup(t, state)
 		for _, testCase := range tests.Tests {
 			singleTest := func(t *testing.T) {
-				f, err := ioutil.ReadFile(filepath.Join(pathToTests, "tests", state.Directory, "queries", testCase.QueryFile))
+				f, err := os.ReadFile(filepath.Join(pathToTests, "tests", state.Directory, "queries", testCase.QueryFile))
 				require.NoError(t, err)
 				jsonQuery := fmt.Sprintf(`{"operationName":null,"variables":{},"query":"%s"}`, escapeGQLQuery(string(f)))
 				body := bytes.NewBuffer([]byte(jsonQuery))
@@ -224,7 +278,7 @@ func MakeTestsInDirectory(state *AtomicGraphQLState, pathToTests string) func(t 
 				r.Header.Add("content-type", "application/json")
 				resp, err := client.Do(r)
 				require.NoError(t, err)
-				b, err := ioutil.ReadAll(resp.Body)
+				b, err := io.ReadAll(resp.Body)
 				require.NoError(t, err)
 
 				// Remove apollo tracing data from test responses
@@ -262,12 +316,12 @@ func setupData(db mongo.Database, logsDb mongo.Database, data map[string]json.Ra
 	ctx := context.Background()
 	catcher := grip.NewBasicCatcher()
 	for coll, d := range data {
-		var docs []interface{}
 		// the docs to insert as part of setup need to be deserialized as extended JSON, whereas the rest of the
 		// test spec is normal JSON
+		var docs []interface{}
 		catcher.Add(bson.UnmarshalExtJSON(d, false, &docs))
-		// task_logg collection belongs to the logs db
 		if coll == state.TaskLogColl {
+			// task_logg collection belongs to the logs db
 			_, err := logsDb.Collection(coll).InsertMany(ctx, docs)
 			catcher.Add(err)
 		} else {
@@ -290,12 +344,12 @@ func directorySpecificTestSetup(t *testing.T, state AtomicGraphQLState) {
 	type setupFn func(*testing.T)
 	// Map the directory name to the test setup function
 	m := map[string][]setupFn{
-		"attachVolumeToHost":   {spawnTestHostAndVolume},
-		"detachVolumeFromHost": {spawnTestHostAndVolume},
-		"removeVolume":         {spawnTestHostAndVolume},
-		"spawnVolume":          {spawnTestHostAndVolume, addSubnets},
-		"updateVolume":         {spawnTestHostAndVolume},
-		"schedulePatch":        {persistTestSettings},
+		"mutation/attachVolumeToHost":   {spawnTestHostAndVolume},
+		"mutation/detachVolumeFromHost": {spawnTestHostAndVolume},
+		"mutation/removeVolume":         {spawnTestHostAndVolume},
+		"mutation/spawnVolume":          {spawnTestHostAndVolume, addSubnets},
+		"mutation/updateVolume":         {spawnTestHostAndVolume},
+		"mutation/schedulePatch":        {persistTestSettings},
 	}
 	if m[state.Directory] != nil {
 		for _, exec := range m[state.Directory] {
@@ -308,7 +362,7 @@ func directorySpecificTestCleanup(t *testing.T, directory string) {
 	type cleanupFn func(*testing.T)
 	// Map the directory name to the test cleanup function
 	m := map[string][]cleanupFn{
-		"spawnVolume": {clearSubnets},
+		"mutation/spawnVolume": {clearSubnets},
 	}
 	if m[directory] != nil {
 		for _, exec := range m[directory] {
@@ -364,8 +418,24 @@ func spawnTestHostAndVolume(t *testing.T) {
 	}
 	require.NoError(t, h.Insert())
 	ctx := context.Background()
-	err = SpawnHostForTestCode(ctx, &mountedVolume, &h)
+	err = spawnHostForTestCode(ctx, &mountedVolume, &h)
 	require.NoError(t, err)
+}
+
+func spawnHostForTestCode(ctx context.Context, vol *host.Volume, h *host.Host) error {
+	mgr, err := cloud.GetEC2ManagerForVolume(ctx, vol)
+	if err != nil {
+		return err
+	}
+	if os.Getenv("SETTINGS_OVERRIDE") != "" {
+		// The mock manager needs to spawn the host specified in our test data.
+		// The host should already be spawned in a non-test scenario.
+		_, err := mgr.SpawnHost(ctx, h)
+		if err != nil {
+			return errors.Wrapf(err, "error spawning host in test code")
+		}
+	}
+	return nil
 }
 
 func addSubnets(t *testing.T) {

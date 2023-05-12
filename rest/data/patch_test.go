@@ -2,7 +2,7 @@ package data
 
 import (
 	"context"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -14,7 +14,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/testutil"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -187,10 +187,14 @@ func TestPatchConnectorFetchByIdSuite(t *testing.T) {
 }
 
 func (s *PatchConnectorFetchByIdSuite) SetupSuite() {
-	s.NoError(db.ClearCollections(patch.Collection, dbModel.ProjectRefCollection))
+	s.NoError(db.ClearCollections(patch.Collection, dbModel.ProjectRefCollection, dbModel.VersionCollection))
 	s.setup = func() error {
-		s.obj_ids = []string{"aabbccddeeff001122334455", "aabbccddeeff001122334456"}
+		version := dbModel.Version{
+			Id: "version1",
+		}
+		s.NoError(version.Insert())
 
+		s.obj_ids = []string{"aabbccddeeff001122334455", "aabbccddeeff001122334456"}
 		patches := []patch.Patch{
 			{Id: patch.NewId(s.obj_ids[0])},
 			{Id: patch.NewId(s.obj_ids[1])},
@@ -252,12 +256,16 @@ func TestPatchConnectorAbortByIdSuite(t *testing.T) {
 }
 
 func (s *PatchConnectorAbortByIdSuite) SetupSuite() {
-	s.NoError(db.ClearCollections(patch.Collection, dbModel.ProjectRefCollection))
+	s.NoError(db.ClearCollections(patch.Collection, dbModel.ProjectRefCollection, dbModel.VersionCollection))
 	s.setup = func() error {
 
+		version := dbModel.Version{
+			Id: "version1",
+		}
+		s.NoError(version.Insert())
 		s.obj_ids = []string{"aabbccddeeff001122334455", "aabbccddeeff001122334456"}
 		patches := []patch.Patch{
-			{Id: patch.NewId(s.obj_ids[0]), Version: "version1"},
+			{Id: patch.NewId(s.obj_ids[0]), Version: version.Id},
 			{Id: patch.NewId(s.obj_ids[1])},
 		}
 		for _, p := range patches {
@@ -271,7 +279,7 @@ func (s *PatchConnectorAbortByIdSuite) SetupSuite() {
 
 	s.Require().NoError(s.setup())
 	var err error
-	s.prBody, err = ioutil.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "..", "route", "testdata", "pull_request.json"))
+	s.prBody, err = os.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "..", "route", "testdata", "pull_request.json"))
 	s.NoError(err)
 	s.Len(s.prBody, 24731)
 }
@@ -316,7 +324,9 @@ func (s *PatchConnectorAbortByIdSuite) TestAbortByPullRequest() {
 	s.True(ok)
 	s.Contains(AbortPatchesFromPullRequest(event).Error(), "pull request data is malformed")
 
-	now := time.Now().Round(time.Millisecond)
+	now := github.Timestamp{
+		Time: time.Now().Round(time.Millisecond),
+	}
 	event.PullRequest.ClosedAt = &now
 	s.NoError(AbortPatchesFromPullRequest(event))
 }
@@ -331,7 +341,9 @@ func (s *PatchConnectorAbortByIdSuite) TestVerifyPullRequestEventForAbort() {
 	s.Empty(repo)
 	s.Contains(err.Error(), "pull request data is malformed")
 
-	now := time.Now().Round(time.Millisecond)
+	now := github.Timestamp{
+		Time: time.Now().Round(time.Millisecond),
+	}
 	event.PullRequest.ClosedAt = &now
 	event.Repo.FullName = github.String("somethingmalformed")
 	owner, repo, err = verifyPullRequestEventForAbort(event)
@@ -364,7 +376,7 @@ func TestPatchConnectorChangeStatusSuite(t *testing.T) {
 }
 
 func (s *PatchConnectorChangeStatusSuite) SetupSuite() {
-	s.NoError(db.ClearCollections(patch.Collection, dbModel.ProjectRefCollection, task.Collection))
+	s.NoError(db.ClearCollections(patch.Collection, dbModel.ProjectRefCollection, task.Collection, dbModel.VersionCollection))
 	s.setup = func() error {
 		s.obj_ids = []string{"aabbccddeeff001122334455", "aabbccddeeff001122334456"}
 
@@ -379,6 +391,12 @@ func (s *PatchConnectorChangeStatusSuite) SetupSuite() {
 		s.NoError(task.Insert())
 		for _, p := range patches {
 			s.NoError(p.Insert())
+		}
+		for _, id := range s.obj_ids {
+			version := dbModel.Version{
+				Id: id,
+			}
+			s.NoError(version.Insert())
 		}
 
 		return nil

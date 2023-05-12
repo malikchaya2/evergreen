@@ -4,11 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"os"
 	"runtime"
-	"strings"
 	"testing"
 	"time"
 
@@ -54,8 +53,6 @@ func (s *StatusSuite) TestBasicAssumptions() {
 }
 
 func (s *StatusSuite) TestPopulateSystemInfo() {
-	grip.Alert(strings.Join(s.resp.SystemInfo.Errors, ";\n"))
-	grip.Info(s.resp.SystemInfo)
 	s.NotNil(s.resp.SystemInfo)
 }
 
@@ -140,7 +137,7 @@ func (s *StatusSuite) TestAgentFailsToStartTwice() {
 	case err = <-second:
 	}
 	s.Error(err)
-	s.Contains(err.Error(), "another agent is running on 2287")
+	s.Contains(err.Error(), "another process is running on localhost port 2287")
 
 	cancel()
 	err = <-first
@@ -190,7 +187,7 @@ func (s *StatusSuite) TestCheckOOMSucceeds() {
 
 	s.Require().NoError(err)
 	if resp.StatusCode != 200 {
-		b, err := ioutil.ReadAll(resp.Body)
+		b, err := io.ReadAll(resp.Body)
 		grip.Error(err)
 		s.FailNow(fmt.Sprintf("received status code %d from OOM endpoint with body %s", resp.StatusCode, string(b)))
 	}

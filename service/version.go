@@ -10,7 +10,6 @@ import (
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/task"
-	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/evergreen/plugin"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
@@ -21,23 +20,32 @@ import (
 func (uis *UIServer) versionPage(w http.ResponseWriter, r *http.Request) {
 	projCtx := MustHaveProjectContext(r)
 	project, err := projCtx.GetProject()
-	if err != nil || project == nil || projCtx.Version == nil {
-		http.Error(w, "not found", http.StatusNotFound)
+
+	grip.DebugWhen(err != nil || project == nil || projCtx.Version == nil, message.Fields{
+		"message": "error getting project for version page",
+		"project": project,
+		"projCtx": projCtx,
+	})
+
+	if RedirectSpruceUsers(w, r, fmt.Sprintf("%s/version/%s", uis.Settings.Ui.UIv2Url, projCtx.Version.Id)) {
 		return
 	}
 
-	if r.FormValue("redirect_spruce_users") == "true" {
-		if u := gimlet.GetUser(r.Context()); u != nil {
-			usr, ok := u.(*user.DBUser)
-			if ok && usr.Settings.UseSpruceOptions.SpruceV1 {
-				http.Redirect(w, r, fmt.Sprintf("%s/version/%s", uis.Settings.Ui.UIv2Url, projCtx.Version.Id), http.StatusTemporaryRedirect)
-				return
-			}
-		}
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
 	}
 
-	// Set the config to blank to avoid writing it to the UI unnecessarily.
-	projCtx.Version.Config = ""
+	if project == nil || projCtx.Version == nil {
+		grip.Debug(message.Fields{
+			"message": "project or version not found",
+			"project": project,
+			"projCtx": projCtx,
+			"version": projCtx.Version,
+		})
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 
 	versionAsUI := uiVersion{
 		Version:   *projCtx.Version,
@@ -337,7 +345,7 @@ func addFailedTests(failedTaskIds []string, uiBuilds []uiBuild, taskMap map[stri
 		}
 		for _, r := range t.LocalTestResults {
 			if r.Status == evergreen.TestFailedStatus {
-				failedTests = append(failedTests, r.TestFile)
+				failedTests = append(failedTests, r.GetDisplayTestName())
 			}
 		}
 		failedTestsByTaskId[t.Id] = failedTests
@@ -429,8 +437,8 @@ func (uis *UIServer) versionHistory(w http.ResponseWriter, r *http.Request) {
 	gimlet.WriteJSON(w, versions)
 }
 
-//versionFind redirects to the correct version page based on the gitHash and versionId given.
-//It finds the version associated with the versionId and gitHash and redirects to /version/{version_id}.
+// versionFind redirects to the correct version page based on the gitHash and versionId given.
+// It finds the version associated with the versionId and gitHash and redirects to /version/{version_id}.
 func (uis *UIServer) versionFind(w http.ResponseWriter, r *http.Request) {
 	vars := gimlet.GetVars(r)
 	project := vars["project_id"]

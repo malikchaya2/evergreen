@@ -39,6 +39,14 @@ const (
 var (
 	EC2InsufficientCapacityError = errors.New(EC2InsufficientCapacity)
 	ec2TemplateNameExistsError   = errors.New(ec2TemplateNameExists)
+
+	// Linux and Windows are billed by the second.
+	// See https://aws.amazon.com/ec2/pricing/on-demand/
+	byTheSecondBillingOS = []string{"linux", "windows"}
+
+	// Commercial Linux distributions are billed by the hour
+	// See https://aws.amazon.com/linux/commercial-linux/faqs/#Pricing_and_Billing
+	commercialLinuxDistros = []string{"suse"}
 )
 
 type MountPoint struct {
@@ -73,48 +81,14 @@ var (
 	VolumeTypeKey  = bsonutil.MustHaveTag(MountPoint{}, "VolumeType")
 )
 
-// type/consts for price evaluation based on OS
-type osType string
-
-const (
-	osLinux   osType = "Linux/UNIX"
-	osSUSE    osType = "SUSE Linux"
-	osWindows osType = "Windows"
-)
-
-// regionFullname takes the API ID of amazon region and returns the
-// full region name. For instance, "us-west-1" becomes "US West (N. California)".
-// This is necessary as the On Demand pricing endpoint uses the full name, unlike
-// the rest of the API. THIS FUNCTION ONLY HANDLES U.S. REGIONS.
-func regionFullname(region string) (string, error) {
-	switch region {
-	case "us-east-1":
-		return "US East (N. Virginia)", nil
-	case "us-west-1":
-		return "US West (N. California)", nil
-	case "us-west-2":
-		return "US West (Oregon)", nil
-	}
-	return "", errors.Errorf("region %v not supported", region)
-}
-
 // AztoRegion takes an availability zone and returns the region id.
 func AztoRegion(az string) string {
 	// an amazon region is just the availability zone minus the final letter
 	return az[:len(az)-1]
 }
 
-// returns the format of os name expected by EC2 On Demand billing data,
-// bucking the normal AWS API naming scheme.
-func osBillingName(os osType) string {
-	if os == osLinux {
-		return "Linux"
-	}
-	return string(os)
-}
-
-//ec2StatusToEvergreenStatus returns a "universal" status code based on EC2's
-//provider-specific status codes.
+// ec2StatusToEvergreenStatus returns a "universal" status code based on EC2's
+// provider-specific status codes.
 func ec2StatusToEvergreenStatus(ec2Status string) CloudStatus {
 	switch ec2Status {
 	case ec2.InstanceStateNamePending:
@@ -129,7 +103,7 @@ func ec2StatusToEvergreenStatus(ec2Status string) CloudStatus {
 		return StatusTerminated
 	default:
 		grip.Error(message.Fields{
-			"message": "got an unknown ec2 state name",
+			"message": "got an unknown EC2 state name",
 			"status":  ec2Status,
 		})
 		return StatusUnknown
@@ -172,14 +146,14 @@ func makeTags(intentHost *host.Host) []host.Tag {
 	}
 
 	systemTags := []host.Tag{
-		host.Tag{Key: evergreen.TagName, Value: intentHost.Id, CanBeModified: false},
-		host.Tag{Key: evergreen.TagDistro, Value: intentHost.Distro.Id, CanBeModified: false},
-		host.Tag{Key: evergreen.TagEvergreenService, Value: hostname, CanBeModified: false},
-		host.Tag{Key: evergreen.TagUsername, Value: username, CanBeModified: false},
-		host.Tag{Key: evergreen.TagOwner, Value: intentHost.StartedBy, CanBeModified: false},
-		host.Tag{Key: evergreen.TagMode, Value: "production", CanBeModified: false},
-		host.Tag{Key: evergreen.TagStartTime, Value: intentHost.CreationTime.Format(evergreen.NameTimeFormat), CanBeModified: false},
-		host.Tag{Key: evergreen.TagExpireOn, Value: expireOn, CanBeModified: false},
+		{Key: evergreen.TagName, Value: intentHost.Id, CanBeModified: false},
+		{Key: evergreen.TagDistro, Value: intentHost.Distro.Id, CanBeModified: false},
+		{Key: evergreen.TagEvergreenService, Value: hostname, CanBeModified: false},
+		{Key: evergreen.TagUsername, Value: username, CanBeModified: false},
+		{Key: evergreen.TagOwner, Value: intentHost.StartedBy, CanBeModified: false},
+		{Key: evergreen.TagMode, Value: "production", CanBeModified: false},
+		{Key: evergreen.TagStartTime, Value: intentHost.CreationTime.Format(evergreen.NameTimeFormat), CanBeModified: false},
+		{Key: evergreen.TagExpireOn, Value: expireOn, CanBeModified: false},
 	}
 
 	if intentHost.UserHost {
@@ -250,19 +224,19 @@ func timeTilNextEC2Payment(h *host.Host) time.Duration {
 	return time.Second
 }
 
-// UsesHourlyBilling checks if a distro name to see if it is billed hourly,
-// and returns true if so (for example, most linux distros are by-the-minute).
+// UsesHourlyBilling returns if a distro is billed hourly.
 func UsesHourlyBilling(d *distro.Distro) bool {
-	if !strings.Contains(d.Arch, "linux") {
-		// windows or osx
-		return true
+	byTheSecondOS := false
+	for _, arch := range byTheSecondBillingOS {
+		byTheSecondOS = byTheSecondOS || strings.Contains(d.Arch, arch)
 	}
-	// one exception is OK. If we start adding more,
-	// might be time to add some more abstract handling
-	if strings.Contains(d.Id, "suse") {
-		return true
+
+	commercialLinuxDistro := false
+	for _, distro := range commercialLinuxDistros {
+		commercialLinuxDistro = commercialLinuxDistro || strings.Contains(d.Id, distro)
 	}
-	return false
+
+	return !byTheSecondOS || commercialLinuxDistro
 }
 
 // Determines how long until a payment is due for the specified host, for hosts
@@ -294,7 +268,7 @@ func expandUserData(userData string, expansions map[string]string) (string, erro
 	exp := util.NewExpansions(expansions)
 	expanded, err := exp.ExpandString(userData)
 	if err != nil {
-		return "", errors.Wrap(err, "error expanding userdata script")
+		return "", errors.Wrap(err, "expanding user data script")
 	}
 	return expanded, nil
 }
@@ -323,10 +297,10 @@ func cacheHostData(ctx context.Context, h *host.Host, instance *ec2.Instance, cl
 		return errors.New("instance missing launch time")
 	}
 	if instance.PublicDnsName == nil {
-		return errors.New("instance missing public dns name")
+		return errors.New("instance missing public DNS name")
 	}
 	if instance.PrivateIpAddress == nil {
-		return errors.New("instance missing private ip address")
+		return errors.New("instance missing private IP address")
 	}
 	h.Zone = *instance.Placement.AvailabilityZone
 	h.StartTime = *instance.LaunchTime
@@ -335,14 +309,14 @@ func cacheHostData(ctx context.Context, h *host.Host, instance *ec2.Instance, cl
 	h.IPv4 = *instance.PrivateIpAddress
 
 	if err := h.CacheHostData(); err != nil {
-		return errors.Wrap(err, "error updating host document in db")
+		return errors.Wrap(err, "updating host document in DB")
 	}
 
 	// set IPv6 address, if applicable
 	for _, networkInterface := range instance.NetworkInterfaces {
 		if len(networkInterface.Ipv6Addresses) > 0 {
 			if err := h.SetIPv6Address(*networkInterface.Ipv6Addresses[0].Ipv6Address); err != nil {
-				return errors.Wrap(err, "error setting ipv6 address")
+				return errors.Wrap(err, "setting IPv6 address")
 			}
 			break
 		}
@@ -353,28 +327,10 @@ func cacheHostData(ctx context.Context, h *host.Host, instance *ec2.Instance, cl
 
 // templateNameInvalidRegex matches any character that may not be included a launch template name.
 // Names may only contain word characters ([a-zA-Z0-9_]) and the following special characters: ( ) . / -
-var templateNameInvalidRegex = regexp.MustCompile("[^\\w()./-]+") //nolint gosimple
+var templateNameInvalidRegex = regexp.MustCompile("[^\\w()./-]+") //nolint:gosimple
 
 func cleanLaunchTemplateName(name string) string {
 	return templateNameInvalidRegex.ReplaceAllString(name, "")
-}
-
-// odInfo is an internal type for keying hosts by the attributes that affect billing.
-type odInfo struct {
-	os       string
-	instance string
-	region   string
-}
-
-// Terms is an internal type for loading price API results into.
-type Terms struct {
-	OnDemand map[string]map[string]struct {
-		PriceDimensions map[string]struct {
-			PricePerUnit struct {
-				USD string
-			}
-		}
-	}
 }
 
 // formats /dev/sd[f-p]and xvd[f-p] taken from https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/device_naming.html
@@ -432,7 +388,7 @@ func makeBlockDeviceMappings(mounts []MountPoint) ([]*ec2aws.BlockDeviceMapping,
 				}
 				// This parameter is valid only for gp3 volumes.
 				if utility.FromStringPtr(m.Ebs.VolumeType) != ec2aws.VolumeTypeGp3 {
-					return nil, errors.New(fmt.Sprintf("throughput is not valid for volume type '%s', it is only valid for gp3 volumes", utility.FromStringPtr(m.Ebs.VolumeType)))
+					return nil, errors.Errorf("throughput is not valid for volume type '%s', it is only valid for gp3 volumes", utility.FromStringPtr(m.Ebs.VolumeType))
 				}
 				m.Ebs.Throughput = aws.Int64(mount.Throughput)
 			}
@@ -483,7 +439,7 @@ func makeBlockDeviceMappingsTemplate(mounts []MountPoint) ([]*ec2aws.LaunchTempl
 				}
 				// This parameter is valid only for gp3 volumes.
 				if utility.FromStringPtr(m.Ebs.VolumeType) != ec2aws.VolumeTypeGp3 {
-					return nil, errors.New(fmt.Sprintf("throughput is not valid for volume type '%s', it is only valid for gp3 volumes", utility.FromStringPtr(m.Ebs.VolumeType)))
+					return nil, errors.Errorf("throughput is not valid for volume type '%s', it is only valid for gp3 volumes", utility.FromStringPtr(m.Ebs.VolumeType))
 				}
 				m.Ebs.Throughput = aws.Int64(mount.Throughput)
 			}
@@ -524,10 +480,10 @@ func validateEc2DescribeInstancesOutput(describeInstancesResponse *ec2aws.Descri
 	catcher := grip.NewBasicCatcher()
 	for _, reservation := range describeInstancesResponse.Reservations {
 		if len(reservation.Instances) == 0 {
-			catcher.Add(errors.New("reservation missing instance"))
+			catcher.New("reservation missing instance")
 		} else {
 			instance := reservation.Instances[0]
-			catcher.NewWhen(instance.InstanceId == nil, "instance missing instance id")
+			catcher.NewWhen(instance.InstanceId == nil, "instance missing instance ID")
 			catcher.NewWhen(instance.State == nil || instance.State.Name == nil || len(*instance.State.Name) == 0, "instance missing state name")
 		}
 	}
@@ -535,16 +491,21 @@ func validateEc2DescribeInstancesOutput(describeInstancesResponse *ec2aws.Descri
 	return catcher.Resolve()
 }
 
-func IsEc2Provider(provider string) bool {
-	return provider == evergreen.ProviderNameEc2Auto ||
-		provider == evergreen.ProviderNameEc2OnDemand ||
-		provider == evergreen.ProviderNameEc2Spot ||
-		provider == evergreen.ProviderNameEc2Fleet
-}
+// Get EC2 key and secret from the AWS configuration
+func GetEC2Key(s *evergreen.Settings) (string, string, error) {
+	if len(s.Providers.AWS.EC2Keys) == 0 {
+		return "", "", errors.New("no EC2 keys in config")
+	}
 
-func IsDockerProvider(provider string) bool {
-	return provider == evergreen.ProviderNameDocker ||
-		provider == evergreen.ProviderNameDockerMock
+	key := s.Providers.AWS.EC2Keys[0].Key
+	secret := s.Providers.AWS.EC2Keys[0].Secret
+
+	// Error if key or secret are blank
+	if key == "" || secret == "" {
+		return "", "", errors.New("AWS key and secret must not be blank")
+	}
+
+	return key, secret, nil
 }
 
 func getEC2ManagerOptionsFromSettings(provider string, settings *EC2ProviderSettings) ManagerOpts {
@@ -560,26 +521,9 @@ func getEC2ManagerOptionsFromSettings(provider string, settings *EC2ProviderSett
 	}
 }
 
-// Get EC2 key and secret from the AWS configuration
-func GetEC2Key(s *evergreen.Settings) (string, string, error) {
-	if len(s.Providers.AWS.EC2Keys) == 0 {
-		return "", "", errors.New("no EC2 keys in config")
-	}
-
-	key := s.Providers.AWS.EC2Keys[0].Key
-	secret := s.Providers.AWS.EC2Keys[0].Secret
-
-	// Error if key or secret are blank
-	if key == "" || secret == "" {
-		return "", "", errors.New("AWS ID and Secret must not be blank")
-	}
-
-	return key, secret, nil
-}
-
 func validateEC2HostModifyOptions(h *host.Host, opts host.HostModifyOptions) error {
 	if opts.InstanceType != "" && h.Status != evergreen.HostStopped {
-		return errors.New("host must be stopped to modify instance typed")
+		return errors.New("host must be stopped to modify instance type")
 	}
 	if time.Until(h.ExpirationTime.Add(opts.AddHours)) > evergreen.MaxSpawnHostExpirationDurationHours {
 		return errors.Errorf("cannot extend host '%s' expiration by '%s' -- maximum host duration is limited to %s", h.Id, opts.AddHours.String(), evergreen.MaxSpawnHostExpirationDurationHours.String())
@@ -591,7 +535,7 @@ func validateEC2HostModifyOptions(h *host.Host, opts host.HostModifyOptions) err
 func ValidVolumeOptions(v *host.Volume, s *evergreen.Settings) error {
 	catcher := grip.NewBasicCatcher()
 	if !utility.StringSliceContains(ValidVolumeTypes, v.Type) {
-		catcher.Add(errors.Errorf("Valid EBS volume types are: %v", ValidVolumeTypes))
+		catcher.Errorf("invalid volume type '%s', valid EBS volume types are: %s", v.Type, ValidVolumeTypes)
 	}
 
 	_, err := getSubnetForZone(s.Providers.AWS.Subnets, v.AvailabilityZone)
@@ -607,7 +551,7 @@ func getSubnetForZone(subnets []evergreen.Subnet, zone string) (string, error) {
 		}
 		zones = append(zones, subnet.AZ)
 	}
-	return "", errors.Errorf("Valid availability zones are: %v", zones)
+	return "", errors.Errorf("invalid availability zone '%s', valid availability zones are: %s", zone, zones)
 }
 
 // addSSHKey adds an SSH key for the given client. If an SSH key already exists
@@ -620,7 +564,7 @@ func addSSHKey(ctx context.Context, client AWSClient, pair evergreen.SSHKeyPair)
 		if ec2err, ok := err.(awserr.Error); ok && ec2err.Code() == EC2DuplicateKeyPair {
 			return nil
 		}
-		return errors.Wrap(err, "could not add new SSH key")
+		return errors.Wrap(err, "importing public SSH key")
 	}
 	return nil
 }
@@ -647,4 +591,42 @@ func ModifyVolumeBadRequest(err error) bool {
 // not.
 func IsEC2InstanceID(id string) bool {
 	return strings.HasPrefix(id, "i-")
+}
+
+// Gp2EquivalentThroughputForGp3 returns a throughput value for gp3 volumes that's at least
+// equivalent to the throughput of gp2 volumes.
+// See https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/general-purpose.html for more information.
+func Gp2EquivalentThroughputForGp3(volumeSize int) int {
+	if volumeSize <= 170 {
+		return 128
+	}
+	return 250
+}
+
+// Gp2EquivalentIOPSForGp3 returns an IOPS value for gp3 volumes that's at least
+// equivalent to the IOPS of gp2 volumes.
+// See https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/general-purpose.html for more information.
+func Gp2EquivalentIOPSForGp3(volumeSize int) int {
+	iops := volumeSize * 3
+
+	if volumeSize <= 1000 {
+		iops = 3000
+	}
+	if iops >= 16000 {
+		iops = 16000
+	}
+
+	return iops
+}
+
+// isEC2InstanceNotFound returns whether or not the given error is due to the
+// EC2 instance not being found.
+func isEC2InstanceNotFound(err error) bool {
+	if err == noReservationError {
+		return true
+	}
+	if ec2Err, ok := errors.Cause(err).(awserr.Error); ok && ec2Err.Code() == EC2ErrorNotFound {
+		return true
+	}
+	return false
 }

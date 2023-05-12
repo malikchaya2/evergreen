@@ -49,7 +49,7 @@ func FindTasksByProjectAndCommit(opts task.GetTasksByProjectAndCommitOptions) ([
 	if err != nil {
 		return nil, gimlet.ErrorResponse{
 			StatusCode: http.StatusNotFound,
-			Message:    err.Error(),
+			Message:    errors.Wrapf(err, "project '%s' not found", projectId).Error(),
 		}
 	}
 
@@ -75,32 +75,28 @@ func FindTasksByProjectAndCommit(opts task.GetTasksByProjectAndCommitOptions) ([
 			Message:    message,
 		}
 	}
-
-	if opts.StartingTaskId != "" {
-		found := false
-		for _, t := range res {
-			if t.Id == opts.StartingTaskId {
-				found = true
-				break
-			}
-		}
-		if !found {
-			return []task.Task{}, gimlet.ErrorResponse{
-				StatusCode: http.StatusNotFound,
-				Message:    fmt.Sprintf("task '%s' not found", opts.StartingTaskId),
-			}
-		}
-	}
 	return res, nil
 }
 
 func CheckTaskSecret(taskID string, r *http.Request) (int, error) {
 	_, code, err := serviceModel.ValidateTask(taskID, true, r)
-	if code == http.StatusConflict {
-		if err == nil {
-			err = errors.Errorf("conflict for task '%s'", taskID)
+	return code, errors.Wrapf(err, "invalid task '%s'", taskID)
+}
+
+func FindTask(taskID string) (*task.Task, error) {
+	foundTask, err := task.FindOneId(taskID)
+	if err != nil {
+		return nil, gimlet.ErrorResponse{
+			StatusCode: http.StatusInternalServerError,
+			Message:    errors.Wrap(err, "finding task").Error(),
 		}
-		return http.StatusUnauthorized, errors.Wrapf(err, "invalid task '%s'", taskID)
 	}
-	return code, errors.WithStack(err)
+	if foundTask == nil {
+		return nil, gimlet.ErrorResponse{
+			StatusCode: http.StatusNotFound,
+			Message:    fmt.Sprintf("task '%s' not found", taskID),
+		}
+	}
+
+	return foundTask, nil
 }

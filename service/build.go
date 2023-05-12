@@ -3,7 +3,7 @@ package service
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 	"time"
@@ -12,7 +12,6 @@ import (
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
-	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/plugin"
@@ -50,18 +49,15 @@ func getUiTaskCache(b *build.Build) ([]uiTask, error) {
 func (uis *UIServer) buildPage(w http.ResponseWriter, r *http.Request) {
 	projCtx := MustHaveProjectContext(r)
 
-	if r.FormValue("redirect_spruce_users") == "true" {
-		user := MustHaveUser(r)
-		if user.Settings.UseSpruceOptions.SpruceV1 {
-			http.Redirect(w, r, fmt.Sprintf("%s/version/%s/tasks?variant=%s", uis.Settings.Ui.UIv2Url, projCtx.Version.Id, projCtx.Build.BuildVariant), http.StatusTemporaryRedirect)
-			return
-		}
-	}
-
 	if projCtx.Build == nil || projCtx.Version == nil {
 		uis.LoggedError(w, r, http.StatusNotFound, errors.New("not found"))
 		return
 	}
+
+	if RedirectSpruceUsers(w, r, fmt.Sprintf("%s/version/%s/tasks?variant=%s", uis.Settings.Ui.UIv2Url, projCtx.Version.Id, projCtx.Build.BuildVariant)) {
+		return
+	}
+
 	buildAsUI := &uiBuild{
 		Build:       *projCtx.Build,
 		CurrentTime: time.Now().UnixNano(),
@@ -150,7 +146,7 @@ func (uis *UIServer) modifyBuild(w http.ResponseWriter, r *http.Request) {
 
 	body := utility.NewRequestReader(r)
 	defer body.Close()
-	reqBody, err := ioutil.ReadAll(body)
+	reqBody, err := io.ReadAll(body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -196,7 +192,7 @@ func (uis *UIServer) modifyBuild(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			_, err = commitqueue.RemoveCommitQueueItemForVersion(projCtx.ProjectRef.Id, projCtx.Build.Version, user.Id)
+			_, err = model.RemoveCommitQueueItemForVersion(projCtx.ProjectRef.Id, projCtx.Build.Version, user.Id)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -232,7 +228,7 @@ func (uis *UIServer) modifyBuild(w http.ResponseWriter, r *http.Request) {
 		if projCtx.Build.Requester == evergreen.MergeTestRequester && putParams.Active {
 			http.Error(w, "commit queue merges cannot be manually scheduled", http.StatusBadRequest)
 		}
-		err = model.SetBuildActivation(projCtx.Build.Id, putParams.Active, user.Id)
+		err = model.ActivateBuildsAndTasks([]string{projCtx.Build.Id}, putParams.Active, user.Id)
 		if err != nil {
 			http.Error(w, fmt.Sprintf("Error marking build %v as activated=%v", projCtx.Build.Id, putParams.Active),
 				http.StatusInternalServerError)
@@ -264,14 +260,14 @@ func (uis *UIServer) modifyBuild(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
-			_, err = commitqueue.RemoveCommitQueueItemForVersion(projCtx.ProjectRef.Id, projCtx.Build.Version, user.Id)
+			_, err = model.RemoveCommitQueueItemForVersion(projCtx.ProjectRef.Id, projCtx.Build.Version, user.Id)
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
 			}
 		}
 	case evergreen.RestartAction:
-		if err = model.RestartBuild(projCtx.Build.Id, putParams.TaskIds, putParams.Abort, user.Id); err != nil {
+		if err = model.RestartBuild(projCtx.Build, putParams.TaskIds, putParams.Abort, user.Id); err != nil {
 			http.Error(w, fmt.Sprintf("Error restarting build %v", projCtx.Build.Id), http.StatusInternalServerError)
 			return
 		}

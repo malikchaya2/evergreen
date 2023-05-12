@@ -25,11 +25,8 @@ func (uis *UIServer) patchPage(w http.ResponseWriter, r *http.Request) {
 
 	currentUser := MustHaveUser(r)
 	spruceLink := fmt.Sprintf("%s/patch/%s/configure", uis.Settings.Ui.UIv2Url, projCtx.Patch.Id.Hex())
-	if r.FormValue("redirect_spruce_users") == "true" {
-		if currentUser.Settings.UseSpruceOptions.SpruceV1 {
-			http.Redirect(w, r, spruceLink, http.StatusTemporaryRedirect)
-			return
-		}
+	if RedirectSpruceUsers(w, r, spruceLink) {
+		return
 	}
 
 	var versionAsUI *uiVersion
@@ -50,7 +47,7 @@ func (uis *UIServer) patchPage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Unmarshall project and get project variants and tasks
-	variantsAndTasksFromProject, err := model.GetVariantsAndTasksFromProject(r.Context(), projCtx.Patch.PatchedParserProject, projCtx.Patch.Project)
+	variantsAndTasksFromProject, err := model.GetVariantsAndTasksFromPatchProject(r.Context(), uis.env.Settings(), projCtx.Patch)
 	if err != nil {
 		uis.LoggedError(w, r, http.StatusInternalServerError, err)
 		return
@@ -99,7 +96,7 @@ func (uis *UIServer) schedulePatchUI(w http.ResponseWriter, r *http.Request) {
 		uis.LoggedError(w, r, http.StatusBadRequest, err)
 	}
 
-	status, err := units.SchedulePatch(r.Context(), projCtx.Patch.Id.Hex(), projCtx.Version, patchUpdateReq)
+	status, err := units.SchedulePatch(r.Context(), uis.env, projCtx.Patch.Id.Hex(), projCtx.Version, patchUpdateReq)
 	if err != nil {
 		uis.LoggedError(w, r, status, err)
 		return
@@ -152,10 +149,11 @@ func (uis *UIServer) fileDiffPage(w http.ResponseWriter, r *http.Request) {
 			http.StatusInternalServerError)
 	}
 	uis.render.WriteResponse(w, http.StatusOK, struct {
-		Data        patch.Patch
-		FileName    string
-		PatchNumber string
-	}{*fullPatch, r.FormValue("file_name"), r.FormValue("patch_number")},
+		Data         patch.Patch
+		FileName     string
+		PatchNumber  string
+		CommitNumber string
+	}{*fullPatch, r.FormValue("file_name"), r.FormValue("patch_number"), r.FormValue("commit_number")},
 		"base", "file_diff.html")
 }
 

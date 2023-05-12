@@ -156,7 +156,24 @@ func TestValidateTaskDependencies(t *testing.T) {
 					{Name: "tg", Tasks: []string{"3"}},
 				},
 				BuildVariants: []model.BuildVariant{
-					{Name: "v1", Tasks: []model.BuildVariantTaskUnit{{Name: "1"}, {Name: "2"}, {Name: "tg", IsGroup: true}}},
+					{
+						Name: "v1",
+						Tasks: []model.BuildVariantTaskUnit{
+							{
+								Name:    "1",
+								Variant: "v1",
+							},
+							{
+								Name:    "2",
+								Variant: "v1",
+							},
+							{
+								Name:    "tg",
+								Variant: "v1",
+								IsGroup: true,
+							},
+						},
+					},
 				},
 			}
 			So(validateTaskDependencies(p)[0].Message, ShouldResemble, "non-existent task name 'nonexistent' in dependencies for task '3'")
@@ -190,14 +207,17 @@ func TestValidateDependencyGraph(t *testing.T) {
 						Tasks: []model.BuildVariantTaskUnit{
 							{
 								Name:      "compile",
+								Variant:   "bv",
 								DependsOn: []model.TaskUnitDependency{{Name: "testOne"}},
 							},
 							{
 								Name:      "testOne",
+								Variant:   "bv",
 								DependsOn: []model.TaskUnitDependency{{Name: "compile"}},
 							},
 							{
 								Name:      "testTwo",
+								Variant:   "bv",
 								DependsOn: []model.TaskUnitDependency{{Name: "compile"}},
 							},
 						},
@@ -215,13 +235,18 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
+							{
+								Name:    "compile",
+								Variant: "bv",
+							},
 							{
 								Name:      "testOne",
+								Variant:   "bv",
 								DependsOn: []model.TaskUnitDependency{{Name: "compile"}, {Name: "testTwo"}},
 							},
 							{
 								Name:      "testTwo",
+								Variant:   "bv",
 								DependsOn: []model.TaskUnitDependency{{Name: model.AllDependencies}},
 							},
 						},
@@ -241,10 +266,12 @@ func TestValidateDependencyGraph(t *testing.T) {
 						Name: "bv1",
 						Tasks: []model.BuildVariantTaskUnit{
 							{
-								Name: "compile",
+								Name:    "compile",
+								Variant: "bv1",
 							},
 							{
-								Name: "testOne",
+								Name:    "testOne",
+								Variant: "bv1",
 								DependsOn: []model.TaskUnitDependency{
 									{Name: "compile"},
 									{Name: "testSpecial", Variant: "bv2"},
@@ -254,7 +281,7 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv2",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "testSpecial", DependsOn: []model.TaskUnitDependency{{Name: "testOne", Variant: "bv1"}}}},
+							{Name: "testSpecial", Variant: "bv2", DependsOn: []model.TaskUnitDependency{{Name: "testOne", Variant: "bv1"}}}},
 					},
 				},
 			}
@@ -270,8 +297,8 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv1",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "testOne", DependsOn: []model.TaskUnitDependency{
+							{Name: "compile", Variant: "bv1"},
+							{Name: "testOne", Variant: "bv1", DependsOn: []model.TaskUnitDependency{
 								{Name: "compile"},
 								{Name: "testSpecial", Variant: "bv2"},
 							}}},
@@ -279,14 +306,14 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv2",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "testSpecial", DependsOn: []model.TaskUnitDependency{{Name: "testOne", Variant: model.AllVariants}}},
+							{Name: "testSpecial", Variant: "bv2", DependsOn: []model.TaskUnitDependency{{Name: "testOne", Variant: model.AllVariants}}},
 						},
 					},
 					{
 						Name: "bv3",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "testOne", DependsOn: []model.TaskUnitDependency{
+							{Name: "compile", Variant: "bv3"},
+							{Name: "testOne", Variant: "bv3", DependsOn: []model.TaskUnitDependency{
 								{Name: "compile"},
 								{Name: "testSpecial", Variant: "bv2"},
 							}}},
@@ -294,8 +321,8 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv4",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "testOne", DependsOn: []model.TaskUnitDependency{
+							{Name: "compile", Variant: "bv4"},
+							{Name: "testOne", Variant: "bv4", DependsOn: []model.TaskUnitDependency{
 								{Name: "compile"},
 								{Name: "testSpecial", Variant: "bv2"},
 							}}},
@@ -315,10 +342,12 @@ func TestValidateDependencyGraph(t *testing.T) {
 						Name: "bv1",
 						Tasks: []model.BuildVariantTaskUnit{
 							{
-								Name: "compile",
+								Name:    "compile",
+								Variant: "bv1",
 							},
 							{
-								Name: "testOne",
+								Name:    "testOne",
+								Variant: "bv1",
 								DependsOn: []model.TaskUnitDependency{
 									{Name: "compile", Variant: model.AllVariants},
 									{Name: "testTwo"},
@@ -329,17 +358,20 @@ func TestValidateDependencyGraph(t *testing.T) {
 						Name: "bv2",
 						Tasks: []model.BuildVariantTaskUnit{
 							{
-								Name: "compile",
+								Name:    "compile",
+								Variant: "bv2",
 							},
 							{
-								Name: "testOne",
+								Name:    "testOne",
+								Variant: "bv2",
 								DependsOn: []model.TaskUnitDependency{
 									{Name: "compile", Variant: model.AllVariants},
 									{Name: "testTwo"},
 								},
 							},
 							{
-								Name: "testTwo",
+								Name:    "testTwo",
+								Variant: "bv2",
 								DependsOn: []model.TaskUnitDependency{
 									{Name: model.AllDependencies, Variant: model.AllVariants},
 								},
@@ -361,8 +393,8 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "testOne", DependsOn: []model.TaskUnitDependency{{Name: "testOne"}}},
+							{Name: "compile", Variant: "bv"},
+							{Name: "testOne", Variant: "bv", DependsOn: []model.TaskUnitDependency{{Name: "testOne"}}},
 						},
 					},
 				},
@@ -377,9 +409,9 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "testOne", DependsOn: []model.TaskUnitDependency{{Name: "compile"}}},
-							{Name: "testTwo", DependsOn: []model.TaskUnitDependency{{Name: "compile"}}}},
+							{Name: "compile", Variant: "bv"},
+							{Name: "testOne", Variant: "bv", DependsOn: []model.TaskUnitDependency{{Name: "compile"}}},
+							{Name: "testTwo", Variant: "bv", DependsOn: []model.TaskUnitDependency{{Name: "compile"}}}},
 					},
 				},
 			}
@@ -394,7 +426,8 @@ func TestValidateDependencyGraph(t *testing.T) {
 						Name: "bv1",
 						Tasks: []model.BuildVariantTaskUnit{
 							{
-								Name: "testOne",
+								Name:    "testOne",
+								Variant: "bv1",
 								DependsOn: []model.TaskUnitDependency{
 									{Name: "compile", Variant: "bv2"},
 								},
@@ -404,9 +437,10 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv2",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
+							{Name: "compile", Variant: "bv2"},
 							{
-								Name: "testSpecial",
+								Name:    "testSpecial",
+								Variant: "bv2",
 								DependsOn: []model.TaskUnitDependency{
 									{Name: "compile"},
 									{Name: "testOne", Variant: "bv1"}},
@@ -425,8 +459,8 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv1",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "testOne", DependsOn: []model.TaskUnitDependency{
+							{Name: "compile", Variant: "bv1"},
+							{Name: "testOne", Variant: "bv1", DependsOn: []model.TaskUnitDependency{
 								{Name: "compile", Variant: model.AllVariants},
 							}},
 						},
@@ -434,8 +468,8 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv2",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "testTwo", DependsOn: []model.TaskUnitDependency{
+							{Name: "compile", Variant: "bv2"},
+							{Name: "testTwo", Variant: "bv2", DependsOn: []model.TaskUnitDependency{
 								{Name: model.AllDependencies},
 							}},
 						},
@@ -452,8 +486,8 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv1",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "testOne", DependsOn: []model.TaskUnitDependency{
+							{Name: "compile", Variant: "bv1"},
+							{Name: "testOne", Variant: "bv1", DependsOn: []model.TaskUnitDependency{
 								{Name: "compile", Variant: model.AllVariants},
 							}},
 						},
@@ -461,11 +495,11 @@ func TestValidateDependencyGraph(t *testing.T) {
 					{
 						Name: "bv2",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "testOne", DependsOn: []model.TaskUnitDependency{
+							{Name: "compile", Variant: "bv2"},
+							{Name: "testOne", Variant: "bv2", DependsOn: []model.TaskUnitDependency{
 								{Name: "compile", Variant: model.AllVariants},
 							}},
-							{Name: "testTwo", DependsOn: []model.TaskUnitDependency{
+							{Name: "testTwo", Variant: "bv2", DependsOn: []model.TaskUnitDependency{
 								{Name: model.AllDependencies, Variant: model.AllVariants}},
 							}},
 					},
@@ -490,7 +524,7 @@ func TestCheckTaskRuns(t *testing.T) {
 				{
 					Name: "bv",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "task"},
+						{Name: "task", Variant: "bv"},
 					},
 				},
 			},
@@ -793,8 +827,8 @@ func TestValidateBVTaskNames(t *testing.T) {
 					{
 						Name: "linux",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "compile"},
+							{Name: "compile", Variant: "linux"},
+							{Name: "compile", Variant: "linux"},
 						},
 					},
 				},
@@ -810,10 +844,10 @@ func TestValidateBVTaskNames(t *testing.T) {
 					{
 						Name: "linux",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "compile"},
-							{Name: "test"},
-							{Name: "test"},
+							{Name: "compile", Variant: "linux"},
+							{Name: "compile", Variant: "linux"},
+							{Name: "test", Variant: "linux"},
+							{Name: "test", Variant: "linux"},
 						},
 					},
 				},
@@ -829,8 +863,8 @@ func TestValidateBVTaskNames(t *testing.T) {
 					{
 						Name: "linux",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
-							{Name: "test"},
+							{Name: "compile", Variant: "linux"},
+							{Name: "test", Variant: "linux"},
 						},
 					},
 				},
@@ -860,8 +894,8 @@ func TestValidateBVBatchTimes(t *testing.T) {
 
 	// can have task and variant batchtime set
 	p.BuildVariants[0].Tasks = []model.BuildVariantTaskUnit{
-		{Name: "t1", BatchTime: &batchtime},
-		{Name: "t2"},
+		{Name: "t1", Variant: p.BuildVariants[0].Name, BatchTime: &batchtime},
+		{Name: "t2", Variant: p.BuildVariants[0].Name},
 	}
 	assert.Len(t, validateBVBatchTimes(p), 0)
 
@@ -887,7 +921,7 @@ func TestCheckBVsContainTasks(t *testing.T) {
 					{
 						Name: "linux",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
+							{Name: "compile", Variant: "linux"},
 						},
 					},
 					{
@@ -905,13 +939,13 @@ func TestCheckBVsContainTasks(t *testing.T) {
 					{
 						Name: "linux",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
+							{Name: "compile", Variant: "linux"},
 						},
 					},
 					{
 						Name: "windows",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
+							{Name: "compile", Variant: "windows"},
 						},
 					},
 				},
@@ -1042,41 +1076,18 @@ func TestValidateProjectTaskIdsAndTags(t *testing.T) {
 	})
 }
 
-func TestValidatePeriodicBuilds(t *testing.T) {
-	projectConfig := &model.ProjectConfig{
-		Id: "project-1",
-		ProjectConfigFields: model.ProjectConfigFields{
-			PeriodicBuilds: []model.PeriodicBuildDefinition{
-				{
-					ID:            "so_occasional",
-					ConfigFile:    "build.yml",
-					IntervalHours: -1,
-				},
-				{
-					ID:            "more_frequent",
-					ConfigFile:    "",
-					IntervalHours: 1,
-				},
-			},
-		},
-	}
-	validationErrs := validateProjectConfigPeriodicBuilds(projectConfig)
-	assert.Len(t, validationErrs, 2)
-	assert.Contains(t, validationErrs[0].Message, "interval must be a positive integer")
-	assert.Contains(t, validationErrs[1].Message, "a config file must be specified")
-}
-
 func TestValidatePlugins(t *testing.T) {
 	assert := assert.New(t)
 	require.NoError(t, db.Clear(model.ProjectRefCollection),
 		"Error clearing collection")
 	projectRef := &model.ProjectRef{
-		Enabled: utility.TruePtr(),
+		Enabled: true,
 		Id:      "p1",
 	}
 	assert.Nil(projectRef.Insert())
 	Convey("When validating a project", t, func() {
 		Convey("ensure bad plugin configs throw an error", func() {
+			So(validateProjectConfigPlugins(&model.ProjectConfig{}), ShouldResemble, ValidationErrors{})
 			So(validateProjectConfigPlugins(&model.ProjectConfig{Id: "", ProjectConfigFields: model.ProjectConfigFields{BuildBaronSettings: &evergreen.BuildBaronSettings{
 				TicketCreateProject:  "BFG",
 				TicketSearchProjects: []string{"BF", "BFG"},
@@ -1160,6 +1171,247 @@ func TestValidatePlugins(t *testing.T) {
 	})
 }
 
+func TestValidateAliasCoverage(t *testing.T) {
+	for testName, testCase := range map[string]func(*testing.T, *model.Project){
+		"matchesNothing": func(t *testing.T, p *model.Project) {
+			alias1 := model.ProjectAlias{
+				ID:          mgobson.NewObjectId(),
+				Alias:       evergreen.CommitQueueAlias,
+				VariantTags: []string{"notTheVariantTag"},
+				TaskTags:    []string{"taskTag"},
+			}
+			alias2 := model.ProjectAlias{
+				ID:      mgobson.NewObjectId(),
+				Alias:   evergreen.CommitQueueAlias,
+				Variant: "nonsense",
+				Task:    ".*",
+			}
+			aliasMap := map[string]model.ProjectAlias{
+				"alias1": alias1,
+				"alias2": alias2,
+			}
+			needsVariants, needsTasks, err := getAliasCoverage(p, aliasMap)
+			assert.NoError(t, err)
+			assert.Len(t, needsVariants, 2)
+			assert.Len(t, needsTasks, 2)
+			for _, matches := range needsVariants {
+				assert.True(t, matches)
+			}
+			// Doesn't matter that the tasks match since the variants don't match
+			for _, matches := range needsTasks {
+				assert.True(t, matches)
+			}
+			errs := validateAliasCoverage(p, model.ProjectAliases{alias1, alias2})
+			require.Len(t, errs, 2)
+			assert.Contains(t, errs[0].Message, "Commit queue alias")
+			assert.Contains(t, errs[0].Message, "has no matching variants")
+			assert.Contains(t, errs[1].Message, "Commit queue alias")
+			assert.Contains(t, errs[1].Message, "has no matching variants")
+			assert.NotContains(t, errs[0].Message, "tasks")
+			assert.NotContains(t, errs[1].Message, "tasks")
+			assert.Equal(t, errs[0].Level, Warning)
+			assert.Equal(t, errs[1].Level, Warning)
+		},
+		"matchesAll": func(t *testing.T, p *model.Project) {
+			alias1 := model.ProjectAlias{
+				ID:          mgobson.NewObjectId(),
+				Alias:       evergreen.CommitQueueAlias,
+				VariantTags: []string{"variantTag"},
+				TaskTags:    []string{"taskTag"},
+			}
+			alias2 := model.ProjectAlias{
+				ID:      mgobson.NewObjectId(),
+				Alias:   evergreen.CommitQueueAlias,
+				Variant: "bvWith.*",
+				Task:    ".*",
+			}
+			aliasMap := map[string]model.ProjectAlias{
+				"alias1": alias1,
+				"alias2": alias2,
+			}
+			needsVariants, needsTasks, err := getAliasCoverage(p, aliasMap)
+			assert.NoError(t, err)
+			assert.Len(t, needsVariants, 2)
+			assert.Len(t, needsTasks, 2)
+			for _, matches := range needsVariants {
+				assert.False(t, matches)
+			}
+			for _, matches := range needsTasks {
+				assert.False(t, matches)
+			}
+			errs := validateAliasCoverage(p, model.ProjectAliases{alias1, alias2})
+			assert.Len(t, errs, 0)
+		},
+		"matchesVariantTag": func(t *testing.T, p *model.Project) {
+			alias1 := model.ProjectAlias{
+				ID:          mgobson.NewObjectId(),
+				Alias:       evergreen.CommitQueueAlias,
+				VariantTags: []string{"variantTag"},
+			}
+			alias2 := model.ProjectAlias{
+				ID:      mgobson.NewObjectId(),
+				Alias:   evergreen.CommitQueueAlias,
+				Variant: "badRegex",
+			}
+			aliasMap := map[string]model.ProjectAlias{
+				"alias1": alias1,
+				"alias2": alias2,
+			}
+			needsVariants, needsTasks, err := getAliasCoverage(p, aliasMap)
+			assert.NoError(t, err)
+			assert.Len(t, needsVariants, 2)
+			assert.Len(t, needsTasks, 2)
+			assert.False(t, needsVariants["alias1"])
+			assert.True(t, needsVariants["alias2"])
+			for _, matches := range needsTasks {
+				assert.True(t, matches)
+			}
+
+			errs := validateAliasCoverage(p, model.ProjectAliases{alias1, alias2})
+			require.Len(t, errs, 2)
+			assert.Contains(t, errs[0].Message, "Commit queue alias")
+			assert.Contains(t, errs[0].Message, "has no matching variants")
+			assert.NotContains(t, errs[0].Message, "matching task regexp")
+			assert.Contains(t, errs[1].Message, "Commit queue alias")
+			assert.Contains(t, errs[1].Message, "has no matching tasks")
+			assert.Contains(t, errs[1].Message, "variant tags")
+			assert.Contains(t, errs[1].Message, "matching task regexp")
+			assert.Equal(t, errs[0].Level, Warning)
+			assert.Equal(t, errs[1].Level, Warning)
+		},
+		"negatedTag": func(t *testing.T, p *model.Project) {
+			negatedAlias := model.ProjectAlias{
+				ID:          mgobson.NewObjectId(),
+				Alias:       evergreen.CommitQueueAlias,
+				VariantTags: []string{"!variantTag"},
+				TaskTags:    []string{"!newTaskTag"},
+			}
+			aliasMap := map[string]model.ProjectAlias{
+				"negatedAlias": negatedAlias,
+			}
+			needsVariants, needsTasks, err := getAliasCoverage(p, aliasMap)
+			assert.NoError(t, err)
+			assert.Len(t, needsVariants, 1)
+			assert.Len(t, needsTasks, 1)
+			assert.False(t, needsVariants["negatedAlias"]) // Matches the second build variant
+			assert.False(t, needsTasks["negatedAlias"])
+
+			for i := 1; i < len(p.BuildVariants); i++ {
+				p.BuildVariants[i].Tags = []string{"variantTag"}
+			}
+			needsVariants, needsTasks, err = getAliasCoverage(p, aliasMap)
+			assert.NoError(t, err)
+			assert.Len(t, needsVariants, 1)
+			assert.Len(t, needsTasks, 1)
+			assert.True(t, needsVariants["negatedAlias"]) // Doesn't match any build variant
+			assert.True(t, needsTasks["negatedAlias"])    // Because the variants don't match
+
+			p.BuildVariants[1].Tags = nil
+			p.Tasks[1].Tags = []string{"newTaskTag"}
+			needsVariants, needsTasks, err = getAliasCoverage(p, aliasMap)
+			assert.NoError(t, err)
+			assert.Len(t, needsVariants, 1)
+			assert.Len(t, needsTasks, 1)
+			assert.False(t, needsVariants["negatedAlias"]) // Matches the second build variant again
+			assert.True(t, needsTasks["negatedAlias"])     // Second build variant task doesn't match
+		},
+		"matchesTaskInTaskGroupWithTaskRegexp": func(t *testing.T, p *model.Project) {
+			a := model.ProjectAlias{
+				ID:      mgobson.NewObjectId(),
+				Alias:   "alias",
+				Variant: "bvWithTaskGroup",
+				Task:    "taskWithoutTag",
+			}
+			aliases := map[string]model.ProjectAlias{a.Alias: a}
+			needsVariants, needsTasks, err := getAliasCoverage(p, aliases)
+			require.NoError(t, err)
+			assert.Len(t, needsVariants, len(aliases))
+			assert.Len(t, needsTasks, len(aliases))
+			for _, noMatch := range needsVariants {
+				assert.False(t, noMatch)
+			}
+			for _, noMatch := range needsTasks {
+				assert.False(t, noMatch)
+			}
+			errs := validateAliasCoverage(p, model.ProjectAliases{a})
+			assert.Len(t, errs, 0)
+		},
+		"matchesTaskInTaskGroupWithTaskTag": func(t *testing.T, p *model.Project) {
+			a := model.ProjectAlias{
+				ID:       mgobson.NewObjectId(),
+				Alias:    "alias",
+				Variant:  "bvWithTaskGroup",
+				TaskTags: []string{"taskTag"},
+			}
+			aliases := map[string]model.ProjectAlias{a.Alias: a}
+			needsVariants, needsTasks, err := getAliasCoverage(p, aliases)
+			require.NoError(t, err)
+			assert.Len(t, needsVariants, len(aliases))
+			assert.Len(t, needsTasks, len(aliases))
+			for _, noMatch := range needsVariants {
+				assert.False(t, noMatch)
+			}
+			for _, noMatch := range needsTasks {
+				assert.False(t, noMatch)
+			}
+			errs := validateAliasCoverage(p, model.ProjectAliases{a})
+			assert.Len(t, errs, 0)
+		},
+	} {
+		t.Run(testName, func(t *testing.T) {
+			p := &model.Project{
+				BuildVariants: model.BuildVariants{
+					{
+						Name: "bvWithTag",
+						Tags: []string{"variantTag"},
+						Tasks: []model.BuildVariantTaskUnit{
+							{
+								Name:    "taskWithTag",
+								Variant: "bvWithTag",
+							},
+						},
+					},
+					{
+						Name: "bvWithoutTag",
+						Tasks: []model.BuildVariantTaskUnit{
+							{
+								Name:    "taskWithoutTag",
+								Variant: "bvWithoutTag",
+							},
+						},
+					},
+					{
+						Name: "bvWithTaskGroup",
+						Tasks: []model.BuildVariantTaskUnit{
+							{
+								Name:    "taskGroup",
+								Variant: "bvWithTaskGroup",
+								IsGroup: true,
+							},
+						},
+					},
+				},
+				Tasks: []model.ProjectTask{
+					{
+						Name: "taskWithTag",
+						Tags: []string{"taskTag"},
+					},
+					{
+						Name: "taskWithoutTag",
+					},
+				},
+				TaskGroups: []model.TaskGroup{
+					{
+						Name:  "taskGroup",
+						Tasks: []string{"taskWithTag", "taskWithoutTag"},
+					},
+				},
+			}
+			testCase(t, p)
+		})
+	}
+}
+
 func TestValidateProjectAliases(t *testing.T) {
 	Convey("When validating a project", t, func() {
 		Convey("ensure misconfigured aliases throw an error", func() {
@@ -1205,7 +1457,6 @@ func TestValidateProjectAliases(t *testing.T) {
 						{
 							ID:        mgobson.NewObjectId(),
 							ProjectID: "project-1",
-							Alias:     evergreen.CommitQueueAlias,
 							Variant:   "v1",
 							Task:      "^test",
 						},
@@ -1214,7 +1465,6 @@ func TestValidateProjectAliases(t *testing.T) {
 						{
 							ID:        mgobson.NewObjectId(),
 							ProjectID: "project-1",
-							Alias:     evergreen.GithubChecksAlias,
 							Variant:   "v1",
 							Task:      "^test",
 						},
@@ -1223,14 +1473,12 @@ func TestValidateProjectAliases(t *testing.T) {
 						{
 							ID:        mgobson.NewObjectId(),
 							ProjectID: "project-1",
-							Alias:     evergreen.GitTagAlias,
 							Variant:   "v1",
 							Task:      "^test",
 						},
 						{
 							ID:        mgobson.NewObjectId(),
 							ProjectID: "project-1",
-							Alias:     evergreen.GitTagAlias,
 							Variant:   "v1",
 							Task:      "^test",
 							GitTag:    "[0-9]++",
@@ -1238,7 +1486,6 @@ func TestValidateProjectAliases(t *testing.T) {
 						{
 							ID:         mgobson.NewObjectId(),
 							ProjectID:  "project-1",
-							Alias:      evergreen.GitTagAlias,
 							Variant:    "v1",
 							Task:       "^test",
 							RemotePath: "remote/path",
@@ -1335,7 +1582,7 @@ func TestEnsureReferentialIntegrity(t *testing.T) {
 					{
 						Name: "linux",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "test"},
+							{Name: "test", Variant: "linux"},
 						},
 					},
 				},
@@ -1355,7 +1602,7 @@ func TestEnsureReferentialIntegrity(t *testing.T) {
 					{
 						Name: "linux",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "compile"},
+							{Name: "compile", Variant: "linux"},
 						},
 					},
 				},
@@ -1452,12 +1699,14 @@ func TestValidateProjectConfigContainers(t *testing.T) {
 	t.Run("SucceedsWithValidContainers", func(t *testing.T) {
 		pc := model.ProjectConfig{
 			ProjectConfigFields: model.ProjectConfigFields{
-				ContainerSizes: map[string]model.ContainerResources{
-					"small": {
+				ContainerSizeDefinitions: []model.ContainerResources{
+					{
+						Name:     "small",
 						CPU:      128,
 						MemoryMB: 128,
 					},
-					"large": {
+					{
+						Name:     "large",
 						CPU:      2048,
 						MemoryMB: 2048,
 					},
@@ -1470,8 +1719,9 @@ func TestValidateProjectConfigContainers(t *testing.T) {
 	t.Run("FailsWithInvalidContainerResources", func(t *testing.T) {
 		pc := model.ProjectConfig{
 			ProjectConfigFields: model.ProjectConfigFields{
-				ContainerSizes: map[string]model.ContainerResources{
-					"invalid": {
+				ContainerSizeDefinitions: []model.ContainerResources{
+					{
+						Name:     "invalid",
 						CPU:      -10,
 						MemoryMB: -5,
 					},
@@ -1484,8 +1734,9 @@ func TestValidateProjectConfigContainers(t *testing.T) {
 	t.Run("FailsWithUnnamedContainerSize", func(t *testing.T) {
 		pc := model.ProjectConfig{
 			ProjectConfigFields: model.ProjectConfigFields{
-				ContainerSizes: map[string]model.ContainerResources{
-					"": {
+				ContainerSizeDefinitions: []model.ContainerResources{
+					{
+						Name:     "",
 						CPU:      128,
 						MemoryMB: 128,
 					},
@@ -1494,6 +1745,48 @@ func TestValidateProjectConfigContainers(t *testing.T) {
 		}
 		errs := validateProjectConfigContainers(&pc)
 		assert.NotEmpty(t, errs)
+	})
+	t.Run("FailsWithContainerSizeExceedingGlobalLimits", func(t *testing.T) {
+		env := evergreen.GetEnvironment()
+		originalECSConf := env.Settings().Providers.AWS.Pod.ECS
+		defer func() {
+			env.Settings().Providers.AWS.Pod.ECS = originalECSConf
+		}()
+		env.Settings().Providers.AWS.Pod.ECS = evergreen.ECSConfig{
+			MaxCPU:      1024,
+			MaxMemoryMB: 2048,
+		}
+
+		t.Run("CPU", func(t *testing.T) {
+			pc := model.ProjectConfig{
+				ProjectConfigFields: model.ProjectConfigFields{
+					ContainerSizeDefinitions: []model.ContainerResources{
+						{
+							Name:     "xlarge",
+							CPU:      100000000,
+							MemoryMB: 100,
+						},
+					},
+				},
+			}
+			errs := validateProjectConfigContainers(&pc)
+			assert.NotEmpty(t, errs)
+		})
+		t.Run("Memory", func(t *testing.T) {
+			pc := model.ProjectConfig{
+				ProjectConfigFields: model.ProjectConfigFields{
+					ContainerSizeDefinitions: []model.ContainerResources{
+						{
+							Name:     "xlarge",
+							CPU:      100,
+							MemoryMB: 100000000,
+						},
+					},
+				},
+			}
+			errs := validateProjectConfigContainers(&pc)
+			assert.NotEmpty(t, errs)
+		})
 	})
 }
 
@@ -1554,7 +1847,7 @@ tasks:
 			So(len(validationErrs.AtLevel(Error)), ShouldEqual, 1)
 			So(validationErrs.AtLevel(Error)[0].Message, ShouldContainSubstring, "params cannot be nil")
 		})
-		Convey("an warning should return if a shell.exec command is missing a script", func() {
+		Convey("an error should return if a shell.exec command is missing a script", func() {
 			project := &model.Project{
 				Functions: map[string]*model.YAMLCommandSet{
 					"funcOne": {
@@ -1570,8 +1863,8 @@ tasks:
 			}
 			validationErrs := validatePluginCommands(project)
 			So(validationErrs, ShouldNotResemble, ValidationErrors{})
-			So(len(validationErrs.AtLevel(Warning)), ShouldEqual, 1)
-			So(validationErrs.AtLevel(Warning)[0].Message, ShouldContainSubstring, "specified without a script")
+			So(len(validationErrs.AtLevel(Error)), ShouldEqual, 1)
+			So(validationErrs.AtLevel(Error)[0].Message, ShouldContainSubstring, "must specify a script")
 		})
 		Convey("an error should not be thrown if a shell.exec command is defined with a script", func() {
 			project := &model.Project{
@@ -1971,14 +2264,27 @@ func TestCheckProjectWarnings(t *testing.T) {
 			projectRef := &model.ProjectRef{
 				Id: "project_test",
 			}
+			v := &model.Version{
+				Id:         "my_version",
+				Owner:      "fakeowner",
+				Repo:       "fakerepo",
+				Branch:     "fakebranch",
+				Identifier: "project_test",
+				Requester:  evergreen.RepotrackerVersionRequester,
+			}
+			pp := model.ParserProject{
+				Id: "my_version",
+			}
 
-			_, project, err := model.FindLatestVersionWithValidProject(projectRef.Id)
+			require.NoError(t, pp.Insert())
+			require.NoError(t, v.Insert(), "failed to insert test version: %v", v)
+			_, project, _, err := model.FindLatestVersionWithValidProject(projectRef.Id)
 			So(err, ShouldBeNil)
 			So(CheckProjectWarnings(project), ShouldResemble, ValidationErrors{})
 		})
 
 		Reset(func() {
-			So(db.Clear(distro.Collection), ShouldBeNil)
+			So(db.ClearCollections(distro.Collection, model.ParserProjectCollection, model.VersionCollection), ShouldBeNil)
 		})
 	})
 }
@@ -2077,7 +2383,7 @@ func TestValidateBVFields(t *testing.T) {
 				BuildVariants: []model.BuildVariant{
 					{
 						RunOn: []string{"mongo"},
-						Tasks: []model.BuildVariantTaskUnit{{Name: "db"}},
+						Tasks: []model.BuildVariantTaskUnit{{Name: "db", Variant: "mongo"}},
 					},
 				},
 			}
@@ -2108,7 +2414,7 @@ func TestValidateBVFields(t *testing.T) {
 					{
 						Name:  "import",
 						RunOn: []string{"export"},
-						Tasks: []model.BuildVariantTaskUnit{{Name: "db"}},
+						Tasks: []model.BuildVariantTaskUnit{{Name: "db", Variant: "import"}},
 					},
 				},
 			}
@@ -2123,7 +2429,7 @@ func TestValidateBVFields(t *testing.T) {
 				BuildVariants: []model.BuildVariant{
 					{
 						Name:  "import",
-						Tasks: []model.BuildVariantTaskUnit{{Name: "db"}},
+						Tasks: []model.BuildVariantTaskUnit{{Name: "db", Variant: "import"}},
 					},
 				},
 			}
@@ -2142,7 +2448,8 @@ func TestValidateBVFields(t *testing.T) {
 						Name: "import",
 						Tasks: []model.BuildVariantTaskUnit{
 							{
-								Name: "silhouettes",
+								Name:    "silhouettes",
+								Variant: "import",
 							},
 						},
 					},
@@ -2169,12 +2476,83 @@ func TestValidateBVFields(t *testing.T) {
 						Name: "import",
 						Tasks: []model.BuildVariantTaskUnit{
 							{
-								Name: "silhouettes",
+								Name:    "silhouettes",
+								Variant: "import",
 								RunOn: []string{
 									"echoes",
 								},
 							},
 						},
+					},
+				},
+			}
+			So(validateBVFields(project),
+				ShouldResemble, ValidationErrors{})
+		})
+		Convey("no error should be thrown if the task group does not "+
+			"have a run_on field specified but all tasks within it have a "+
+			"distro field specified", func() {
+			project := &model.Project{
+				Identifier: "projectId",
+				BuildVariants: []model.BuildVariant{
+					{
+						Name: "import",
+						Tasks: []model.BuildVariantTaskUnit{
+							{
+								Name:    "group",
+								Variant: "import",
+								IsGroup: true,
+								RunOn: []string{
+									"echoes",
+								},
+							},
+						},
+					},
+				},
+				Tasks: []model.ProjectTask{
+					{
+						Name: "silhouettes",
+					},
+				},
+				TaskGroups: []model.TaskGroup{
+					{
+						Name:  "group",
+						Tasks: []string{"silhouettes"},
+					},
+				},
+			}
+			So(validateBVFields(project),
+				ShouldResemble, ValidationErrors{})
+		})
+		Convey("no error should be thrown if the buildvariant does not "+
+			"have a run_on field but all tasks within the specified task group has the "+
+			"distro field specified", func() {
+			project := &model.Project{
+				Identifier: "projectId",
+				BuildVariants: []model.BuildVariant{
+					{
+						Name: "import",
+						Tasks: []model.BuildVariantTaskUnit{
+							{
+								Name:    "group",
+								Variant: "import",
+								IsGroup: true,
+							},
+						},
+					},
+				},
+				Tasks: []model.ProjectTask{
+					{
+						Name: "silhouettes",
+						RunOn: []string{
+							"echoes",
+						},
+					},
+				},
+				TaskGroups: []model.TaskGroup{
+					{
+						Name:  "group",
+						Tasks: []string{"silhouettes"},
 					},
 				},
 			}
@@ -2189,8 +2567,9 @@ func TestValidateBVFields(t *testing.T) {
 						RunOn: []string{""},
 						Tasks: []model.BuildVariantTaskUnit{
 							{
-								Name:  "t1",
-								RunOn: []string{""}},
+								Name:    "t1",
+								Variant: "bv1",
+								RunOn:   []string{""}},
 						},
 					},
 				},
@@ -2308,16 +2687,30 @@ buildvariants:
 - name: "bv"
   display_name: "bv_display"
   tasks:
-  - name: example_task_group
+    - name: example_task_group
+    - name: inline_task_group
+      task_group:
+        share_processes: true
+        max_hosts: 3
+        teardown_group:
+        - command: attach.results
+        tasks:
+        - example_task_1
+        - example_task_2
 `
 	pp, err = model.LoadProjectInto(ctx, []byte(largeMaxHostYml), nil, "", &proj)
 	assert.NotNil(proj)
 	assert.NotNil(pp)
 	assert.NoError(err)
-	validationErrs = checkTaskGroups(&proj)
+	validationErrs = validateTaskGroups(&proj)
 	assert.Len(validationErrs, 1)
+	assert.Contains(validationErrs[0].Message, "attach.results cannot be used in the group teardown stage")
+	validationErrs = checkTaskGroups(&proj)
+	assert.Len(validationErrs, 2)
 	assert.Contains(validationErrs[0].Message, "task group example_task_group has max number of hosts 4 greater than the number of tasks 3")
+	assert.Contains(validationErrs[1].Message, "task group inline_task_group has max number of hosts 3 greater than the number of tasks 2")
 	assert.Equal(validationErrs[0].Level, Warning)
+	assert.Equal(validationErrs[1].Level, Warning)
 }
 
 func TestTaskGroupTeardownValidation(t *testing.T) {
@@ -2445,7 +2838,7 @@ tasks:
     params:
       script: echo "test"
 - name: display_three
-  exec_timeout_secs: 100 
+  exec_timeout_secs: 100
   commands:
   - command: shell.exec
     params:
@@ -2682,8 +3075,8 @@ tasks:
 - name: one
   commands:
   - command: shell.exec
-    params: 
-      script: | 
+    params:
+      script: |
         echo test
 - name: two
   commands:
@@ -2811,7 +3204,8 @@ func TestValidateTaskSyncCommands(t *testing.T) {
 					Name: "build_variant",
 					Tasks: []model.BuildVariantTaskUnit{
 						{
-							Name: t.Name(),
+							Name:    t.Name(),
+							Variant: "build_variant",
 						},
 					},
 				},
@@ -2846,87 +3240,123 @@ func TestValidateVersionControl(t *testing.T) {
 }
 
 func TestValidateContainers(t *testing.T) {
-	require.NoError(t, db.Clear(model.ProjectRefCollection))
-	ref := &model.ProjectRef{
-		Identifier: "proj",
-		ContainerSizes: map[string]model.ContainerResources{
-			"s1": model.ContainerResources{
+	defer func() {
+		assert.NoError(t, db.Clear(model.ProjectRefCollection))
+	}()
+	for tName, tCase := range map[string]func(t *testing.T, p *model.Project, ref *model.ProjectRef){
+		"SucceedsWithValidProjectAndRef": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			verrs := validateContainers(p, ref, false)
+			assert.Len(t, verrs, 0)
+		},
+		"FailsWithoutContainerName": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			p.Containers[0].Name = ""
+			verrs := validateContainers(p, ref, false)
+			require.Len(t, verrs, 1)
+			assert.Contains(t, verrs[0].Message, "name must be defined")
+		},
+		"FailsWithoutContainerImage": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			p.Containers[0].Image = ""
+			verrs := validateContainers(p, ref, false)
+			require.Len(t, verrs, 1)
+			assert.Contains(t, verrs[0].Message, "image must be defined")
+		},
+		"MustSpecifyEitherContainerSizeOrResources": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			p.Containers[0].Size = ""
+			p.Containers[0].Resources = nil
+			verrs := validateContainers(p, ref, false)
+			require.Len(t, verrs, 1)
+			assert.Contains(t, verrs[0].Message, "either size or resources must be defined")
+		},
+		"ContainerSizeAndResourcesAreMutuallyExclusive": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			p.Containers[0].Resources = &model.ContainerResources{
 				MemoryMB: 100,
 				CPU:      1,
-			},
+			}
+			verrs := validateContainers(p, ref, false)
+			require.Len(t, verrs, 1)
+			assert.Contains(t, verrs[0].Message, "size and resources cannot both be defined")
 		},
-		ContainerCredentials: map[string]model.ContainerCredential{
-			"c1": model.ContainerCredential{
-				Username: "foo",
-				Password: "bar",
-			},
+		"FailsWithNonexistentContainerSize": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			p.Containers[0].Size = "s2"
+			verrs := validateContainers(p, ref, false)
+			require.Len(t, verrs, 1)
+			assert.Contains(t, verrs[0].Message, "container size 's2' not found")
 		},
-	}
-	require.NoError(t, ref.Insert())
-	p := &model.Project{
-		Identifier: "proj",
-		Containers: []model.Container{
-			{
-				Name:       "c1",
-				Image:      "demo/image:latest",
-				WorkingDir: "/root",
-				Size:       "s1",
-				Credential: "c1",
-			},
+		"FailsWithNonexistentRepoCred": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			p.Containers[0].Credential = "nonexistent"
+			verrs := validateContainers(p, ref, false)
+			require.Len(t, verrs, 1)
+			assert.Contains(t, verrs[0].Message, "credential 'nonexistent' is not defined in project settings")
 		},
+		"FailsWithInvalidOSAndArch": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			p.Containers[0].System = model.ContainerSystem{
+				OperatingSystem: "oops",
+				CPUArchitecture: "oops",
+			}
+			verrs := validateContainers(p, ref, false)
+			require.Len(t, verrs, 1)
+			assert.Contains(t, verrs[0].Message, "unrecognized container OS 'oops'")
+			assert.Contains(t, verrs[0].Message, "unrecognized CPU architecture 'oops'")
+		},
+		"FailsWithInvalidContainerResources": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			p.Containers[0].Resources = &model.ContainerResources{
+				MemoryMB: 0,
+				CPU:      -1,
+			}
+			verrs := validateContainers(p, ref, false)
+			require.Len(t, verrs, 1)
+			assert.Contains(t, verrs[0].Message, "container resource CPU must be a positive integer")
+			assert.Contains(t, verrs[0].Message, "container resource memory MB must be a positive integer")
+		},
+		"FailsWithPodSecretAsReferencedRepoCred": func(t *testing.T, p *model.Project, ref *model.ProjectRef) {
+			ref.ContainerSecrets[0].Type = model.ContainerSecretPodSecret
+			verrs := validateContainers(p, ref, false)
+			require.Len(t, verrs, 1)
+			assert.Contains(t, verrs[0].Message, "container credential named 'c1' exists but is not valid for use as a repository credential")
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			require.NoError(t, db.Clear(model.ProjectRefCollection))
+
+			p := &model.Project{
+				Identifier: "proj",
+				Containers: []model.Container{
+					{
+						Name:       "c1",
+						Image:      "demo/image:latest",
+						WorkingDir: "/root",
+						Size:       "s1",
+						Credential: "c1",
+					},
+				},
+			}
+
+			ref := &model.ProjectRef{
+				Identifier: "proj",
+				ContainerSizeDefinitions: []model.ContainerResources{
+					{
+						Name:     "s1",
+						CPU:      1,
+						MemoryMB: 100,
+					},
+					{
+						Name:     "",
+						CPU:      1,
+						MemoryMB: 100,
+					},
+				},
+				ContainerSecrets: []model.ContainerSecret{
+					{
+						Name:       "c1",
+						ExternalID: "external_id",
+						Type:       model.ContainerSecretRepoCreds,
+					},
+				},
+			}
+
+			tCase(t, p, ref)
+		})
 	}
-	verrs := validateContainers(p, ref, false)
-	assert.Len(t, verrs, 0)
-	p.Containers[0].Name = ""
-	verrs = validateContainers(p, ref, false)
-	require.Len(t, verrs, 1)
-	assert.Contains(t, verrs[0].Message, "name must be defined")
-	p.Containers[0].Name = "c1"
-	p.Containers[0].Image = ""
-	verrs = validateContainers(p, ref, false)
-	require.Len(t, verrs, 1)
-	assert.Contains(t, verrs[0].Message, "image must be defined")
-	p.Containers[0].Image = "demo:image"
-	p.Containers[0].Resources = &model.ContainerResources{
-		MemoryMB: 100,
-		CPU:      1,
-	}
-	verrs = validateContainers(p, ref, false)
-	require.Len(t, verrs, 1)
-	assert.Contains(t, verrs[0].Message, "size and resources cannot both be defined")
-	p.Containers[0].Size = ""
-	p.Containers[0].Resources = nil
-	verrs = validateContainers(p, ref, false)
-	require.Len(t, verrs, 1)
-	assert.Contains(t, verrs[0].Message, "either size or resources must be defined")
-	p.Containers[0].Size = "s2"
-	verrs = validateContainers(p, ref, false)
-	require.Len(t, verrs, 1)
-	assert.Contains(t, verrs[0].Message, "size 's2' is not defined anywhere")
-	p.Containers[0].Credential = "c2"
-	verrs = validateContainers(p, ref, false)
-	require.Len(t, verrs, 1)
-	assert.Contains(t, verrs[0].Message, "credential 'c2' is not defined anywhere")
-	p.Containers[0].System = model.ContainerSystem{
-		OperatingSystem: "oops",
-		CPUArchitecture: "oops",
-	}
-	verrs = validateContainers(p, ref, false)
-	require.Len(t, verrs, 1)
-	assert.Contains(t, verrs[0].Message, "unrecognized container OS 'oops'")
-	assert.Contains(t, verrs[0].Message, "unrecognized CPU architecture 'oops'")
-	p.Containers[0].System = model.ContainerSystem{
-		OperatingSystem: evergreen.LinuxOS,
-		CPUArchitecture: evergreen.ArchARM64,
-	}
-	p.Containers[0].Resources = &model.ContainerResources{
-		MemoryMB: 0,
-		CPU:      -1,
-	}
-	verrs = validateContainers(p, ref, false)
-	require.Len(t, verrs, 1)
-	assert.Contains(t, verrs[0].Message, "container resource CPU must be a positive integer")
-	assert.Contains(t, verrs[0].Message, "container resource memory MB must be a positive integer")
 }
 
 func TestValidateTaskSyncSettings(t *testing.T) {
@@ -3074,6 +3504,7 @@ func TestTVToTaskUnit(t *testing.T) {
 						Tasks: []model.BuildVariantTaskUnit{
 							{
 								Name:            "setup",
+								Variant:         "rhel",
 								Priority:        20,
 								ExecTimeoutSecs: 20,
 							},
@@ -3083,6 +3514,7 @@ func TestTVToTaskUnit(t *testing.T) {
 						Tasks: []model.BuildVariantTaskUnit{
 							{
 								Name:             "compile",
+								Variant:          "ubuntu",
 								CommitQueueMerge: true,
 								ExecTimeoutSecs:  10,
 								DependsOn: []model.TaskUnitDependency{
@@ -3098,6 +3530,7 @@ func TestTVToTaskUnit(t *testing.T) {
 						Tasks: []model.BuildVariantTaskUnit{
 							{
 								Name:            "compile",
+								Variant:         "suse",
 								ExecTimeoutSecs: 10,
 								DependsOn: []model.TaskUnitDependency{
 									{
@@ -3174,6 +3607,7 @@ func TestTVToTaskUnit(t *testing.T) {
 						Tasks: []model.BuildVariantTaskUnit{
 							{
 								Name:            "setup",
+								Variant:         "rhel",
 								Priority:        20,
 								ExecTimeoutSecs: 20,
 							},
@@ -3183,6 +3617,7 @@ func TestTVToTaskUnit(t *testing.T) {
 						Tasks: []model.BuildVariantTaskUnit{
 							{
 								Name:             "compile_group",
+								Variant:          "ubuntu",
 								CommitQueueMerge: true,
 							},
 						},
@@ -3190,7 +3625,8 @@ func TestTVToTaskUnit(t *testing.T) {
 						Name: "suse",
 						Tasks: []model.BuildVariantTaskUnit{
 							{
-								Name: "compile_group",
+								Name:    "compile_group",
+								Variant: "suse",
 							},
 						},
 					},
@@ -3243,12 +3679,16 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
 						{
-							Name: "A",
+							Name:    "A",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B"},
 							},
 						},
-						{Name: "B"},
+						{
+							Name:    "B",
+							Variant: "ubuntu",
+						},
 					},
 				},
 			},
@@ -3261,8 +3701,15 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "A", DependsOn: []model.TaskUnitDependency{{Name: "B"}}},
-						{Name: "B"},
+						{
+							Name:      "A",
+							Variant:   "ubuntu",
+							DependsOn: []model.TaskUnitDependency{{Name: "B"}},
+						},
+						{
+							Name:    "B",
+							Variant: "ubuntu",
+						},
 					},
 				},
 			},
@@ -3275,14 +3722,34 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "A", DependsOn: []model.TaskUnitDependency{{Name: "B"}}},
-						{Name: "B", DependsOn: []model.TaskUnitDependency{{Name: "C", Variant: "rhel"}}},
+						{
+							Name:    "A",
+							Variant: "ubuntu",
+							DependsOn: []model.TaskUnitDependency{
+								{
+									Name: "B",
+								},
+							},
+						},
+						{
+							Name:    "B",
+							Variant: "ubuntu",
+							DependsOn: []model.TaskUnitDependency{
+								{
+									Name:    "C",
+									Variant: "rhel",
+								},
+							},
+						},
 					},
 				},
 				{
 					Name: "rhel",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "C"},
+						{
+							Name:    "C",
+							Variant: "rhel",
+						},
 					},
 				},
 			},
@@ -3295,7 +3762,10 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "A"},
+						{
+							Name:    "A",
+							Variant: "ubuntu",
+						},
 					},
 				},
 			},
@@ -3308,8 +3778,21 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "A", DependsOn: []model.TaskUnitDependency{{Name: "B", Variant: "ubuntu"}}},
-						{Name: "B", Patchable: utility.FalsePtr()},
+						{
+							Name:    "A",
+							Variant: "ubuntu",
+							DependsOn: []model.TaskUnitDependency{
+								{
+									Name:    "B",
+									Variant: "ubuntu",
+								},
+							},
+						},
+						{
+							Name:      "B",
+							Variant:   "ubuntu",
+							Patchable: utility.FalsePtr(),
+						},
 					},
 				},
 			},
@@ -3322,7 +3805,15 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "A", DependsOn: []model.TaskUnitDependency{{Name: "B"}}},
+						{
+							Name:    "A",
+							Variant: "ubuntu",
+							DependsOn: []model.TaskUnitDependency{
+								{
+									Name: "B",
+								},
+							},
+						},
 						{
 							Name:      "B",
 							Variant:   "ubuntu",
@@ -3336,7 +3827,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "rhel",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "C"},
+						{Name: "C", Variant: "rhel"},
 					},
 				},
 			},
@@ -3349,8 +3840,21 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "A", DependsOn: []model.TaskUnitDependency{{Name: "B", Variant: "ubuntu"}}},
-						{Name: "B", Patchable: utility.FalsePtr()},
+						{
+							Name:    "A",
+							Variant: "ubuntu",
+							DependsOn: []model.TaskUnitDependency{
+								{
+									Name:    "B",
+									Variant: "ubuntu",
+								},
+							},
+						},
+						{
+							Name:      "B",
+							Variant:   "ubuntu",
+							Patchable: utility.FalsePtr(),
+						},
 					},
 				},
 			},
@@ -3363,12 +3867,24 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "A", DependsOn: []model.TaskUnitDependency{{Name: "B"}}},
+						{
+							Name:    "A",
+							Variant: "ubuntu",
+							DependsOn: []model.TaskUnitDependency{
+								{
+									Name: "B",
+								},
+							},
+						},
 						{
 							Name:      "B",
+							Variant:   "ubuntu",
 							PatchOnly: utility.TruePtr(),
 							DependsOn: []model.TaskUnitDependency{
-								{Name: "C", Variant: "rhel"},
+								{
+									Name:    "C",
+									Variant: "rhel",
+								},
 							},
 						},
 					},
@@ -3376,7 +3892,10 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "rhel",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "C"},
+						{
+							Name:    "C",
+							Variant: "rhel",
+						},
 					},
 				},
 			},
@@ -3390,7 +3909,8 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
 						{
-							Name: "A",
+							Name:    "A",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
 								{
 									Name:          "B",
@@ -3399,7 +3919,10 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 								},
 							},
 						},
-						{Name: "B"},
+						{
+							Name:    "B",
+							Variant: "ubuntu",
+						},
 					},
 				},
 			},
@@ -3413,13 +3936,15 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
 						{
-							Name: "A",
+							Name:    "A",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B", Variant: "ubuntu"},
 							},
 						},
 						{
-							Name: "B",
+							Name:    "B",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "C", Variant: "rhel", PatchOptional: true},
 							},
@@ -3429,7 +3954,10 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "rhel",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "C"},
+						{
+							Name:    "C",
+							Variant: "rhel",
+						},
 					},
 				},
 			},
@@ -3447,13 +3975,15 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
 						{
-							Name: "A",
+							Name:    "A",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B", Status: evergreen.TaskFailed},
 							},
 						},
 						{
-							Name: "B",
+							Name:    "B",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "C", Variant: "rhel"},
 							},
@@ -3463,7 +3993,10 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "rhel",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "C"},
+						{
+							Name:    "C",
+							Variant: "rhel",
+						},
 					},
 				},
 			},
@@ -3481,7 +4014,8 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
 						{
-							Name: "A",
+							Name:    "A",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
 								{
 									Name:    "B",
@@ -3490,7 +4024,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 								},
 							},
 						},
-						{Name: "B"},
+						{Name: "B", Variant: "ubuntu"},
 					},
 				},
 			},
@@ -3508,15 +4042,23 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
 						{
-							Name: "A",
+							Name:    "A",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
-								{Name: "B"},
+								{
+									Name: "B",
+								},
 							},
 						},
 						{
-							Name: "B",
+							Name:    "B",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
-								{Name: "C", Variant: "rhel", Status: evergreen.TaskFailed},
+								{
+									Name:    "C",
+									Variant: "rhel",
+									Status:  evergreen.TaskFailed,
+								},
 							},
 						},
 					},
@@ -3524,7 +4066,10 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "rhel",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "C"},
+						{
+							Name:    "C",
+							Variant: "rhel",
+						},
 					},
 				},
 			},
@@ -3539,6 +4084,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Tasks: []model.BuildVariantTaskUnit{
 						{
 							Name:      "A",
+							Variant:   "ubuntu",
 							Patchable: utility.FalsePtr(),
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B", Variant: "ubuntu"},
@@ -3546,6 +4092,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 						},
 						{
 							Name:      "B",
+							Variant:   "ubuntu",
 							Patchable: utility.FalsePtr(),
 						},
 					},
@@ -3562,6 +4109,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Tasks: []model.BuildVariantTaskUnit{
 						{
 							Name:      "A",
+							Variant:   "ubuntu",
 							Patchable: utility.FalsePtr(),
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B"},
@@ -3569,6 +4117,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 						},
 						{
 							Name:      "B",
+							Variant:   "ubuntu",
 							Patchable: utility.FalsePtr(),
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "C", Variant: "rhel", Status: evergreen.TaskFailed},
@@ -3579,7 +4128,10 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "rhel",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "C"},
+						{
+							Name:    "C",
+							Variant: "rhel",
+						},
 					},
 				},
 			},
@@ -3594,6 +4146,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Tasks: []model.BuildVariantTaskUnit{
 						{
 							Name:      "A",
+							Variant:   "ubuntu",
 							PatchOnly: utility.TruePtr(),
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B", Variant: "ubuntu"},
@@ -3601,6 +4154,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 						},
 						{
 							Name:      "B",
+							Variant:   "ubuntu",
 							PatchOnly: utility.TruePtr(),
 						},
 					},
@@ -3617,6 +4171,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Tasks: []model.BuildVariantTaskUnit{
 						{
 							Name:      "A",
+							Variant:   "ubuntu",
 							PatchOnly: utility.TruePtr(),
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B"},
@@ -3624,6 +4179,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 						},
 						{
 							Name:      "B",
+							Variant:   "ubuntu",
 							PatchOnly: utility.TruePtr(),
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "C", Variant: "rhel"},
@@ -3634,7 +4190,10 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 				{
 					Name: "rhel",
 					Tasks: []model.BuildVariantTaskUnit{
-						{Name: "C"},
+						{
+							Name:    "C",
+							Variant: "rhel",
+						},
 					},
 				},
 			},
@@ -3649,6 +4208,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Tasks: []model.BuildVariantTaskUnit{
 						{
 							Name:      "A",
+							Variant:   "ubuntu",
 							PatchOnly: utility.TruePtr(),
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B", Variant: "ubuntu"},
@@ -3656,6 +4216,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 						},
 						{
 							Name:       "B",
+							Variant:    "ubuntu",
 							GitTagOnly: utility.TruePtr(),
 						},
 					},
@@ -3672,6 +4233,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Tasks: []model.BuildVariantTaskUnit{
 						{
 							Name:      "A",
+							Variant:   "ubuntu",
 							Patchable: utility.FalsePtr(),
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B", Variant: "ubuntu"},
@@ -3679,6 +4241,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 						},
 						{
 							Name:       "B",
+							Variant:    "ubuntu",
 							GitTagOnly: utility.TruePtr(),
 						},
 					},
@@ -3695,6 +4258,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Tasks: []model.BuildVariantTaskUnit{
 						{
 							Name:      "A",
+							Variant:   "ubuntu",
 							Patchable: utility.FalsePtr(),
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B", Variant: "ubuntu"},
@@ -3702,6 +4266,7 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 						},
 						{
 							Name:           "B",
+							Variant:        "ubuntu",
 							AllowForGitTag: utility.FalsePtr(),
 						},
 					},
@@ -3717,13 +4282,15 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
 						{
-							Name: "A",
+							Name:    "A",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B", Variant: "ubuntu"},
 							},
 						},
 						{
 							Name:           "B",
+							Variant:        "ubuntu",
 							AllowForGitTag: utility.TruePtr(),
 						},
 					},
@@ -3739,13 +4306,15 @@ func TestValidateTVDependsOnTV(t *testing.T) {
 					Name: "ubuntu",
 					Tasks: []model.BuildVariantTaskUnit{
 						{
-							Name: "A",
+							Name:    "A",
+							Variant: "ubuntu",
 							DependsOn: []model.TaskUnitDependency{
 								{Name: "B", Variant: "ubuntu"},
 							},
 						},
 						{
 							Name:      "B",
+							Variant:   "ubuntu",
 							PatchOnly: utility.TruePtr(),
 						},
 					},
@@ -3859,17 +4428,17 @@ func TestValidateTaskGroupsInBV(t *testing.T) {
 					},
 				},
 				TaskGroups: []model.TaskGroup{
-					model.TaskGroup{
+					{
 						Name:  "task1-and-task2",
 						Tasks: []string{"task1", "task2"},
 					},
 				},
 				BuildVariants: []model.BuildVariant{
-					model.BuildVariant{
+					{
 						Name: "ubuntu",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "task1-and-task2", IsGroup: true},
-							{Name: "task1"},
+							{Name: "task1-and-task2", Variant: "ubuntu", IsGroup: true},
+							{Name: "task1", Variant: "ubuntu"},
 						},
 					},
 				},
@@ -3891,17 +4460,17 @@ func TestValidateTaskGroupsInBV(t *testing.T) {
 					},
 				},
 				TaskGroups: []model.TaskGroup{
-					model.TaskGroup{
+					{
 						Name:  "task1-and-task2",
 						Tasks: []string{"task1", "task2"},
 					},
 				},
 				BuildVariants: []model.BuildVariant{
-					model.BuildVariant{
+					{
 						Name: "ubuntu",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "task2"},
-							{Name: "task1-and-task2", IsGroup: true},
+							{Name: "task2", Variant: "ubuntu"},
+							{Name: "task1-and-task2", Variant: "ubuntu", IsGroup: true},
 						},
 					},
 				},
@@ -3923,17 +4492,17 @@ func TestValidateTaskGroupsInBV(t *testing.T) {
 					},
 				},
 				TaskGroups: []model.TaskGroup{
-					model.TaskGroup{
+					{
 						Name:  "task1-and-task2",
 						Tasks: []string{"task1", "task2"},
 					},
 				},
 				BuildVariants: []model.BuildVariant{
-					model.BuildVariant{
+					{
 						Name: "ubuntu",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "task3"},
-							{Name: "task1-and-task2", IsGroup: true},
+							{Name: "task3", Variant: "ubuntu"},
+							{Name: "task1-and-task2", Variant: "ubuntu", IsGroup: true},
 						},
 					},
 				},
@@ -3954,17 +4523,17 @@ func TestValidateTaskGroupsInBV(t *testing.T) {
 					},
 				},
 				TaskGroups: []model.TaskGroup{
-					model.TaskGroup{
+					{
 						Name:  "task1-and-task2",
 						Tasks: []string{"task1", "task2"},
 					},
 				},
 				BuildVariants: []model.BuildVariant{
-					model.BuildVariant{
+					{
 						Name: "ubuntu",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "task3"},
-							{Name: "task1"},
+							{Name: "task3", Variant: "ubuntu"},
+							{Name: "task1", Variant: "ubuntu"},
 						},
 					},
 				},
@@ -3986,7 +4555,7 @@ func TestValidateTaskGroupsInBV(t *testing.T) {
 					},
 				},
 				TaskGroups: []model.TaskGroup{
-					model.TaskGroup{
+					{
 						Name:  "task1-and-task2",
 						Tasks: []string{"task1", "task2"},
 					},
@@ -3996,11 +4565,11 @@ func TestValidateTaskGroupsInBV(t *testing.T) {
 					},
 				},
 				BuildVariants: []model.BuildVariant{
-					model.BuildVariant{
+					{
 						Name: "ubuntu",
 						Tasks: []model.BuildVariantTaskUnit{
-							{Name: "task1-and-task2", IsGroup: true},
-							{Name: "task1-and-task3", IsGroup: true},
+							{Name: "task1-and-task2", Variant: "ubuntu", IsGroup: true},
+							{Name: "task1-and-task3", Variant: "ubuntu", IsGroup: true},
 						},
 					},
 				},
@@ -4093,32 +4662,59 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 						{
 							Name: "ubuntu",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "pull"},
+								{
+									Name:    "pull",
+									Variant: "ubuntu",
+								},
 							},
 						},
 						{
 							Name: "rhel",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "test"},
-								{Name: "pull_twice"},
+								{
+									Name:    "test",
+									Variant: "rhel",
+								},
+								{
+									Name:    "pull_twice",
+									Variant: "rhel",
+								},
 							},
 						}, {
 							Name: "archlinux",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "lint"},
+								{
+									Name:    "lint",
+									Variant: "archlinux",
+								},
 							},
 						}, {
 							Name: "debian",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "pull"},
-								{Name: "test"},
-								{Name: "lint"},
+								{
+									Name:    "pull",
+									Variant: "debian",
+								},
+								{
+									Name:    "test",
+									Variant: "debian",
+								},
+								{
+									Name:    "lint",
+									Variant: "debian",
+								},
 							},
 						}, {
 							Name: "fedora",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "pull"},
-								{Name: "test"},
+								{
+									Name:    "pull",
+									Variant: "fedora",
+								},
+								{
+									Name:    "test",
+									Variant: "fedora",
+								},
 							},
 						},
 					},
@@ -4177,13 +4773,13 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 			"TaskFunctionExpandsCommands": {
 				project: model.Project{
 					Functions: map[string]*model.YAMLCommandSet{
-						"pull_func": &model.YAMLCommandSet{
+						"pull_func": {
 							SingleCommand: &model.PluginCommandConf{
 								Command:     evergreen.S3PullCommandName,
 								DisplayName: "pull_dir",
 							},
 						},
-						"test_func": &model.YAMLCommandSet{
+						"test_func": {
 							MultiCommand: []model.PluginCommandConf{
 								{
 									Command:     evergreen.S3PullCommandName,
@@ -4216,13 +4812,19 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 						{
 							Name: "ubuntu",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "setup"},
+								{
+									Name:    "setup",
+									Variant: "ubuntu",
+								},
 							},
 						},
 						{
 							Name: "rhel",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "test"},
+								{
+									Name:    "test",
+									Variant: "rhel",
+								},
 							},
 						},
 					},
@@ -4264,17 +4866,26 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 						{
 							Name: "ubuntu",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "test"},
+								{
+									Name:    "test",
+									Variant: "ubuntu",
+								},
 							},
 						},
 						{Name: "rhel",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "test"},
+								{
+									Name:    "test",
+									Variant: "rhel",
+								},
 							},
 						}, {
 							Name: "archlinux",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "test"},
+								{
+									Name:    "test",
+									Variant: "archlinux",
+								},
 							},
 						},
 					},
@@ -4316,17 +4927,17 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 						{
 							Name: "ubuntu",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "test"},
+								{Name: "test", Variant: "ubuntu"},
 							},
 						},
 						{Name: "rhel",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "test"},
+								{Name: "test", Variant: "rhel"},
 							},
 						}, {
 							Name: "archlinux",
 							Tasks: []model.BuildVariantTaskUnit{
-								{Name: "test"},
+								{Name: "test", Variant: "archlinux"},
 							},
 						},
 					},
@@ -4376,6 +4987,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "ubuntu",
 									IsGroup: true,
 								},
 							},
@@ -4384,6 +4996,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "rhel",
 									IsGroup: true,
 								},
 							},
@@ -4392,6 +5005,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "archlinux",
 									IsGroup: true,
 								},
 							},
@@ -4443,6 +5057,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "ubuntu",
 									IsGroup: true,
 								},
 							},
@@ -4451,6 +5066,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "rhel",
 									IsGroup: true,
 								},
 							},
@@ -4459,6 +5075,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "archlinux",
 									IsGroup: true,
 								},
 							},
@@ -4510,6 +5127,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "ubuntu",
 									IsGroup: true,
 								},
 							},
@@ -4518,6 +5136,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "rhel",
 									IsGroup: true,
 								},
 							},
@@ -4526,6 +5145,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "archlinux",
 									IsGroup: true,
 								},
 							},
@@ -4577,6 +5197,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "ubuntu",
 									IsGroup: true,
 								},
 							},
@@ -4585,6 +5206,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "rhel",
 									IsGroup: true,
 								},
 							},
@@ -4593,6 +5215,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "archlinux",
 									IsGroup: true,
 								},
 							},
@@ -4644,6 +5267,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "ubuntu",
 									IsGroup: true,
 								},
 							},
@@ -4652,6 +5276,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "rhel",
 									IsGroup: true,
 								},
 							},
@@ -4660,6 +5285,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							Tasks: []model.BuildVariantTaskUnit{
 								{
 									Name:    "test_group",
+									Variant: "archlinux",
 									IsGroup: true,
 								},
 							},
@@ -4709,35 +5335,37 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 		}
 	})
 
-	t.Run("MissingDefintiion", func(t *testing.T) {
+	t.Run("MissingDefinition", func(t *testing.T) {
 		for testName, project := range map[string]model.Project{
-			"ForTaskReferencedInBV": model.Project{
+			"ForTaskReferencedInBV": {
 				BuildVariants: []model.BuildVariant{
 					{
 						Name: "ubuntu",
 						Tasks: []model.BuildVariantTaskUnit{
 							{
 								Name:    "test",
+								Variant: "ubuntu",
 								IsGroup: true,
 							},
 						},
 					},
 				},
 			},
-			"ForTaskGroupReferencedInBV": model.Project{
+			"ForTaskGroupReferencedInBV": {
 				BuildVariants: []model.BuildVariant{
 					{
 						Name: "ubuntu",
 						Tasks: []model.BuildVariantTaskUnit{
 							{
 								Name:    "test_group",
+								Variant: "ubuntu",
 								IsGroup: true,
 							},
 						},
 					},
 				},
 			},
-			"ForTaskReferencedInTaskGroupInBV": model.Project{
+			"ForTaskReferencedInTaskGroupInBV": {
 				TaskGroups: []model.TaskGroup{
 					{
 						Name:  "test_group",
@@ -4750,6 +5378,7 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 						Tasks: []model.BuildVariantTaskUnit{
 							{
 								Name:    "test_group",
+								Variant: "ubuntu",
 								IsGroup: true,
 							},
 						},

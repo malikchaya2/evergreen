@@ -4,29 +4,27 @@ import (
 	"context"
 	"testing"
 
+	"github.com/99designs/gqlgen/graphql"
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/user"
+	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/gimlet"
+	"github.com/evergreen-ci/utility"
 	"github.com/stretchr/testify/require"
+	"github.com/vektah/gqlparser/v2/ast"
 )
 
 func init() {
 	testutil.Setup()
-
 }
 
 func setupPermissions(t *testing.T) {
 	env := evergreen.GetEnvironment()
 	ctx := context.Background()
 	require.NoError(t, env.DB().Drop(ctx))
-
-	// TODO (EVG-15499): Create scope and role collection because the
-	// RoleManager will try inserting in a transaction, which is not allowed for
-	// FCV < 4.4.
-	require.NoError(t, db.CreateCollections(evergreen.ScopeCollection, evergreen.RoleCollection))
 
 	roleManager := env.RoleManager()
 
@@ -38,7 +36,7 @@ func setupPermissions(t *testing.T) {
 		ID:          "superuser",
 		Name:        "superuser",
 		Scope:       "superuser_scope",
-		Permissions: map[string]int{"admin_settings": 10, "project_create": 10, "distro_create": 10, "modify_roles": 10},
+		Permissions: map[string]int{"project_create": 10, "distro_create": 10, "modify_roles": 10},
 	}
 	err = roleManager.UpdateRole(superUserRole)
 	require.NoError(t, err)
@@ -78,8 +76,19 @@ func setupPermissions(t *testing.T) {
 	require.NoError(t, err)
 }
 
-func TestRequireSuperUser(t *testing.T) {
+func TestCanCreateProject(t *testing.T) {
 	setupPermissions(t)
+	require.NoError(t, db.Clear(user.Collection),
+		"unable to clear user collection")
+	dbUser := &user.DBUser{
+		Id: apiUser,
+		Settings: user.UserSettings{
+			SlackUsername: "testuser",
+			SlackMemberId: "testuser",
+		},
+	}
+	require.NoError(t, dbUser.Insert())
+
 	const email = "testuser@mongodb.com"
 	const accessToken = "access_token"
 	const refreshToken = "refresh_token"
@@ -103,7 +112,7 @@ func TestRequireSuperUser(t *testing.T) {
 	ctx = gimlet.AttachUser(ctx, usr)
 	require.NotNil(t, ctx)
 
-	res, err := config.Directives.RequireSuperUser(ctx, obj, next)
+	res, err := config.Directives.CanCreateProject(ctx, obj, next)
 	require.Error(t, err, "user testuser does not have permission to access this resolver")
 	require.Nil(t, res)
 	require.Equal(t, 0, callCount)
@@ -111,13 +120,61 @@ func TestRequireSuperUser(t *testing.T) {
 	err = usr.AddRole("superuser")
 	require.NoError(t, err)
 
-	res, err = config.Directives.RequireSuperUser(ctx, obj, next)
+	res, err = config.Directives.CanCreateProject(ctx, obj, next)
 	require.NoError(t, err)
 	require.Nil(t, res)
 	require.Equal(t, 1, callCount)
+
+	err = usr.RemoveRole("superuser")
+	require.NoError(t, err)
+
+	err = usr.AddRole("admin_project")
+	require.NoError(t, err)
+
+	obj = map[string]interface{}{
+		"project": map[string]interface{}{
+			"identifier": "anything",
+		},
+	}
+	res, err = config.Directives.CanCreateProject(ctx, obj, next)
+	require.NoError(t, err)
+	require.Nil(t, res)
+	require.Equal(t, 2, callCount)
+
+	// Should error if you are not an admin of project to copy
+	obj = map[string]interface{}{
+		"project": map[string]interface{}{
+			"projectIdToCopy": "anything",
+		},
+	}
+	res, err = config.Directives.CanCreateProject(ctx, obj, next)
+	require.EqualError(t, err, "input: user testuser does not have permission to access this resolver")
+	require.Nil(t, res)
+	require.Equal(t, 2, callCount)
+
+	obj = map[string]interface{}{
+		"project": map[string]interface{}{
+			"projectIdToCopy": "project_id",
+		},
+	}
+	res, err = config.Directives.CanCreateProject(ctx, obj, next)
+	require.NoError(t, err)
+	require.Nil(t, res)
+	require.Equal(t, 3, callCount)
+
 }
 
-func setupUser() (*user.DBUser, error) {
+func setupUser(t *testing.T) (*user.DBUser, error) {
+	require.NoError(t, db.Clear(user.Collection),
+		"unable to clear user collection")
+	dbUser := &user.DBUser{
+		Id: apiUser,
+		Settings: user.UserSettings{
+			SlackUsername: "testuser",
+			SlackMemberId: "testuser",
+		},
+	}
+	require.NoError(t, dbUser.Insert())
 	const email = "testuser@mongodb.com"
 	const accessToken = "access_token"
 	const refreshToken = "refresh_token"
@@ -139,7 +196,7 @@ func TestRequireProjectAccess(t *testing.T) {
 		return nil, nil
 	}
 
-	usr, err := setupUser()
+	usr, err := setupUser(t)
 	require.NoError(t, err)
 	require.NotNil(t, usr)
 
@@ -220,4 +277,65 @@ func TestRequireProjectAccess(t *testing.T) {
 	require.NoError(t, err)
 	require.Nil(t, res)
 	require.Equal(t, 4, callCount)
+}
+
+func TestRequireProjectFieldAccess(t *testing.T) {
+	setupPermissions(t)
+	config := New("/graphql")
+	require.NotNil(t, config)
+	ctx := context.Background()
+
+	// callCount keeps track of how many times the function is called
+	callCount := 0
+	next := func(rctx context.Context) (interface{}, error) {
+		ctx = rctx // use context from middleware stack in children
+		callCount++
+		return nil, nil
+	}
+
+	usr, err := setupUser(t)
+	require.NoError(t, err)
+	require.NotNil(t, usr)
+
+	ctx = gimlet.AttachUser(ctx, usr)
+	require.NotNil(t, ctx)
+
+	apiProjectRef := &restModel.APIProjectRef{
+		Identifier: utility.ToStringPtr("project_identifier"),
+		Admins:     utility.ToStringPtrSlice([]string{"admin_1", "admin_2", "admin_3"}),
+	}
+
+	fieldCtx := &graphql.FieldContext{
+		Field: graphql.CollectedField{
+			Field: &ast.Field{
+				Alias: "admins",
+			},
+		},
+	}
+	ctx = graphql.WithFieldContext(ctx, fieldCtx)
+
+	res, err := config.Directives.RequireProjectFieldAccess(ctx, interface{}(nil), next)
+	require.EqualError(t, err, "input: project not valid")
+	require.Nil(t, res)
+	require.Equal(t, 0, callCount)
+
+	res, err = config.Directives.RequireProjectFieldAccess(ctx, apiProjectRef, next)
+	require.EqualError(t, err, "input: project not specified")
+	require.Nil(t, res)
+	require.Equal(t, 0, callCount)
+
+	apiProjectRef.Id = utility.ToStringPtr("project_id")
+
+	res, err = config.Directives.RequireProjectFieldAccess(ctx, apiProjectRef, next)
+	require.EqualError(t, err, "input: user does not have permission to access the field 'admins' for project with ID 'project_id'")
+	require.Nil(t, res)
+	require.Equal(t, 0, callCount)
+
+	err = usr.AddRole("view_project")
+	require.NoError(t, err)
+
+	res, err = config.Directives.RequireProjectFieldAccess(ctx, apiProjectRef, next)
+	require.NoError(t, err)
+	require.Nil(t, res)
+	require.Equal(t, 1, callCount)
 }

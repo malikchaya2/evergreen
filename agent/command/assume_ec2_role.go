@@ -2,6 +2,8 @@ package command
 
 import (
 	"context"
+	"fmt"
+	"strconv"
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
@@ -29,9 +31,6 @@ type ec2AssumeRole struct {
 	// Required.
 	RoleARN string `mapstructure:"role_arn" plugin:"expand"`
 
-	// A unique identifier that might be required when you assume a role in another account.
-	ExternalId string `mapstructure:"external_id" plugin:"expand"`
-
 	// An IAM policy in JSON format that you want to use as an inline session policy.
 	Policy string `mapstructure:"policy" plugin:"expand"`
 
@@ -47,7 +46,7 @@ func (r *ec2AssumeRole) Name() string { return "ec2.assume_role" }
 
 func (r *ec2AssumeRole) ParseParams(params map[string]interface{}) error {
 	if err := mapstructure.Decode(params, r); err != nil {
-		return errors.Wrapf(err, "error parsing '%s' params", r.Name())
+		return errors.Wrap(err, "decoding mapstructure params")
 	}
 
 	return r.validate()
@@ -71,7 +70,7 @@ func (r *ec2AssumeRole) validate() error {
 func (r *ec2AssumeRole) Execute(ctx context.Context,
 	comm client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 	if err := util.ExpandValues(r, conf.Expansions); err != nil {
-		return errors.WithStack(err)
+		return errors.Wrap(err, "applying expansions")
 	}
 	// Re-validate the command here, in case an expansion is not defined.
 	if err := r.validate(); err != nil {
@@ -87,7 +86,7 @@ func (r *ec2AssumeRole) Execute(ctx context.Context,
 
 	// Error if key or secret are blank
 	if key == "" || secret == "" {
-		return errors.New("AWS ID and Secret could not be retrieved")
+		return errors.New("AWS key and secret must not be empty")
 	}
 
 	defaultCreds := credentials.NewStaticCredentialsFromCreds(credentials.Value{
@@ -100,10 +99,9 @@ func (r *ec2AssumeRole) Execute(ctx context.Context,
 	}))
 
 	creds := stscreds.NewCredentials(session1, r.RoleARN, func(arp *stscreds.AssumeRoleProvider) {
-		arp.RoleSessionName = time.Now().String()
-		if r.ExternalId != "" {
-			arp.ExternalID = utility.ToStringPtr(r.ExternalId)
-		}
+		arp.RoleSessionName = strconv.Itoa(int(time.Now().Unix()))
+		// External ID formatted as requested by build.
+		arp.ExternalID = utility.ToStringPtr(fmt.Sprintf("%s-%s", conf.ProjectRef.Id, conf.Task.Requester))
 		if r.Policy != "" {
 			arp.Policy = utility.ToStringPtr(r.Policy)
 		}

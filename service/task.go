@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"strconv"
 	"time"
@@ -18,7 +17,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/event"
 	"github.com/evergreen-ci/evergreen/model/host"
 	"github.com/evergreen-ci/evergreen/model/task"
-	"github.com/evergreen-ci/evergreen/model/user"
+	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/evergreen-ci/evergreen/plugin"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/gimlet/rolemanager"
@@ -127,12 +126,13 @@ type uiExecTask struct {
 }
 
 type uiTestResult struct {
-	TestResult task.TestResult `json:"test_result"`
-	TaskId     string          `json:"task_id"`
-	TaskName   string          `json:"task_name"`
-	URL        string          `json:"url"`
-	URLRaw     string          `json:"url_raw"`
-	URLLobster string          `json:"url_lobster"`
+	TestResult testresult.TestResult `json:"test_result"`
+	TaskId     string                `json:"task_id"`
+	TaskName   string                `json:"task_name"`
+	URL        string                `json:"url"`
+	URLRaw     string                `json:"url_raw"`
+	URLLobster string                `json:"url_lobster"`
+	URLParsley string                `json:"url_parsley"`
 }
 
 type logData struct {
@@ -149,19 +149,24 @@ type abortedByDisplay struct {
 func (uis *UIServer) taskPage(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	projCtx := MustHaveProjectContext(r)
+	executionStr := gimlet.GetVars(r)["execution"]
+	var execution int
+	var err error
 
-	if r.FormValue("redirect_spruce_users") == "true" {
-		if u := gimlet.GetUser(r.Context()); u != nil {
-			usr, ok := u.(*user.DBUser)
-			if ok && usr != nil && usr.Settings.UseSpruceOptions.SpruceV1 {
-				http.Redirect(w, r, fmt.Sprintf("%s/task/%s", uis.Settings.Ui.UIv2Url, projCtx.Task.Id), http.StatusTemporaryRedirect)
-				return
-			}
+	if executionStr != "" {
+		execution, err = strconv.Atoi(executionStr)
+		if err != nil {
+			http.Error(w, fmt.Sprintf("Bad execution number: %v", executionStr), http.StatusBadRequest)
+			return
 		}
 	}
 
 	if projCtx.Task == nil {
 		http.Error(w, "Not found", http.StatusNotFound)
+		return
+	}
+
+	if RedirectSpruceUsers(w, r, fmt.Sprintf("%s/task/%s?execution=%d", uis.Settings.Ui.UIv2Url, projCtx.Task.Id, execution)) {
 		return
 	}
 
@@ -181,17 +186,11 @@ func (uis *UIServer) taskPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	executionStr := gimlet.GetVars(r)["execution"]
 	archived := false
 
 	// if there is an execution number, the task might be in the old_tasks collection, so we
 	// query that collection and set projCtx.Task to the old task if it exists.
 	if executionStr != "" {
-		execution, err := strconv.Atoi(executionStr)
-		if err != nil {
-			http.Error(w, fmt.Sprintf("Bad execution number: %v", executionStr), http.StatusBadRequest)
-			return
-		}
 		// Construct the old task id.
 		oldTaskId := task.MakeOldID(projCtx.Task.Id, execution)
 
@@ -218,7 +217,7 @@ func (uis *UIServer) taskPage(w http.ResponseWriter, r *http.Request) {
 	// Build a struct containing the subset of task data needed for display in the UI
 	tId := projCtx.Task.Id
 	totalExecutions := projCtx.Task.Execution
-
+	taskExecution := projCtx.Task.Execution
 	if archived {
 		tId = projCtx.Task.OldTaskId
 
@@ -246,7 +245,7 @@ func (uis *UIServer) taskPage(w http.ResponseWriter, r *http.Request) {
 		BuildVariant:         projCtx.Task.BuildVariant,
 		BuildId:              projCtx.Task.BuildId,
 		Activated:            projCtx.Task.Activated,
-		Execution:            projCtx.Task.Execution,
+		Execution:            taskExecution,
 		Requester:            projCtx.Task.Requester,
 		CreateTime:           projCtx.Task.CreateTime,
 		IngestTime:           projCtx.Task.IngestTime,
@@ -335,10 +334,10 @@ func (uis *UIServer) taskPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	testResults := uis.getTestResults(w, r, projCtx, &uiTask)
+	testResults := uis.getTestResults(projCtx, &uiTask)
 	if projCtx.Patch != nil {
 		var taskOnBaseCommit *task.Task
-		var testResultsOnBaseCommit []task.TestResult
+		var testResultsOnBaseCommit []testresult.TestResult
 		taskOnBaseCommit, err = projCtx.Task.FindTaskOnBaseCommit()
 		if err != nil {
 			uis.LoggedError(w, r, http.StatusInternalServerError, err)
@@ -387,7 +386,7 @@ func (uis *UIServer) taskPage(w http.ResponseWriter, r *http.Request) {
 	}
 	newUILink := ""
 	if len(uis.Settings.Ui.UIv2Url) > 0 {
-		newUILink = fmt.Sprintf("%s/task/%s", uis.Settings.Ui.UIv2Url, tId)
+		newUILink = fmt.Sprintf("%s/task/%s?execution=%d", uis.Settings.Ui.UIv2Url, tId, taskExecution)
 	}
 
 	if uiTask.AbortInfo.TaskID != "" {
@@ -435,7 +434,7 @@ type taskHistoryPageData struct {
 	TaskName    string
 	Tasks       []bson.M
 	Variants    []string
-	FailedTests map[string][]task.TestResult
+	FailedTests map[string][]string
 	Versions    []model.Version
 
 	// Flags that indicate whether the beginning/end of history has been reached
@@ -529,7 +528,7 @@ func (uis *UIServer) taskLog(w http.ResponseWriter, r *http.Request) {
 	logType := r.FormValue("type")
 	if logType == "EV" {
 		var loggedEvents []event.EventLogEntry
-		loggedEvents, err = event.Find(event.AllLogCollection, event.MostRecentTaskEvents(projCtx.Task.Id, DefaultLogMessages))
+		loggedEvents, err = event.Find(event.MostRecentTaskEvents(projCtx.Task.Id, DefaultLogMessages))
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
@@ -665,7 +664,7 @@ func (uis *UIServer) taskModify(w http.ResponseWriter, r *http.Request) {
 	body := utility.NewRequestReader(r)
 	defer body.Close()
 
-	reqBody, err := ioutil.ReadAll(body)
+	reqBody, err := io.ReadAll(body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -699,7 +698,7 @@ func (uis *UIServer) taskModify(w http.ResponseWriter, r *http.Request) {
 	// determine what action needs to be taken
 	switch putParams.Action {
 	case evergreen.RestartAction:
-		if err = model.TryResetTask(projCtx.Task.Id, authName, evergreen.UIPackage, nil); err != nil {
+		if err = model.TryResetTask(uis.env.Settings(), projCtx.Task.Id, authName, evergreen.UIPackage, nil); err != nil {
 			http.Error(w, fmt.Sprintf("Error restarting task %v: %v", projCtx.Task.Id, err), http.StatusInternalServerError)
 			return
 		}
@@ -852,7 +851,7 @@ func (uis *UIServer) testLog(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}()
-	} else {
+	} else if uis.Settings.Cedar.BaseURL != "" {
 		// Search for logs in cedar.
 		opts := apimodels.GetBuildloggerLogsOptions{
 			BaseURL:       uis.Settings.Cedar.BaseURL,
@@ -878,6 +877,39 @@ func (uis *UIServer) testLog(w http.ResponseWriter, r *http.Request) {
 				"message":   "problem getting buildlogger logs",
 			}))
 		}
+	} else {
+		// TODO (EVG-17662): Replace this with a more permanent option.
+		// Fallback to legacy test results.
+		// Direct link to a log document in the database.
+		testLog, err = model.FindOneTestLog(testName, taskID, taskExec)
+		if err != nil {
+			uis.LoggedError(w, r, http.StatusInternalServerError, err)
+			return
+		}
+
+		if testLog == nil {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+
+		ctx, cancel := context.WithCancel(r.Context())
+		defer cancel()
+
+		data.Data = make(chan apimodels.LogMessage)
+		go func() {
+			defer close(data.Data)
+			for _, line := range testLog.Lines {
+				if ctx.Err() != nil {
+					return
+				}
+				data.Data <- apimodels.LogMessage{
+					Type:     apimodels.TaskLogPrefix,
+					Severity: apimodels.LogInfoPrefix,
+					Version:  evergreen.LogmessageCurrentVersion,
+					Message:  line,
+				}
+			}
+		}()
 	}
 
 	if raw {
@@ -893,9 +925,12 @@ func (uis *UIServer) testLog(w http.ResponseWriter, r *http.Request) {
 	uis.render.Stream(w, http.StatusOK, data, "base", "task_log.html")
 }
 
-func (uis *UIServer) getTestResults(w http.ResponseWriter, r *http.Request, projCtx projectContext, uiTask *uiTaskData) []task.TestResult {
+func (uis *UIServer) getTestResults(projCtx projectContext, uiTask *uiTaskData) []testresult.TestResult {
 	if err := projCtx.Task.PopulateTestResults(); err != nil {
-		uis.LoggedError(w, r, http.StatusInternalServerError, err)
+		grip.Error(message.WrapError(err, message.Fields{
+			"task_id": projCtx.Task.Id,
+			"message": "fetching test results for task",
+		}))
 		return nil
 	}
 
@@ -913,14 +948,18 @@ func (uis *UIServer) getTestResults(w http.ResponseWriter, r *http.Request, proj
 				et, err = task.FindOneId(t)
 			}
 			if err != nil {
-				uis.LoggedError(w, r, http.StatusInternalServerError, err)
+				grip.Error(message.Fields{
+					"message":        "fetching test results for execution task",
+					"task_id":        t,
+					"parent_task_id": projCtx.Task.Id,
+				})
 				return nil
 			}
 			if et == nil {
 				grip.Error(message.Fields{
-					"message": "execution task not found",
-					"task":    t,
-					"parent":  projCtx.Task.Id,
+					"message":        "execution task not found",
+					"task_id":        t,
+					"parent_task_id": projCtx.Task.Id,
 				})
 				continue
 			}
@@ -939,9 +978,10 @@ func (uis *UIServer) getTestResults(w http.ResponseWriter, r *http.Request, proj
 				TestResult: tr,
 				TaskId:     tr.TaskID,
 				TaskName:   execTaskDisplayNameMap[tr.TaskID],
-				URL:        tr.GetLogURL(evergreen.LogViewerHTML),
-				URLRaw:     tr.GetLogURL(evergreen.LogViewerRaw),
-				URLLobster: tr.GetLogURL(evergreen.LogViewerLobster),
+				URL:        tr.GetLogURL(uis.env, evergreen.LogViewerHTML),
+				URLRaw:     tr.GetLogURL(uis.env, evergreen.LogViewerRaw),
+				URLLobster: tr.GetLogURL(uis.env, evergreen.LogViewerLobster),
+				URLParsley: tr.GetLogURL(uis.env, evergreen.LogViewerParsley),
 			})
 		}
 	} else {
@@ -949,9 +989,10 @@ func (uis *UIServer) getTestResults(w http.ResponseWriter, r *http.Request, proj
 			uiTask.TestResults = append(uiTask.TestResults, uiTestResult{
 				TestResult: tr,
 				TaskId:     tr.TaskID,
-				URL:        tr.GetLogURL(evergreen.LogViewerHTML),
-				URLRaw:     tr.GetLogURL(evergreen.LogViewerRaw),
-				URLLobster: tr.GetLogURL(evergreen.LogViewerLobster),
+				URL:        tr.GetLogURL(uis.env, evergreen.LogViewerHTML),
+				URLRaw:     tr.GetLogURL(uis.env, evergreen.LogViewerRaw),
+				URLLobster: tr.GetLogURL(uis.env, evergreen.LogViewerLobster),
+				URLParsley: tr.GetLogURL(uis.env, evergreen.LogViewerParsley),
 			})
 		}
 

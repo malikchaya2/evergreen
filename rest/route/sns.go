@@ -4,9 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
 	"github.com/aws/aws-sdk-go/service/ec2"
@@ -59,7 +60,7 @@ func makeBaseSNS(env evergreen.Environment, queue amboy.Queue) baseSNS {
 func (sns *baseSNS) Parse(ctx context.Context, r *http.Request) error {
 	sns.messageType = r.Header.Get("x-amz-sns-message-type")
 
-	body, err := ioutil.ReadAll(r.Body)
+	body, err := io.ReadAll(r.Body)
 	if err != nil {
 		return errors.Wrap(err, " reading body")
 	}
@@ -146,6 +147,7 @@ func (sns *ec2SNS) Run(ctx context.Context) gimlet.Responder {
 }
 
 type ec2EventBridgeNotification struct {
+	EventTime  string         `json:"time"`
 	DetailType string         `json:"detail-type"`
 	Detail     ec2EventDetail `json:"detail"`
 }
@@ -174,6 +176,13 @@ func (sns *ec2SNS) handleNotification(ctx context.Context) error {
 		}
 	case instanceStateChangeType:
 		switch notification.Detail.State {
+		case ec2.InstanceStateNameRunning:
+			if err := sns.handleInstanceRunning(ctx, notification.Detail.InstanceID, notification.EventTime); err != nil {
+				return gimlet.ErrorResponse{
+					StatusCode: http.StatusInternalServerError,
+					Message:    errors.Wrap(err, "processing running instance").Error(),
+				}
+			}
 		case ec2.InstanceStateNameTerminated:
 			if err := sns.handleInstanceTerminated(ctx, notification.Detail.InstanceID); err != nil {
 				return gimlet.ErrorResponse{
@@ -253,11 +262,42 @@ func (sns *ec2SNS) handleInstanceTerminated(ctx context.Context, instanceID stri
 		return nil
 	}
 
+	// The host is going to imminently stop work anyways. Decommissioning
+	// ensures that even if the external state check does not terminate the
+	// host, the host is eventually picked up for termination.
+	if err := h.SetDecommissioned(evergreen.User, false, "SNS notification indicates host is terminated"); err != nil {
+		return errors.Wrap(err, "decommissioning host")
+	}
+
 	if err := amboy.EnqueueUniqueJob(ctx, sns.queue, units.NewHostMonitorExternalStateJob(sns.env, h, sns.payload.MessageId)); err != nil {
-		return err
+		return errors.Wrap(err, "enqueueing host external state check job")
 	}
 
 	return nil
+}
+
+func (sns *ec2SNS) handleInstanceRunning(ctx context.Context, instanceID, eventTimestamp string) error {
+	h, err := host.FindOneId(instanceID)
+	if err != nil {
+		return err
+	}
+	if h == nil {
+		return nil
+	}
+
+	runningTime, err := time.Parse(time.RFC3339, eventTimestamp)
+	if err != nil {
+		grip.Error(message.WrapError(err, message.Fields{
+			"message":   "got malformed timestamp",
+			"timestamp": eventTimestamp,
+			"operation": "handleInstanceRunning",
+			"host_id":   h.Id,
+			"distro":    h.Distro.Id,
+		}))
+		runningTime = time.Now()
+	}
+
+	return errors.Wrap(h.SetBillingStartTime(runningTime), "setting billing start time")
 }
 
 // handleInstanceStopped handles an agent host when AWS reports that it is
@@ -286,8 +326,15 @@ func (sns *ec2SNS) handleInstanceStopped(ctx context.Context, instanceID string)
 		return nil
 	}
 
+	// The host is going to imminently stop work anyways. Decommissioning
+	// ensures that even if the external state check does not terminate the
+	// host, the host is eventually picked up for termination.
+	if err := h.SetDecommissioned(evergreen.User, false, "SNS notification indicates host is stopped"); err != nil {
+		return errors.Wrap(err, "decommissioning host")
+	}
+
 	if err := amboy.EnqueueUniqueJob(ctx, sns.queue, units.NewHostMonitorExternalStateJob(sns.env, h, sns.payload.MessageId)); err != nil {
-		return err
+		return errors.Wrap(err, "enqueueing host external state check job")
 	}
 
 	return nil
@@ -295,8 +342,6 @@ func (sns *ec2SNS) handleInstanceStopped(ctx context.Context, instanceID string)
 
 type ecsSNS struct {
 	baseSNS
-
-	makeECSClient func(*evergreen.Settings) (cocoa.ECSClient, error)
 }
 
 type ecsEventBridgeNotification struct {
@@ -324,15 +369,13 @@ type ecsContainerInstanceEventDetail struct {
 
 func makeECSSNS(env evergreen.Environment, queue amboy.Queue) gimlet.RouteHandler {
 	return &ecsSNS{
-		baseSNS:       makeBaseSNS(env, queue),
-		makeECSClient: cloud.MakeECSClient,
+		baseSNS: makeBaseSNS(env, queue),
 	}
 }
 
 func (sns *ecsSNS) Factory() gimlet.RouteHandler {
 	return &ecsSNS{
-		baseSNS:       makeBaseSNS(sns.env, sns.queue),
-		makeECSClient: sns.makeECSClient,
+		baseSNS: makeBaseSNS(sns.env, sns.queue),
 	}
 }
 
@@ -490,7 +533,7 @@ func (sns *ecsSNS) handleStoppedPod(ctx context.Context, p *pod.Pod, reason stri
 		return nil
 	}
 
-	if err := p.UpdateStatus(pod.StatusDecommissioned); err != nil {
+	if err := p.UpdateStatus(pod.StatusDecommissioned, reason); err != nil {
 		return err
 	}
 
@@ -534,7 +577,7 @@ func (sns *ecsSNS) cleanupUnrecognizedPod(ctx context.Context, detail ecsTaskEve
 		return nil
 	}
 
-	c, err := sns.makeECSClient(sns.env.Settings())
+	c, err := cloud.MakeECSClient(sns.env.Settings())
 	if err != nil {
 		return errors.Wrap(err, "getting ECS client")
 	}
@@ -546,12 +589,12 @@ func (sns *ecsSNS) cleanupUnrecognizedPod(ctx context.Context, detail ecsTaskEve
 
 	statusInfo := cocoa.NewECSPodStatusInfo().SetStatus(status)
 
-	podOpts := ecs.NewBasicECSPodOptions().
+	podOpts := ecs.NewBasicPodOptions().
 		SetClient(c).
 		SetStatusInfo(*statusInfo).
 		SetResources(*resources)
 
-	p, err := ecs.NewBasicECSPod(podOpts)
+	p, err := ecs.NewBasicPod(podOpts)
 	if err != nil {
 		return errors.Wrap(err, "getting pod")
 	}
@@ -588,7 +631,7 @@ func (sns *ecsSNS) listECSTasks(ctx context.Context, details ecsContainerInstanc
 		return nil, nil
 	}
 
-	c, err := sns.makeECSClient(sns.env.Settings())
+	c, err := cloud.MakeECSClient(sns.env.Settings())
 	if err != nil {
 		return nil, errors.Wrap(err, "getting ECS client")
 	}

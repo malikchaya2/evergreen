@@ -32,10 +32,9 @@ func TestGetRepoIDHandler(t *testing.T) {
 
 	repoRef := &dbModel.RepoRef{
 		ProjectRef: dbModel.ProjectRef{
-			Id:      "repo_ref",
-			Repo:    "repo",
-			Owner:   "mongodb",
-			Enabled: utility.TruePtr(),
+			Id:    "repo_ref",
+			Repo:  "repo",
+			Owner: "mongodb",
 		},
 	}
 	require.NoError(t, repoRef.Upsert())
@@ -66,13 +65,13 @@ func TestGetRepoIDHandler(t *testing.T) {
 
 	repo := resp.Data().(*model.APIProjectRef)
 	alias := model.APIProjectAlias{}
-	err = alias.BuildFromService(repoAlias)
+	alias.BuildFromService(*repoAlias)
 	assert.NoError(t, err)
 
 	assert.Equal(t, repoRef.Id, utility.FromStringPtr(repo.Id))
 	assert.Equal(t, repoRef.Repo, utility.FromStringPtr(repo.Repo))
 	assert.Equal(t, repoRef.Owner, utility.FromStringPtr(repo.Owner))
-	assert.Equal(t, repoRef.Enabled, repo.Enabled)
+	assert.Equal(t, false, utility.FromBoolPtr(repo.Enabled))
 	assert.Len(t, repo.Aliases, 1)
 	assert.Equal(t, alias, repo.Aliases[0])
 	assert.Equal(t, repoVars.Vars, repo.Variables.Vars)
@@ -87,10 +86,9 @@ func TestPatchRepoIDHandler(t *testing.T) {
 
 	repoRef := &dbModel.RepoRef{
 		ProjectRef: dbModel.ProjectRef{
-			Id:      "repo_ref",
-			Owner:   "mongodb",
-			Repo:    "mongo",
-			Enabled: utility.TruePtr(),
+			Id:    "repo_ref",
+			Owner: "mongodb",
+			Repo:  "mongo",
 		},
 	}
 	assert.NoError(t, repoRef.Upsert())
@@ -113,7 +111,7 @@ func TestPatchRepoIDHandler(t *testing.T) {
 		Owner:               repoRef.Owner,
 		Repo:                repoRef.Repo,
 		Branch:              "main",
-		Enabled:             utility.TruePtr(),
+		Enabled:             true,
 		CommitQueue:         dbModel.CommitQueueParams{Enabled: utility.TruePtr()},
 		GithubChecksEnabled: utility.TruePtr(),
 	}
@@ -124,6 +122,7 @@ func TestPatchRepoIDHandler(t *testing.T) {
 		Repo:       repoRef.Repo,
 		Branch:     "main",
 		RepoRefId:  repoRef.Id,
+		Enabled:    true,
 	}
 	assert.NoError(t, independentProject.Insert())
 	assert.NoError(t, branchProject.Insert())
@@ -246,7 +245,7 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 	env := testutil.NewEnvironment(ctx, t)
 	require.NoError(t, db.ClearCollections(dbModel.RepoRefCollection, dbModel.ProjectVarsCollection,
 		dbModel.ProjectAliasCollection, dbModel.GithubHooksCollection, commitqueue.Collection, user.Collection,
-		dbModel.ProjectRefCollection, evergreen.ScopeCollection, evergreen.RoleCollection))
+		dbModel.ProjectRefCollection, evergreen.ScopeCollection, evergreen.RoleCollection, evergreen.ConfigCollection))
 
 	independentProject := &dbModel.ProjectRef{
 		Id:         "branch1",
@@ -254,7 +253,7 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 		Owner:      "owner",
 		Repo:       "repo",
 		Branch:     "main",
-		Enabled:    utility.TruePtr(),
+		Enabled:    true,
 		Restricted: utility.TruePtr(),
 		Admins:     []string{"branch1_admin"},
 	}
@@ -264,7 +263,7 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 		Owner:      "owner",
 		Repo:       "repo",
 		Branch:     "main",
-		Enabled:    utility.TruePtr(),
+		Enabled:    true,
 		Admins:     []string{"branch2_admin", "the amazing Annie"},
 	}
 	assert.NoError(t, independentProject.Insert())
@@ -303,7 +302,7 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 		ParentScope: evergreen.AllProjectsScope,
 	}
 	assert.NoError(t, rm.AddScope(*unrestrictedScope))
-	//verify that all projects scope has both branches
+	// Verify that the all projects scope has both branches
 	allProjectsScope, err := rm.GetScope(ctx, evergreen.AllProjectsScope)
 	assert.NoError(t, err)
 	assert.Len(t, allProjectsScope.Resources, 2)
@@ -313,8 +312,9 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 	settings, err := evergreen.GetConfig()
 	assert.NoError(t, err)
 	settings.GithubOrgs = []string{branchProject.Owner}
+	assert.NoError(t, settings.Set())
 	attachProjectHandler := attachProjectToRepoHandler{}
-	// test that turning on repo settings doesn't impact existing restricted values
+	// Test that turning on repo settings doesn't impact existing restricted values
 	req, _ := http.NewRequest(http.MethodPost, "rest/v2/projects/branch2/attach_to_repo", nil)
 	req = gimlet.SetURLVars(req, map[string]string{"project_id": "branch2"})
 
@@ -322,7 +322,6 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 	resp := attachProjectHandler.Run(ctx)
 	assert.NotNil(t, resp)
 	assert.Equal(t, resp.Status(), http.StatusOK)
-
 	pRefs, err := dbModel.FindMergedEnabledProjectRefsByRepoAndBranch("owner", "repo", "main")
 	assert.NoError(t, err)
 	require.Len(t, pRefs, 2)
@@ -336,14 +335,20 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 			repoId = branch.RepoRefId
 		}
 	}
-	// and doesn't impact the scopes
+	// Shouldn't impact the scopes restricted/unrestricted scopes.
 	restrictedScope, err = rm.GetScope(ctx, evergreen.RestrictedProjectsScope)
 	assert.NoError(t, err)
 	assert.Equal(t, restrictedScope.Resources, []string{"branch1"})
 	unrestrictedScope, err = rm.GetScope(ctx, evergreen.UnrestrictedProjectsScope)
 	assert.NoError(t, err)
 	assert.Equal(t, unrestrictedScope.Resources, []string{"branch2"})
-	// branch admin that didn't turn on repo settings should still have view access
+
+	// Should be added to the all project scope however.
+	allProjectsScope, err = rm.GetScope(ctx, evergreen.AllProjectsScope)
+	assert.NoError(t, err)
+	assert.Contains(t, allProjectsScope.Resources, repoId)
+
+	// Branch admin that didn't turn on repo settings should still have view access
 	u, err = user.FindOneById("branch2_admin")
 	assert.NoError(t, err)
 	assert.NotNil(t, u)
@@ -359,7 +364,7 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 	assert.NotNil(t, scope)
 	assert.Equal(t, scope.Resources, []string{"branch2"})
 
-	// test that setting repo to restricted impacts the branch project
+	// Test that setting repo to restricted impacts the branch project
 	body := bytes.NewBuffer([]byte(`{"restricted": true}`))
 	req, _ = http.NewRequest(http.MethodPatch, fmt.Sprintf("rest/v2/repos/%s", repoId), body)
 	req = gimlet.SetURLVars(req, map[string]string{"repo_id": repoId})
@@ -445,13 +450,13 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, scope)
 	assert.Equal(t, scope.Resources, []string{"branch1"})
-	// verify that setting branch unrestricted doesn't give view settings to restricted repo
+	// Verify that setting branch unrestricted doesn't give view settings to restricted repo
 	u, err = user.FindOneById("branch1_admin")
 	assert.NoError(t, err)
 	assert.NotNil(t, u)
 	assert.NotContains(t, u.Roles(), dbModel.GetViewRepoRole(repoId))
 
-	// test that setting branch to null uses the repo default (which is restricted)
+	// Test that setting branch to null uses the repo default (which is restricted)
 	body = bytes.NewBuffer([]byte(`{"restricted": null}`))
 	req, _ = http.NewRequest(http.MethodPatch, "rest/v2/projects/branch1", body)
 	req = gimlet.SetURLVars(req, map[string]string{"project_id": "branch1"})
@@ -483,7 +488,7 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 	assert.NotNil(t, scope)
 	assert.Empty(t, scope.Resources)
 
-	// test that setting repo back to not restricted gives the branch admins view access again
+	// Test that setting repo back to not restricted gives the branch admins view access again
 	body = bytes.NewBuffer([]byte(`{"restricted": false}`))
 	req, _ = http.NewRequest(http.MethodPatch, fmt.Sprintf("rest/v2/repos/%s", repoId), body)
 	req = gimlet.SetURLVars(req, map[string]string{"repo_id": repoId})
@@ -496,7 +501,7 @@ func TestPatchHandlersWithRestricted(t *testing.T) {
 	assert.NoError(t, err)
 	assert.NotNil(t, u)
 	assert.Contains(t, u.Roles(), dbModel.GetViewRepoRole(repoId))
-	// verify that setting branch unrestricted doesn't give view settings to restricted repo
+	// Verify that setting branch unrestricted doesn't give view settings to restricted repo
 	u, err = user.FindOneById("branch2_admin")
 	assert.NoError(t, err)
 	assert.NotNil(t, u)

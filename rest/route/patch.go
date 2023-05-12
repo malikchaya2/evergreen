@@ -72,7 +72,7 @@ func (p *patchChangeStatusHandler) Run(ctx context.Context) gimlet.Responder {
 				StatusCode: http.StatusForbidden,
 			})
 		}
-		if err := dbModel.SetVersionPriority(p.patchId, priority, ""); err != nil {
+		if err := dbModel.SetVersionsPriority([]string{p.patchId}, priority, ""); err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "setting patch priority"))
 		}
 	}
@@ -127,11 +127,11 @@ type patchRawHandler struct {
 }
 
 func makePatchRawHandler() gimlet.RouteHandler {
-	return &patchByIdHandler{}
+	return &patchRawHandler{}
 }
 
 func (p *patchRawHandler) Factory() gimlet.RouteHandler {
-	return &patchByIdHandler{}
+	return &patchRawHandler{}
 }
 
 func (p *patchRawHandler) Parse(ctx context.Context, r *http.Request) error {
@@ -199,10 +199,6 @@ func (p *patchesByUserHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	resp := gimlet.NewResponseBuilder()
-	if err = resp.SetFormat(gimlet.JSON); err != nil {
-		return gimlet.MakeJSONErrorResponder(errors.Wrap(err, "setting JSON response format"))
-	}
-
 	if len(patches) > p.limit {
 		err = resp.SetPages(&gimlet.ResponsePages{
 			Next: &gimlet.Page{
@@ -280,10 +276,6 @@ func (p *patchesByProjectHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	resp := gimlet.NewResponseBuilder()
-	err = resp.SetFormat(gimlet.JSON)
-	if err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "setting JSON response format"))
-	}
 	if len(patches) > p.limit {
 		err = resp.SetPages(&gimlet.ResponsePages{
 			Next: &gimlet.Page{
@@ -306,11 +298,6 @@ func (p *patchesByProjectHandler) Run(ctx context.Context) gimlet.Responder {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "adding response data for patch '%s'", utility.FromStringPtr(model.Id)))
 		}
 	}
-	err = resp.SetStatus(http.StatusOK)
-	if err != nil {
-		return gimlet.MakeJSONErrorResponder(errors.Wrap(err, "unable to set response status"))
-	}
-
 	return resp
 }
 
@@ -390,23 +377,24 @@ func (p *patchRestartHandler) Run(ctx context.Context) gimlet.Responder {
 	return gimlet.NewJSONResponse(foundPatch)
 }
 
-////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////
 //
 // Handler for creating a new merge patch from an existing patch
 //
-//    /patches/{patch_id}/merge_patch
+//	/patches/{patch_id}/merge_patch
 type mergePatchHandler struct {
 	CommitMessage string `json:"commit_message"`
 
 	patchId string
+	env     evergreen.Environment
 }
 
-func makeMergePatch() gimlet.RouteHandler {
-	return &mergePatchHandler{}
+func makeMergePatch(env evergreen.Environment) gimlet.RouteHandler {
+	return &mergePatchHandler{env: env}
 }
 
 func (p *mergePatchHandler) Factory() gimlet.RouteHandler {
-	return &mergePatchHandler{}
+	return &mergePatchHandler{env: p.env}
 }
 
 func (p *mergePatchHandler) Parse(ctx context.Context, r *http.Request) error {
@@ -422,7 +410,7 @@ func (p *mergePatchHandler) Parse(ctx context.Context, r *http.Request) error {
 }
 
 func (p *mergePatchHandler) Run(ctx context.Context) gimlet.Responder {
-	apiPatch, err := data.CreatePatchForMerge(ctx, p.patchId, p.CommitMessage)
+	apiPatch, err := data.CreatePatchForMerge(ctx, p.env.Settings(), p.patchId, p.CommitMessage)
 	if err != nil {
 		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "creating merge patch '%s'", p.patchId))
 	}
@@ -444,14 +432,15 @@ type schedulePatchHandler struct {
 
 	patchId string
 	patch   patch.Patch
+	env     evergreen.Environment
 }
 
-func makeSchedulePatchHandler() gimlet.RouteHandler {
-	return &schedulePatchHandler{}
+func makeSchedulePatchHandler(env evergreen.Environment) gimlet.RouteHandler {
+	return &schedulePatchHandler{env: env}
 }
 
 func (p *schedulePatchHandler) Factory() gimlet.RouteHandler {
-	return &schedulePatchHandler{}
+	return &schedulePatchHandler{env: p.env}
 }
 
 func (p *schedulePatchHandler) Parse(ctx context.Context, r *http.Request) error {
@@ -467,14 +456,13 @@ func (p *schedulePatchHandler) Parse(ctx context.Context, r *http.Request) error
 	if apiPatch == nil {
 		return errors.New("patch not found")
 	}
-	dbPatch, err := apiPatch.ToService()
+	p.patch, err = apiPatch.ToService()
 	if err != nil {
 		return gimlet.ErrorResponse{
 			StatusCode: http.StatusInternalServerError,
 			Message:    errors.Wrap(err, "converting patch to service model").Error(),
 		}
 	}
-	p.patch = dbPatch.(patch.Patch)
 	body := utility.NewRequestReader(r)
 	defer body.Close()
 	tasks := patchTasks{}
@@ -489,18 +477,15 @@ func (p *schedulePatchHandler) Parse(ctx context.Context, r *http.Request) error
 }
 
 func (p *schedulePatchHandler) Run(ctx context.Context) gimlet.Responder {
-	settings, err := evergreen.GetConfig()
-	if err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "getting admin settings"))
-	}
-	token, err := settings.GetGithubOauthToken()
-	if err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "getting GitHub OAuth token"))
-	}
 	dbVersion, _ := dbModel.VersionFindOneId(p.patchId)
 	var project *dbModel.Project
+	var err error
 	if dbVersion == nil {
-		project, _, err = dbModel.GetPatchedProject(ctx, &p.patch, token)
+		githubOauthToken, err := p.env.Settings().GetGithubOauthToken()
+		if err != nil {
+			return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "getting GitHub OAuth token"))
+		}
+		project, _, err = dbModel.GetPatchedProject(ctx, p.env.Settings(), &p.patch, githubOauthToken)
 		if err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "finding project for patch '%s'", p.patchId))
 		}
@@ -539,7 +524,7 @@ func (p *schedulePatchHandler) Run(ctx context.Context) gimlet.Responder {
 		}
 		patchUpdateReq.VariantsTasks = append(patchUpdateReq.VariantsTasks, variantToSchedule)
 	}
-	code, err := units.SchedulePatch(ctx, p.patchId, dbVersion, patchUpdateReq)
+	code, err := units.SchedulePatch(ctx, p.env, p.patchId, dbVersion, patchUpdateReq)
 	if err != nil {
 		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "scheduling patch"))
 	}
@@ -556,8 +541,6 @@ func (p *schedulePatchHandler) Run(ctx context.Context) gimlet.Responder {
 		return gimlet.MakeJSONInternalErrorResponder(errors.Errorf("version for patch '%s' not found", p.patchId))
 	}
 	restVersion := model.APIVersion{}
-	if err = restVersion.BuildFromService(dbVersion); err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "converting version '%s' to API model", dbVersion.Id))
-	}
+	restVersion.BuildFromService(*dbVersion)
 	return gimlet.NewJSONResponse(restVersion)
 }

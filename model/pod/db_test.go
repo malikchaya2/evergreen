@@ -61,6 +61,20 @@ func TestFindByNeedsTermination(t *testing.T) {
 			require.Len(t, pods, 1)
 			assert.Equal(t, decommissionedPod.ID, pods[0].ID)
 		},
+		"SkipsDecommissionedPodWithRunningTask": func(t *testing.T) {
+			decommissionedPodWithTask := Pod{
+				ID:     "pod_id_with_task",
+				Status: StatusDecommissioned,
+				TaskRuntimeInfo: TaskRuntimeInfo{
+					RunningTaskID: "task_id",
+				},
+			}
+			require.NoError(t, decommissionedPodWithTask.Insert())
+
+			pods, err := FindByNeedsTermination()
+			require.NoError(t, err)
+			require.Len(t, pods, 0)
+		},
 		"ReturnsMatchingStaleInitializingPod": func(t *testing.T) {
 			stalePod := Pod{
 				ID:     "pod_id",
@@ -243,6 +257,88 @@ func TestFindOneByExternalID(t *testing.T) {
 	}
 }
 
+func TestFindByFamily(t *testing.T) {
+	for tName, tCase := range map[string]func(t *testing.T){
+		"FindsMatchingSubsetOfPods": func(t *testing.T) {
+			const family = "cool_fam"
+			pods := []Pod{
+				{
+					ID:     "p0",
+					Status: StatusInitializing,
+					Family: family,
+				},
+				{
+					ID:     "p1",
+					Status: StatusRunning,
+					Family: family,
+				},
+				{
+					ID:     "p2",
+					Status: StatusInitializing,
+					Family: family,
+				},
+				{
+					ID:     "p3",
+					Status: StatusInitializing,
+					Family: "not_as_cool_fam",
+				},
+			}
+			for _, p := range pods {
+				require.NoError(t, p.Insert())
+			}
+
+			dbPods, err := FindIntentByFamily(family)
+			require.NoError(t, err)
+			var numMatches int
+			for _, p := range dbPods {
+				switch p.ID {
+				case pods[0].ID, pods[2].ID:
+					numMatches++
+				default:
+					assert.FailNow(t, "found unexpected pod '%s'", p.ID)
+				}
+			}
+			assert.Equal(t, 2, numMatches)
+		},
+		"IgnoresNonIntentPods": func(t *testing.T) {
+			p := Pod{
+				ID:     "pod",
+				Status: StatusStarting,
+				Family: "family",
+			}
+			require.NoError(t, p.Insert())
+			dbPods, err := FindIntentByFamily(p.Family)
+			assert.NoError(t, err)
+			assert.Empty(t, dbPods)
+		},
+		"IgnoresPodsWithoutMatchingFamily": func(t *testing.T) {
+			p := Pod{
+				ID:     "pod",
+				Status: StatusStarting,
+				Family: "family",
+			}
+			require.NoError(t, p.Insert())
+			dbPods, err := FindIntentByFamily("foo")
+			assert.NoError(t, err)
+			assert.Empty(t, dbPods)
+		},
+		"ReturnsNoErrorForNoMatchingPods": func(t *testing.T) {
+			dbPods, err := FindIntentByFamily("nonexistent")
+			assert.NoError(t, err)
+			assert.Empty(t, dbPods)
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			require.NoError(t, db.Clear(Collection))
+			defer func() {
+				assert.NoError(t, db.Clear(Collection))
+			}()
+
+			tCase(t)
+		})
+	}
+}
+
 func TestUpdateOneStatus(t *testing.T) {
 	checkStatusAndTimeInfo := func(t *testing.T, p *Pod, s Status) {
 		assert.Equal(t, s, p.Status)
@@ -255,7 +351,7 @@ func TestUpdateOneStatus(t *testing.T) {
 	}
 
 	checkEventLog := func(t *testing.T, p Pod) {
-		events, err := event.Find(event.AllLogCollection, event.MostRecentPodEvents(p.ID, 10))
+		events, err := event.Find(event.MostRecentPodEvents(p.ID, 10))
 		require.NoError(t, err)
 		require.Len(t, events, 1)
 		assert.Equal(t, p.ID, events[0].ResourceId)
@@ -268,7 +364,7 @@ func TestUpdateOneStatus(t *testing.T) {
 			p.Status = StatusInitializing
 			require.NoError(t, p.Insert())
 
-			require.NoError(t, p.UpdateStatus(p.Status))
+			require.NoError(t, p.UpdateStatus(p.Status, ""))
 			assert.Equal(t, StatusInitializing, p.Status)
 
 			dbPod, err := FindOneByID(p.ID)
@@ -281,7 +377,7 @@ func TestUpdateOneStatus(t *testing.T) {
 			require.NoError(t, p.Insert())
 
 			updated := StatusInitializing
-			require.NoError(t, UpdateOneStatus(p.ID, p.Status, updated, time.Now()))
+			require.NoError(t, UpdateOneStatus(p.ID, p.Status, updated, time.Now(), ""))
 
 			dbPod, err := FindOneByID(p.ID)
 			require.NoError(t, err)
@@ -293,7 +389,7 @@ func TestUpdateOneStatus(t *testing.T) {
 			require.NoError(t, p.Insert())
 
 			updated := StatusStarting
-			require.NoError(t, UpdateOneStatus(p.ID, p.Status, updated, time.Now()))
+			require.NoError(t, UpdateOneStatus(p.ID, p.Status, updated, time.Now(), ""))
 
 			dbPod, err := FindOneByID(p.ID)
 			require.NoError(t, err)
@@ -304,13 +400,13 @@ func TestUpdateOneStatus(t *testing.T) {
 		"FailsWithMismatchedCurrentStatus": func(t *testing.T, p Pod) {
 			require.NoError(t, p.Insert())
 
-			assert.Error(t, UpdateOneStatus(p.ID, StatusInitializing, StatusTerminated, time.Now()))
+			assert.Error(t, UpdateOneStatus(p.ID, StatusInitializing, StatusTerminated, time.Now(), ""))
 		},
 		"SucceedsWithTerminatedStatus": func(t *testing.T, p Pod) {
 			require.NoError(t, p.Insert())
 
 			updated := StatusTerminated
-			require.NoError(t, UpdateOneStatus(p.ID, p.Status, updated, time.Now()))
+			require.NoError(t, UpdateOneStatus(p.ID, p.Status, updated, time.Now(), ""))
 
 			dbPod, err := FindOneByID(p.ID)
 			require.NoError(t, err)
@@ -322,13 +418,13 @@ func TestUpdateOneStatus(t *testing.T) {
 		"FailsWithNonexistentPod": func(t *testing.T, p Pod) {
 			require.NoError(t, p.Insert())
 
-			assert.Error(t, UpdateOneStatus("nonexistent", StatusStarting, StatusRunning, time.Now()))
+			assert.Error(t, UpdateOneStatus("nonexistent", StatusStarting, StatusRunning, time.Now(), ""))
 		},
 	} {
 		t.Run(tName, func(t *testing.T) {
-			require.NoError(t, db.ClearCollections(Collection, event.AllLogCollection))
+			require.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 			defer func() {
-				assert.NoError(t, db.ClearCollections(Collection, event.AllLogCollection))
+				assert.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 			}()
 
 			p := Pod{
@@ -337,6 +433,268 @@ func TestUpdateOneStatus(t *testing.T) {
 			}
 
 			tCase(t, p)
+		})
+	}
+}
+
+func TestFindByLastCommunicatedBefore(t *testing.T) {
+	defer func() {
+		assert.NoError(t, db.ClearCollections(Collection))
+	}()
+	for tName, tCase := range map[string]func(t *testing.T){
+		"FindsStartingStalePod": func(t *testing.T) {
+			p := Pod{
+				ID:     "id",
+				Status: StatusStarting,
+				TimeInfo: TimeInfo{
+					LastCommunicated: time.Now().Add(-time.Hour),
+				},
+			}
+			require.NoError(t, p.Insert())
+
+			found, err := FindByLastCommunicatedBefore(time.Now().Add(-10 * time.Minute))
+			require.NoError(t, err)
+			require.Len(t, found, 1)
+			assert.Equal(t, p.ID, found[0].ID)
+		},
+		"FindsRunningStalePod": func(t *testing.T) {
+			p := Pod{
+				ID:     "id",
+				Status: StatusRunning,
+				TimeInfo: TimeInfo{
+					LastCommunicated: time.Now().Add(-time.Hour),
+				},
+			}
+			require.NoError(t, p.Insert())
+
+			found, err := FindByLastCommunicatedBefore(time.Now().Add(-10 * time.Minute))
+			require.NoError(t, err)
+			require.Len(t, found, 1)
+			assert.Equal(t, p.ID, found[0].ID)
+		},
+		"FindsMultipleStalePods": func(t *testing.T) {
+			pods := []Pod{
+				{
+					ID:     "pod0",
+					Status: StatusDecommissioned,
+					TimeInfo: TimeInfo{
+						LastCommunicated: time.Now().Add(-time.Hour),
+					},
+				},
+				{
+					ID:     "pod1",
+					Status: StatusStarting,
+					TimeInfo: TimeInfo{
+						LastCommunicated: time.Now().Add(-time.Minute),
+					},
+				},
+				{
+					ID:     "pod2",
+					Status: StatusStarting,
+					TimeInfo: TimeInfo{
+						LastCommunicated: time.Now().Add(-time.Hour),
+					},
+				},
+				{
+					ID:     "pod3",
+					Status: StatusRunning,
+					TimeInfo: TimeInfo{
+						LastCommunicated: time.Now().Add(-time.Minute),
+					},
+				},
+				{
+					ID:     "pod4",
+					Status: StatusRunning,
+					TimeInfo: TimeInfo{
+						LastCommunicated: time.Now().Add(-time.Hour),
+					},
+				},
+				{
+					ID:     "pod5",
+					Status: StatusTerminated,
+					TimeInfo: TimeInfo{
+						LastCommunicated: time.Now().Add(-time.Minute),
+					},
+				},
+			}
+			for _, p := range pods {
+				require.NoError(t, p.Insert())
+			}
+
+			found, err := FindByLastCommunicatedBefore(time.Now().Add(-10 * time.Minute))
+			require.NoError(t, err)
+			require.Len(t, found, 2)
+			assert.ElementsMatch(t, []string{pods[2].ID, pods[4].ID}, []string{found[0].ID, found[1].ID})
+		},
+		"IgnoresPodWithRecentCommunication": func(t *testing.T) {
+			p := Pod{
+				ID:     "id",
+				Status: StatusRunning,
+				TimeInfo: TimeInfo{
+					LastCommunicated: time.Now().Add(-time.Minute),
+				},
+			}
+			require.NoError(t, p.Insert())
+
+			found, err := FindByLastCommunicatedBefore(time.Now().Add(-10 * time.Minute))
+			assert.NoError(t, err)
+			assert.Empty(t, found)
+		},
+		"IgnoresAlreadyTerminatedPod": func(t *testing.T) {
+			p := Pod{
+				ID:     "id",
+				Status: StatusTerminated,
+				TimeInfo: TimeInfo{
+					LastCommunicated: time.Now().Add(-time.Hour),
+				},
+			}
+			require.NoError(t, p.Insert())
+
+			found, err := FindByLastCommunicatedBefore(time.Now().Add(-10 * time.Minute))
+			assert.NoError(t, err)
+			assert.Empty(t, found)
+		},
+		"IgnoresIntentPod": func(t *testing.T) {
+			p := Pod{
+				ID:     "id",
+				Status: StatusInitializing,
+				TimeInfo: TimeInfo{
+					LastCommunicated: time.Now().Add(-time.Hour),
+				},
+			}
+			require.NoError(t, p.Insert())
+
+			found, err := FindByLastCommunicatedBefore(time.Now().Add(-10 * time.Minute))
+			assert.NoError(t, err)
+			assert.Empty(t, found)
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			require.NoError(t, db.ClearCollections(Collection))
+
+			tCase(t)
+		})
+	}
+}
+
+func TestGetStatsByStatus(t *testing.T) {
+	defer func() {
+		assert.NoError(t, db.ClearCollections(Collection))
+	}()
+	for tName, tCase := range map[string]func(t *testing.T){
+		"ReturnsEmptyForNoMatchingPods": func(t *testing.T) {
+			stats, err := GetStatsByStatus()
+			assert.NoError(t, err)
+			assert.Empty(t, stats)
+		},
+		"ReturnsStatisticsForMatchingStatusAndType": func(t *testing.T) {
+			for _, p := range []Pod{
+				{
+					ID:     "p0",
+					Status: StatusRunning,
+					Type:   TypeAgent,
+					TaskRuntimeInfo: TaskRuntimeInfo{
+						RunningTaskID:        "t0",
+						RunningTaskExecution: 5,
+					},
+				},
+				{
+					ID:     "p1",
+					Status: StatusTerminated,
+					Type:   TypeAgent,
+				},
+				{
+					ID:     "p2",
+					Status: StatusRunning,
+					Type:   TypeAgent,
+				},
+				{
+					ID:     "p3",
+					Status: StatusRunning,
+				},
+			} {
+				require.NoError(t, p.Insert())
+			}
+
+			stats, err := GetStatsByStatus(StatusRunning)
+			require.NoError(t, err)
+			require.Len(t, stats, 1)
+			assert.Equal(t, StatusRunning, stats[0].Status)
+			assert.Equal(t, 2, stats[0].Count)
+			assert.Equal(t, 1, stats[0].NumRunningTasks)
+		},
+		"ReturnsStatisticsForMultipleMatchingStatuses": func(t *testing.T) {
+			for _, p := range []Pod{
+				{
+					ID:     "p0",
+					Status: StatusRunning,
+					Type:   TypeAgent,
+					TaskRuntimeInfo: TaskRuntimeInfo{
+						RunningTaskID:        "t0",
+						RunningTaskExecution: 2,
+					},
+				},
+				{
+					ID:     "p1",
+					Status: StatusTerminated,
+					Type:   TypeAgent,
+				},
+				{
+					ID:     "p2",
+					Status: StatusInitializing,
+					Type:   TypeAgent,
+				},
+				{
+					ID:     "p3",
+					Status: StatusStarting,
+					Type:   TypeAgent,
+				},
+				{
+					ID:     "p4",
+					Status: StatusInitializing,
+				},
+				{
+					ID:     "p5",
+					Status: StatusDecommissioned,
+					Type:   TypeAgent,
+					TaskRuntimeInfo: TaskRuntimeInfo{
+						RunningTaskID:        "t1",
+						RunningTaskExecution: 0,
+					},
+				},
+				{
+					ID:     "p6",
+					Status: StatusRunning,
+					Type:   TypeAgent,
+				},
+			} {
+				require.NoError(t, p.Insert())
+			}
+
+			stats, err := GetStatsByStatus(StatusInitializing, StatusStarting, StatusRunning)
+			require.NoError(t, err)
+			require.Len(t, stats, 3)
+			for _, s := range stats {
+				switch s.Status {
+				case StatusInitializing:
+					assert.Equal(t, 1, s.Count)
+					assert.Zero(t, s.NumRunningTasks)
+				case StatusStarting:
+					assert.Equal(t, 1, s.Count)
+					assert.Zero(t, s.NumRunningTasks)
+				case StatusRunning:
+					assert.Equal(t, 2, s.Count)
+					assert.Equal(t, 1, s.NumRunningTasks)
+				default:
+					assert.Fail(t, "unexpected pod status '%s'", s.Status)
+				}
+			}
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			require.NoError(t, db.ClearCollections(Collection))
+
+			tCase(t)
 		})
 	}
 }

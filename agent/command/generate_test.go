@@ -3,7 +3,6 @@ package command
 import (
 	"context"
 	"encoding/json"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -19,7 +18,7 @@ import (
 type generateSuite struct {
 	cancel     func()
 	conf       *internal.TaskConfig
-	comm       client.Communicator
+	comm       *client.Mock
 	logger     client.LoggerProducer
 	ctx        context.Context
 	g          *generateTask
@@ -45,7 +44,7 @@ func (s *generateSuite) SetupTest() {
 	s.logger, err = s.comm.GetLoggerProducer(s.ctx, client.TaskData{ID: s.conf.Task.Id, Secret: s.conf.Task.Secret}, nil)
 	s.NoError(err)
 	s.g = &generateTask{}
-	s.tmpDirName, err = ioutil.TempDir("", "generate-suite-")
+	s.tmpDirName = s.T().TempDir()
 	s.conf.WorkDir = s.tmpDirName
 	s.Require().NoError(err)
 	s.json = `
@@ -73,7 +72,6 @@ func (s *generateSuite) SetupTest() {
 
 func (s *generateSuite) TearDownTest() {
 	s.cancel()
-	s.Require().NoError(os.RemoveAll(s.tmpDirName))
 }
 
 func (s *generateSuite) TestParseParamsWithNoFiles() {
@@ -92,8 +90,25 @@ func (s *generateSuite) TestExecuteFileDoesNotExist() {
 	s.Error(c.Execute(s.ctx, s.comm, s.logger, s.conf))
 }
 
+func (s *generateSuite) TestExecuteFailsWithGeneratePollError() {
+	f, err := os.CreateTemp(s.tmpDirName, "")
+	s.Require().NoError(err)
+	tmpFile := f.Name()
+	tmpFileBase := filepath.Base(tmpFile)
+	defer os.Remove(tmpFile)
+
+	n, err := f.WriteString(s.json)
+	s.NoError(err)
+	s.Equal(len(s.json), n)
+	s.NoError(f.Close())
+
+	c := &generateTask{Files: []string{tmpFileBase}}
+	s.comm.GenerateTasksShouldFail = true
+	s.Contains(c.Execute(s.ctx, s.comm, s.logger, s.conf).Error(), "polling generate tasks")
+}
+
 func (s *generateSuite) TestExecuteSuccess() {
-	f, err := ioutil.TempFile(s.tmpDirName, "")
+	f, err := os.CreateTemp(s.tmpDirName, "")
 	s.Require().NoError(err)
 	tmpFile := f.Name()
 	tmpFileBase := filepath.Base(tmpFile)
@@ -117,7 +132,7 @@ func (s *generateSuite) TestOptional() {
 }
 
 func (s *generateSuite) TestExecuteSuccessWithValidGlobbing() {
-	f, err := ioutil.TempFile(s.tmpDirName, "")
+	f, err := os.CreateTemp(s.tmpDirName, "")
 	s.Require().NoError(err)
 	tmpFile := f.Name()
 	defer os.Remove(tmpFile)
@@ -145,7 +160,7 @@ func (s *generateSuite) TestErrorWithInvalidExpansions() {
 }
 
 func (s *generateSuite) TestNoErrorWithValidExpansions() {
-	f, err := ioutil.TempFile(s.tmpDirName, "")
+	f, err := os.CreateTemp(s.tmpDirName, "")
 	s.Require().NoError(err)
 	tmpFile := f.Name()
 	tmpFileBase := filepath.Base(tmpFile)

@@ -3,8 +3,7 @@ mciModule.controller(
   function ($scope, $window, $http, $location, $mdDialog, timeUtil) {
     $scope.availableTriggers = $window.availableTriggers;
     $scope.userId = $window.user.Id;
-    $scope.create = $window.canCreate;
-    $scope.validDefaultLoggers = $window.validDefaultLoggers;
+    $scope.slackAppName = $window.slackAppName;
 
     $scope.projectVars = {};
     $scope.patchVariants = [];
@@ -55,121 +54,121 @@ mciModule.controller(
       default: "gitter_request",
     };
     $scope.triggers = [{
-        trigger: "outcome",
-        resource_type: "VERSION",
-        label: "any version finishes",
-        extraFields: [requesterSubscriberConfig],
+      trigger: "outcome",
+      resource_type: "VERSION",
+      label: "any version finishes",
+      extraFields: [requesterSubscriberConfig],
+    },
+    {
+      trigger: "failure",
+      resource_type: "VERSION",
+      label: "any version fails",
+      extraFields: [requesterSubscriberConfig],
+    },
+    {
+      trigger: "outcome",
+      resource_type: "BUILD",
+      label: "any build finishes",
+      regex_selectors: buildRegexSelectors(),
+      extraFields: [requesterSubscriberConfig],
+    },
+    {
+      trigger: "failure",
+      resource_type: "BUILD",
+      label: "any build fails",
+      regex_selectors: buildRegexSelectors(),
+      extraFields: [requesterSubscriberConfig],
+    },
+    {
+      trigger: "outcome",
+      resource_type: "TASK",
+      label: "any task finishes",
+      regex_selectors: taskRegexSelectors(),
+      extraFields: [requesterSubscriberConfig],
+    },
+    {
+      trigger: "failure",
+      resource_type: "TASK",
+      label: "any task fails",
+      regex_selectors: taskRegexSelectors(),
+      extraFields: [failureTypeSubscriberConfig, requesterSubscriberConfig],
+    },
+    {
+      trigger: "first-failure-in-version",
+      resource_type: "TASK",
+      label: "the first failure in a version occurs",
+      regex_selectors: taskRegexSelectors(),
+      extraFields: [requesterSubscriberConfig],
+    },
+    {
+      trigger: "first-failure-in-build",
+      resource_type: "TASK",
+      label: "the first failure in each build occurs",
+      regex_selectors: taskRegexSelectors(),
+      extraFields: [requesterSubscriberConfig],
+    },
+    {
+      trigger: "first-failure-in-version-with-name",
+      resource_type: "TASK",
+      label: "the first failure in each version for each task name occurs",
+      regex_selectors: taskRegexSelectors(),
+      extraFields: [requesterSubscriberConfig],
+    },
+    {
+      trigger: "regression",
+      resource_type: "TASK",
+      label: "a previously passing task fails",
+      regex_selectors: taskRegexSelectors(),
+      extraFields: [{
+        text: "Re-notify after how many hours",
+        key: "renotify-interval",
+        validator: validateDuration,
+        default: "48",
+      },
+        failureTypeSubscriberConfig,
+      ],
+    },
+    {
+      trigger: "regression-by-test",
+      resource_type: "TASK",
+      label: "a previously passing test in a task fails",
+      regex_selectors: taskRegexSelectors(),
+      extraFields: [{
+        text: "Test names matching regex",
+        key: "test-regex",
+        validator: null,
       },
       {
-        trigger: "failure",
-        resource_type: "VERSION",
-        label: "any version fails",
-        extraFields: [requesterSubscriberConfig],
+        text: "Re-notify after how many hours",
+        key: "renotify-interval",
+        validator: validateDuration,
+        default: "48",
       },
-      {
-        trigger: "outcome",
-        resource_type: "BUILD",
-        label: "any build finishes",
-        regex_selectors: buildRegexSelectors(),
-        extraFields: [requesterSubscriberConfig],
-      },
-      {
-        trigger: "failure",
-        resource_type: "BUILD",
-        label: "any build fails",
-        regex_selectors: buildRegexSelectors(),
-        extraFields: [requesterSubscriberConfig],
-      },
-      {
-        trigger: "outcome",
-        resource_type: "TASK",
-        label: "any task finishes",
-        regex_selectors: taskRegexSelectors(),
-        extraFields: [requesterSubscriberConfig],
-      },
-      {
-        trigger: "failure",
-        resource_type: "TASK",
-        label: "any task fails",
-        regex_selectors: taskRegexSelectors(),
-        extraFields: [failureTypeSubscriberConfig, requesterSubscriberConfig],
-      },
-      {
-        trigger: "first-failure-in-version",
-        resource_type: "TASK",
-        label: "the first failure in a version occurs",
-        regex_selectors: taskRegexSelectors(),
-        extraFields: [requesterSubscriberConfig],
-      },
-      {
-        trigger: "first-failure-in-build",
-        resource_type: "TASK",
-        label: "the first failure in each build occurs",
-        regex_selectors: taskRegexSelectors(),
-        extraFields: [requesterSubscriberConfig],
-      },
-      {
-        trigger: "first-failure-in-version-with-name",
-        resource_type: "TASK",
-        label: "the first failure in each version for each task name occurs",
-        regex_selectors: taskRegexSelectors(),
-        extraFields: [requesterSubscriberConfig],
-      },
-      {
-        trigger: "regression",
-        resource_type: "TASK",
-        label: "a previously passing task fails",
-        regex_selectors: taskRegexSelectors(),
-        extraFields: [{
-            text: "Re-notify after how many hours",
-            key: "renotify-interval",
-            validator: validateDuration,
-            default: "48",
-          },
-          failureTypeSubscriberConfig,
-        ],
-      },
-      {
-        trigger: "regression-by-test",
-        resource_type: "TASK",
-        label: "a previously passing test in a task fails",
-        regex_selectors: taskRegexSelectors(),
-        extraFields: [{
-            text: "Test names matching regex",
-            key: "test-regex",
-            validator: null,
-          },
-          {
-            text: "Re-notify after how many hours",
-            key: "renotify-interval",
-            validator: validateDuration,
-            default: "48",
-          },
-          failureTypeSubscriberConfig,
-        ],
-      },
-      {
-        trigger: "exceeds-duration",
-        resource_type: "TASK",
-        label: "the runtime for a task exceeds some duration",
-        regex_selectors: taskRegexSelectors(),
-        extraFields: [{
-          text: "Task duration (seconds)",
-          key: "task-duration-secs",
-          validator: validateDuration,
-        }, ],
-      },
-      {
-        trigger: "runtime-change",
-        resource_type: "TASK",
-        label: "the runtime for a successful task changes by some percentage",
-        regex_selectors: taskRegexSelectors(),
-        extraFields: [{
-          text: "Percent change",
-          key: "task-percent-change",
-          validator: validatePercentage,
-        }, ],
-      },
+        failureTypeSubscriberConfig,
+      ],
+    },
+    {
+      trigger: "exceeds-duration",
+      resource_type: "TASK",
+      label: "the runtime for a task exceeds some duration",
+      regex_selectors: taskRegexSelectors(),
+      extraFields: [{
+        text: "Task duration (seconds)",
+        key: "task-duration-secs",
+        validator: validateDuration,
+      },],
+    },
+    {
+      trigger: "runtime-change",
+      resource_type: "TASK",
+      label: "the runtime for a successful task changes by some percentage",
+      regex_selectors: taskRegexSelectors(),
+      extraFields: [{
+        text: "Percent change",
+        key: "task-percent-change",
+        validator: validatePercentage,
+      },],
+    },
     ];
 
     // refreshTrackedProjects will populate the list of projects that should be displayed
@@ -201,28 +200,28 @@ mciModule.controller(
 
     $scope.shouldDisableWebhook = function () {
       return $scope.settingsFormData.build_baron_settings
-          && (($scope.settingsFormData.build_baron_settings.ticket_search_projects !== null
-              && $scope.settingsFormData.build_baron_settings.ticket_search_projects !== undefined
-              && $scope.settingsFormData.build_baron_settings.ticket_search_projects.length > 0)
+        && (($scope.settingsFormData.build_baron_settings.ticket_search_projects !== null
+          && $scope.settingsFormData.build_baron_settings.ticket_search_projects !== undefined
+          && $scope.settingsFormData.build_baron_settings.ticket_search_projects.length > 0)
           || $scope.settingsFormData.build_baron_settings.ticket_create_project
           || $scope.ticket_search_project);
     };
 
     $scope.shouldDisableBB = function () {
       return $scope.settingsFormData.task_annotation_settings && ($scope.settingsFormData.task_annotation_settings.web_hook.endpoint
-          || $scope.settingsFormData.task_annotation_settings.web_hook.secret);
+        || $scope.settingsFormData.task_annotation_settings.web_hook.secret);
     };
 
     $scope.bbConfigIsValid = function () {
-      if ($scope.settingsFormData.build_baron_settings.ticket_create_project){
-          return $scope.settingsFormData.build_baron_settings.ticket_search_projects !== null
-              && $scope.settingsFormData.build_baron_settings.ticket_search_projects !== undefined
-              && $scope.settingsFormData.build_baron_settings.ticket_search_projects.length > 0
+      if ($scope.settingsFormData.build_baron_settings.ticket_create_project) {
+        return $scope.settingsFormData.build_baron_settings.ticket_search_projects !== null
+          && $scope.settingsFormData.build_baron_settings.ticket_search_projects !== undefined
+          && $scope.settingsFormData.build_baron_settings.ticket_search_projects.length > 0
       }
       else {
-          return $scope.settingsFormData.build_baron_settings.ticket_search_projects === null
-              || $scope.settingsFormData.build_baron_settings.ticket_search_projects === undefined
-              || $scope.settingsFormData.build_baron_settings.ticket_search_projects.length <= 0
+        return $scope.settingsFormData.build_baron_settings.ticket_search_projects === null
+          || $scope.settingsFormData.build_baron_settings.ticket_search_projects === undefined
+          || $scope.settingsFormData.build_baron_settings.ticket_search_projects.length <= 0
       }
     };
 
@@ -253,10 +252,10 @@ mciModule.controller(
 
     // addJiraField adds a jira field to the task annotation settings
     $scope.addJiraField = function () {
-      if(!$scope.settingsFormData.task_annotation_settings.jira_custom_fields){
-          $scope.settingsFormData.task_annotation_settings.jira_custom_fields = []
+      if (!$scope.settingsFormData.task_annotation_settings.jira_custom_fields) {
+        $scope.settingsFormData.task_annotation_settings.jira_custom_fields = []
       }
-      $scope.settingsFormData.task_annotation_settings.jira_custom_fields.push({"field" : $scope.jira_field, "display_text" : $scope.jira_display_text});
+      $scope.settingsFormData.task_annotation_settings.jira_custom_fields.push({ "field": $scope.jira_field, "display_text": $scope.jira_display_text });
       $scope.jira_display_text = "";
       $scope.jira_field = "";
     };
@@ -269,8 +268,8 @@ mciModule.controller(
 
     // addTicketSearchProject adds an ticket search project name to the build baron settings
     $scope.addTicketSearchProject = function () {
-      if(!$scope.settingsFormData.build_baron_settings.ticket_search_projects){
-          $scope.settingsFormData.build_baron_settings.ticket_search_projects = []
+      if (!$scope.settingsFormData.build_baron_settings.ticket_search_projects) {
+        $scope.settingsFormData.build_baron_settings.ticket_search_projects = []
       }
       $scope.settingsFormData.build_baron_settings.ticket_search_projects.push($scope.ticket_search_project);
       $scope.ticket_search_project = "";
@@ -308,23 +307,23 @@ mciModule.controller(
       $scope.isDirty = true;
     };
 
-    $scope.isValidGitTagUser = function(user) {
-        if ($scope.settingsFormData.git_tag_authorized_users === undefined) {
-            return true;
-        }
-        return !$scope.settingsFormData.git_tag_authorized_users.includes(user);
+    $scope.isValidGitTagUser = function (user) {
+      if ($scope.settingsFormData.git_tag_authorized_users === undefined) {
+        return true;
+      }
+      return !$scope.settingsFormData.git_tag_authorized_users.includes(user);
     }
-    $scope.isValidGitTagTeam = function(team) {
-        if ($scope.settingsFormData.git_tag_authorized_teams === undefined) {
-            return true;
-        }
-        return !$scope.settingsFormData.git_tag_authorized_teams.includes(team);
+    $scope.isValidGitTagTeam = function (team) {
+      if ($scope.settingsFormData.git_tag_authorized_teams === undefined) {
+        return true;
+      }
+      return !$scope.settingsFormData.git_tag_authorized_teams.includes(team);
     }
-    $scope.isValidAdmin = function(admin) {
-        if ($scope.settingsFormData.admins == undefined) {
-            return true;
-        }
-        return !$scope.settingsFormData.admins.includes(admin);
+    $scope.isValidAdmin = function (admin) {
+      if ($scope.settingsFormData.admins == undefined) {
+        return true;
+      }
+      return !$scope.settingsFormData.admins.includes(admin);
     }
 
     $scope.addGitTagTeam = function () {
@@ -339,17 +338,6 @@ mciModule.controller(
       $scope.isDirty = true;
     };
 
-    // addCacheIgnoreFile adds a file pattern to the settingsFormData's list of ignored cache files
-    $scope.addCacheIgnoreFile = function () {
-      if (!$scope.settingsFormData.files_ignored_from_cache) {
-        $scope.settingsFormData.files_ignored_from_cache = [];
-      }
-      $scope.settingsFormData.files_ignored_from_cache.push(
-        $scope.cache_ignore_file_pattern
-      );
-      $scope.cache_ignore_file_pattern = "";
-    };
-
     $scope.addGithubTrigger = function () {
       $scope.settingsFormData.github_trigger_aliases.push(
         $scope.added_trigger_aliases
@@ -360,82 +348,6 @@ mciModule.controller(
     $scope.removeGithubTrigger = function (index) {
       $scope.settingsFormData.github_trigger_aliases.splice(index, 1);
       $scope.isDirty = true;
-    };
-
-    // removeCacheIgnoreFile removes the file pattern located at index
-    $scope.removeCacheIgnoreFile = function (index) {
-      $scope.settingsFormData.files_ignored_from_cache.splice(index, 1);
-      $scope.isDirty = true;
-    };
-
-    $scope.addProject = function () {
-      $scope.modalOpen = false;
-      $("#admin-modal").modal("hide");
-
-      if ($scope.findProject($scope.newProject.identifier)) {
-        console.log("project identifier already exists");
-        $scope.newProjectMessage = "Project with this ID or identifier already exists.";
-        $scope.newProject = {};
-        return;
-      }
-
-      // if copyProject is set, copy the current project
-      if ($scope.newProject.copyProject) {
-        $http
-          .put("/project/" + $scope.newProject.identifier, $scope.newProject)
-          .then(
-            function (resp) {
-              var data_put = resp.data;
-              item = Object.assign({}, $scope.settingsFormData);
-              item.identifier = $scope.newProject.identifier;
-              item.pr_testing_enabled = false;
-              item.manual_pr_testing_enabled = false;
-              item.commit_queue.enabled = false;
-              item.commit_queue.require_signed = false;
-              item.git_tag_versions_enabled = false;
-              item.github_checks_enabled = false;
-              item.enabled = false;
-              item.subscriptions = _.filter($scope.subscriptions, function (d) {
-                return !d.changed;
-              });
-              // project variables will be copied in the route, so that we get private variables correctly
-              item.project_vars = null;
-              item.private_vars = null;
-              $http.post("/project/" + $scope.newProject.identifier, item).then(
-                function (resp) {
-                  $scope.refreshTrackedProjects(data_put.AllProjects);
-                  $scope.loadProject(data_put.ProjectId);
-                  $scope.newProject = {};
-                },
-                function (resp) {
-                  console.log(
-                    "error saving data for new project: " + resp.status
-                  );
-                }
-              );
-            },
-            function (resp) {
-              console.log("error creating new project: " + resp.status);
-            }
-          );
-
-        // otherwise, create a blank project
-      } else {
-        $http
-          .put("/project/" + $scope.newProject.identifier, $scope.newProject)
-          .then(
-            function (resp) {
-              var data = resp.data;
-              $scope.refreshTrackedProjects(data.AllProjects);
-              $scope.loadProject(data.ProjectId);
-              $scope.newProject = {};
-              $scope.settingsFormData.tracks_push_events = true;
-            },
-            function (resp) {
-              console.log("error creating project: " + resp.status);
-            }
-          );
-      }
     };
 
     $scope.loadProject = function (projectId) {
@@ -480,7 +392,6 @@ mciModule.controller(
             private_vars: $scope.privateVars,
             admin_only_vars: $scope.adminOnlyVars,
             display_name: $scope.projectRef.display_name,
-            default_logger: $scope.projectRef.default_logger,
             remote_path: $scope.projectRef.remote_path,
             spawn_host_script_path: $scope.projectRef.spawn_host_script_path,
             batch_time: $scope.projectRef.batch_time,
@@ -490,7 +401,6 @@ mciModule.controller(
             owner_name: $scope.projectRef.owner_name,
             repo_name: $scope.projectRef.repo_name,
             enabled: $scope.projectRef.enabled,
-            private: $scope.projectRef.private,
             restricted: $scope.projectRef.restricted,
             patching_disabled: $scope.projectRef.patching_disabled,
             dispatching_disabled: $scope.projectRef.dispatching_disabled,
@@ -511,15 +421,11 @@ mciModule.controller(
             workstation_config: data.ProjectRef.workstation_config || {},
             notify_on_failure: $scope.projectRef.notify_on_failure,
             force_repotracker_run: false,
-            deactivate_stepback_tasks: false,
             delete_aliases: [],
             delete_subscriptions: [],
-            files_ignored_from_cache: data.ProjectRef.files_ignored_from_cache,
             github_trigger_aliases: data.ProjectRef.github_trigger_aliases || [],
             disabled_stats_cache: data.ProjectRef.disabled_stats_cache,
             periodic_builds: data.ProjectRef.periodic_builds,
-            container_sizes: data.ProjectRef.container_sizes || {},
-            container_credentials: data.ProjectRef.container_credentials || {},
             use_repo_settings: !!$scope.projectRef.repo_ref_id,
             build_baron_settings: data.ProjectRef.build_baron_settings || {},
             task_annotation_settings: data.ProjectRef.task_annotation_settings || {},
@@ -651,14 +557,6 @@ mciModule.controller(
         $scope.addPatchAlias();
       }
 
-      if ($scope.container_size) {
-        $scope.addContainerSize();
-      }
-
-      if ($scope.container_credential) {
-        $scope.addContainerCredential();
-      }
-
       $scope.settingsFormData.subscriptions = _.filter(
         $scope.subscriptions,
         function (d) {
@@ -691,7 +589,6 @@ mciModule.controller(
             $scope.refreshTrackedProjects(data.AllProjects);
             $scope.settingsForm.$setPristine();
             $scope.settingsFormData.force_repotracker_run = false;
-            $scope.settingsFormData.deactivate_stepback_tasks = false;
             $scope.loadProject($scope.settingsFormData.id);
             $scope.isDirty = false;
           },
@@ -801,36 +698,6 @@ mciModule.controller(
       $scope.invalidPatchAliasMessage = "";
     };
 
-    $scope.addContainerSize = function () {
-      if (!$scope.validContainerSize($scope.container_size)) {
-        $scope.invalidContainerSizeMessage =
-          "A valid container size must have a name, memory and CPU properties.";
-          return;
-      }
-      var item = Object.assign({}, $scope.container_size);
-      $scope.settingsFormData.container_sizes[item.name] = {
-          "memory_mb": item.memory_mb,
-          "cpu": item.cpu,
-      }
-      delete $scope.container_size;
-      $scope.invalidContainerSizeMessage = "";
-    };
-
-    $scope.addContainerCredential = function () {
-      if (!$scope.validContainerCredential($scope.container_credential)) {
-          $scope.invalidContainerCredentialMessage =
-              "A valid container credential must have a valid username and password.";
-          return;
-      }
-      var item = Object.assign({}, $scope.container_credential);
-      $scope.settingsFormData.container_credentials[item.name] = {
-          "username": item.username,
-          "password": item.password,
-      }
-      delete $scope.container_credential;
-      $scope.invalidContainerCredentialMessage = "";
-    };
-
     $scope.addWorkstationCommand = function () {
       if (!$scope.settingsFormData.workstation_config) {
         $scope.settingsFormData.workstation_config = {};
@@ -901,20 +768,6 @@ mciModule.controller(
       $scope.isDirty = true;
     };
 
-      $scope.removeContainerSize = function (name) {
-          if ($scope.settingsFormData.container_sizes[name]) {
-              delete $scope.settingsFormData.container_sizes[name]
-          }
-          $scope.isDirty = true;
-      };
-
-      $scope.removeContainerCredential = function (name) {
-          if ($scope.settingsFormData.container_credentials[name]) {
-              delete $scope.settingsFormData.container_credentials[name]
-          }
-          $scope.isDirty = true;
-      };
-
     $scope.removeProjectTrigger = function (i) {
       if ($scope.project_triggers[i]) {
         $scope.project_triggers.splice(i, 1);
@@ -956,7 +809,7 @@ mciModule.controller(
       if (!$scope.periodic_build) {
         return "";
       }
-      if ($scope.periodic_build.interval_hours <= 0) {
+      if ($scope.periodic_build.interval_hours < 0) {
         return "Interval must be a positive integer";
       }
       if ($scope.periodic_build.config_file === "") {
@@ -1139,16 +992,6 @@ mciModule.controller(
     $scope.validPatchAlias = function (alias) {
       // Same as GitHub alias, but with alias required
       return $scope.validPatchDefinition(alias) && alias.alias;
-    };
-
-    $scope.validContainerSize = function (container_size) {
-      return container_size && container_size.cpu && container_size.memory_mb
-          && container_size.cpu > 0 && container_size.memory_mb > 0;
-    };
-
-    $scope.validContainerCredential = function (container_credential) {
-      return container_credential && container_credential.username && container_credential.password
-        && container_credential.username !== "" && container_credential.password !== "";
     };
 
     $scope.validWorkstationCommand = function (obj) {
@@ -1511,35 +1354,35 @@ mciModule.directive("adminNewProject", function () {
     restrict: "E",
     template: '' +
       '<div class="row">' +
-        '<div class="col-lg-12">' +
-         "Enter project identifier " +
-          '<input type="text" id="project-name" placeholder="project name" ng-model="newProject.identifier">' +
-        "</div>" +
+      '<div class="col-lg-12">' +
+      "Enter project identifier " +
+      '<input type="text" id="project-name" placeholder="project name" ng-model="newProject.identifier">' +
+      "</div>" +
       '</div>' +
       '<div class="row">' +
-        '<div class="col-lg-12">' +
-          "Optionally enter immutable project ID " +
-          '<div class="muted small">' +
-            "(Used by Evergreen internally and defaults to a random hash; should only be user-specified with good reason, such as if the project will be using performance tooling. Cannot be changed!)" +
-          '</div>' +
-          '<div class="warning-text" ng-show="newProject.copyProject && projectRef.perf_enabled">' +
-               "When copying a project using performance, the immutable project ID should be set to match the identifier." +
-          '</div>' +
-          '<input type="text" id="project-name" placeholder="immutable project ID" ng-model="newProject.id">' +
-        '</div>' +
+      '<div class="col-lg-12">' +
+      "Optionally enter immutable project ID " +
+      '<div class="muted small">' +
+      "(Used by Evergreen internally and defaults to a random hash; should only be user-specified with good reason, such as if the project will be using performance tooling. Cannot be changed!)" +
+      '</div>' +
+      '<div class="warning-text" ng-show="newProject.copyProject && projectRef.perf_enabled">' +
+      "When copying a project using performance, the immutable project ID should be set to match the identifier." +
+      '</div>' +
+      '<input type="text" id="project-name" placeholder="immutable project ID" ng-model="newProject.id">' +
+      '</div>' +
       '</div>' +
       '<div class="row">' +
-        '<div class="col-lg-12">' +
-        '<form style="display: inline">' +
-          '<input type="checkbox" id="copy-project" ng-model="newProject.copyProject">' +
-          " Duplicate current project " +
-        "</form>" +
-        '</div>' +
+      '<div class="col-lg-12">' +
+      '<form style="display: inline">' +
+      '<input type="checkbox" id="copy-project" ng-model="newProject.copyProject">' +
+      " Duplicate current project " +
+      "</form>" +
       '</div>' +
-      '<div class="row">'  +
-        '<div class="col-lg-12">' +
-          '<button type="submit" class="btn btn-primary" style="float: right; margin-left: 10px;" ng-disabled="!newProject.identifier" ng-click="addProject()">Create Project</button>' +
-        '</div>' +
+      '</div>' +
+      '<div class="row">' +
+      '<div class="col-lg-12">' +
+      '<button type="submit" class="btn btn-primary" style="float: right; margin-left: 10px;" ng-disabled="!newProject.identifier" ng-click="addProject()">Create Project</button>' +
+      '</div>' +
       '</div>',
   };
 });

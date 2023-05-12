@@ -56,7 +56,7 @@ func (j *spawnhostExpirationWarningsJob) Run(ctx context.Context) {
 
 	flags, err := evergreen.GetServiceFlags()
 	if err != nil {
-		j.AddError(errors.Wrap(err, "error retrieving admin settings"))
+		j.AddError(errors.Wrap(err, "getting service flags"))
 		return
 	}
 	if flags.AlertsDisabled {
@@ -81,7 +81,7 @@ func (j *spawnhostExpirationWarningsJob) Run(ctx context.Context) {
 
 	for _, h := range expiringSoonHosts {
 		if ctx.Err() != nil {
-			j.AddError(errors.New("spawnhost expiration warning run canceled"))
+			j.AddError(errors.Wrap(ctx.Err(), "spawnhost expiration warning run canceled"))
 			return
 		}
 		if err = runSpawnWarningTriggers(&h); err != nil {
@@ -97,7 +97,7 @@ func (j *spawnhostExpirationWarningsJob) Run(ctx context.Context) {
 }
 
 func shouldNotifyForSpawnhostExpiration(h *host.Host, numHours int) (bool, error) {
-	if h == nil || h.ExpirationTime.IsZero() || h.ExpirationTime.Sub(time.Now()) > (time.Duration(numHours)*time.Hour) { // nolint
+	if h == nil || h.ExpirationTime.IsZero() || h.ExpirationTime.Sub(time.Now()) > (time.Duration(numHours)*time.Hour) { //nolint:all
 		return false, nil
 	}
 	rec, err := alertrecord.FindBySpawnHostExpirationWithHours(h.Id, numHours)

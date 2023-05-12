@@ -14,6 +14,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/utility"
+	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
@@ -21,6 +22,7 @@ import (
 func init() {
 	registry.registerEventHandler(event.ResourceTypeVersion, event.VersionStateChange, makeVersionTriggers)
 	registry.registerEventHandler(event.ResourceTypeVersion, event.VersionGithubCheckFinished, makeVersionTriggers)
+	registry.registerEventHandler(event.ResourceTypeVersion, event.VersionChildrenCompletion, makeVersionTriggers)
 }
 
 type versionTriggers struct {
@@ -35,6 +37,9 @@ type versionTriggers struct {
 func makeVersionTriggers() eventHandler {
 	t := &versionTriggers{}
 	t.base.triggers = map[string]trigger{
+		event.TriggerFamilyOutcome:          t.versionFamilyOutcome,
+		event.TriggerFamilySuccess:          t.versionFamilySuccess,
+		event.TriggerFamilyFailure:          t.versionFamilyFailure,
 		event.TriggerOutcome:                t.versionOutcome,
 		event.TriggerGithubCheckOutcome:     t.versionGithubCheckOutcome,
 		event.TriggerFailure:                t.versionFailure,
@@ -49,21 +54,21 @@ func makeVersionTriggers() eventHandler {
 func (t *versionTriggers) Fetch(e *event.EventLogEntry) error {
 	var err error
 	if err = t.uiConfig.Get(evergreen.GetEnvironment()); err != nil {
-		return errors.Wrap(err, "Failed to fetch ui config")
+		return errors.Wrap(err, "fetching UI config")
 	}
 
 	t.version, err = model.VersionFindOne(model.VersionById(e.ResourceId))
 	if err != nil {
-		return errors.Wrap(err, "failed to fetch version")
+		return errors.Wrapf(err, "finding version '%s'", e.ResourceId)
 	}
 	if t.version == nil {
-		return errors.New("couldn't find version")
+		return errors.Errorf("version '%s' not found", e.ResourceId)
 	}
 
 	var ok bool
 	t.data, ok = e.Data.(*event.VersionEventData)
 	if !ok {
-		return errors.Errorf("version '%s' contains unexpected data with type '%T'", e.ResourceId, e.Data)
+		return errors.Errorf("version '%s' contains unexpected data with type %T", e.ResourceId, e.Data)
 	}
 	t.event = e
 
@@ -82,20 +87,45 @@ func (t *versionTriggers) Attributes() event.Attributes {
 		attributes.Requester = append(attributes.Requester, evergreen.RepotrackerVersionRequester)
 	}
 	if t.version.AuthorID != "" {
-		attributes.Owner = append(attributes.Owner, t.version.AuthorID)
+		owner := t.version.AuthorID
+
+		// If the author is not explicitly set, it will be parent-patch on patches containing children
+		if t.event.EventType == event.VersionChildrenCompletion {
+			eventData := t.event.Data.(*event.VersionEventData)
+			owner = eventData.Author
+		}
+
+		attributes.Owner = append(attributes.Owner, owner)
 	}
 	return attributes
 }
 
 func (t *versionTriggers) makeData(sub *event.Subscription, pastTenseOverride string) (*commonTemplateData, error) {
 	api := restModel.APIVersion{}
-	if err := api.BuildFromService(t.version); err != nil {
-		return nil, errors.Wrap(err, "error building json model")
-	}
+	api.BuildFromService(*t.version)
 	projectName := t.version.Identifier
 	if api.ProjectIdentifier != nil {
 		projectName = utility.FromStringPtr(api.ProjectIdentifier)
 	}
+
+	status := t.data.Status
+	if evergreen.IsPatchRequester(t.version.Requester) {
+		var err error
+		// Look at collective status because we don't know whether the last patch to finish in the version was a child or a parent.
+		status, err = patch.CollectiveStatus(t.version.Id)
+		if err != nil {
+			return nil, errors.Wrap(err, "getting collective status for patch")
+		}
+		grip.NoticeWhen(status != t.data.Status, message.Fields{
+			"message":                 "patch's current collective status does not match the version event data's status",
+			"patch_collective_status": status,
+			"version_event_status":    t.data.Status,
+			"patch_and_version_id":    t.version.Id,
+			"version_status":          t.version.Status,
+			"subscription":            sub.ID,
+		})
+	}
+
 	data := commonTemplateData{
 		ID:             t.version.Id,
 		EventID:        t.event.ID,
@@ -109,7 +139,7 @@ func (t *versionTriggers) makeData(sub *event.Subscription, pastTenseOverride st
 			hasPatch:  evergreen.IsPatchRequester(t.version.Requester),
 			isChild:   false,
 		}),
-		PastTenseStatus:   t.data.Status,
+		PastTenseStatus:   status,
 		apiModel:          &api,
 		githubState:       message.GithubStatePending,
 		githubContext:     "evergreen",
@@ -120,7 +150,7 @@ func (t *versionTriggers) makeData(sub *event.Subscription, pastTenseOverride st
 	}
 	finishTime := t.version.FinishTime
 	if utility.IsZeroTime(finishTime) {
-		finishTime = time.Now() // this might be true for github check statuses
+		finishTime = time.Now() // this might be true for GitHub check statuses
 	}
 	slackColor := evergreenFailColor
 	if data.PastTenseStatus == evergreen.VersionSucceeded {
@@ -144,6 +174,14 @@ func (t *versionTriggers) makeData(sub *event.Subscription, pastTenseOverride st
 	if pastTenseOverride != "" {
 		data.PastTenseStatus = pastTenseOverride
 	}
+	grip.DebugWhen(slackColor == evergreenFailColor && data.PastTenseStatus == "succeeded", message.Fields{
+		"ticket":              "EVG-19227",
+		"message":             "encountered failing slack color with successful status",
+		"past_tense_override": pastTenseOverride,
+		"version":             t.version.Id,
+		"subscription_id":     sub.ID,
+		"event_id":            t.event.ID,
+	})
 
 	return &data, nil
 }
@@ -151,28 +189,20 @@ func (t *versionTriggers) makeData(sub *event.Subscription, pastTenseOverride st
 func (t *versionTriggers) generate(sub *event.Subscription, pastTenseOverride string) (*notification.Notification, error) {
 	data, err := t.makeData(sub, pastTenseOverride)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to collect version data")
+		return nil, errors.Wrap(err, "collecting version data")
 	}
 	payload, err := makeCommonPayload(sub, t.Attributes(), data)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to build notification")
+		return nil, errors.Wrap(err, "building notification")
 	}
 
 	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
 }
-
 func (t *versionTriggers) versionOutcome(sub *event.Subscription) (*notification.Notification, error) {
-	if t.data.Status != evergreen.VersionSucceeded && t.data.Status != evergreen.VersionFailed {
+	if (t.data.Status != evergreen.VersionSucceeded && t.data.Status != evergreen.VersionFailed) || t.event.EventType == event.VersionChildrenCompletion {
 		return nil, nil
 	}
 
-	isReady, err := t.waitOnChildrenOrSiblings()
-	if err != nil {
-		return nil, err
-	}
-	if !isReady {
-		return nil, nil
-	}
 	return t.generate(sub, "")
 }
 
@@ -185,12 +215,72 @@ func (t *versionTriggers) versionGithubCheckOutcome(sub *event.Subscription) (*n
 }
 
 func (t *versionTriggers) versionFailure(sub *event.Subscription) (*notification.Notification, error) {
-	if t.data.Status != evergreen.VersionFailed {
+	if t.data.Status != evergreen.VersionFailed || t.event.EventType == event.VersionChildrenCompletion {
 		return nil, nil
 	}
 	failedTasks, err := task.FindAll(db.Query(task.FailedTasksByVersion(t.version.Id)))
 	if err != nil {
-		return nil, errors.Wrap(err, "error getting failed tasks in version")
+		return nil, errors.Wrapf(err, "getting failed tasks in version '%s'", t.version.Id)
+	}
+	skipNotification := false
+	for _, failedTask := range failedTasks {
+		if !failedTask.Aborted {
+			skipNotification = false
+			break
+		} else {
+			skipNotification = true
+		}
+	}
+	if skipNotification {
+		return nil, nil
+	}
+	return t.generate(sub, "")
+}
+
+func (t *versionTriggers) versionSuccess(sub *event.Subscription) (*notification.Notification, error) {
+	if t.data.Status != evergreen.VersionSucceeded || t.event.EventType == event.VersionChildrenCompletion {
+		return nil, nil
+	}
+
+	return t.generate(sub, "")
+}
+
+func (t *versionTriggers) versionExceedsDuration(sub *event.Subscription) (*notification.Notification, error) {
+	if t.data.Status != evergreen.VersionSucceeded && t.data.Status != evergreen.VersionFailed {
+		return nil, nil
+	}
+	thresholdString, ok := sub.TriggerData[event.VersionDurationKey]
+	if !ok {
+		return nil, errors.Errorf("subscription '%s' has no build time threshold", sub.ID)
+	}
+	threshold, err := strconv.Atoi(thresholdString)
+	if err != nil {
+		return nil, errors.Errorf("subscription '%s' has an invalid time threshold", sub.ID)
+	}
+
+	maxDuration := time.Duration(threshold) * time.Second
+	if !t.version.StartTime.Add(maxDuration).Before(t.version.FinishTime) {
+		return nil, nil
+	}
+	return t.generate(sub, fmt.Sprintf("exceeded %d seconds", threshold))
+}
+func (t *versionTriggers) versionFamilyOutcome(sub *event.Subscription) (*notification.Notification, error) {
+	if t.data.Status != evergreen.VersionSucceeded && t.data.Status != evergreen.VersionFailed {
+		return nil, nil
+	}
+	if t.event.EventType != event.VersionChildrenCompletion {
+		return nil, nil
+	}
+	return t.generate(sub, "")
+}
+
+func (t *versionTriggers) versionFamilyFailure(sub *event.Subscription) (*notification.Notification, error) {
+	if t.data.Status != evergreen.VersionFailed || t.event.EventType != event.VersionChildrenCompletion {
+		return nil, nil
+	}
+	failedTasks, err := task.FindAll(db.Query(task.FailedTasksByVersion(t.version.Id)))
+	if err != nil {
+		return nil, errors.Wrapf(err, "getting failed tasks in version '%s'", t.version.Id)
 	}
 	skipNotification := false
 	for _, failedTask := range failedTasks {
@@ -205,49 +295,15 @@ func (t *versionTriggers) versionFailure(sub *event.Subscription) (*notification
 		return nil, nil
 	}
 
-	isReady, err := t.waitOnChildrenOrSiblings()
-	if err != nil {
-		return nil, err
-	}
-	if !isReady {
-		return nil, nil
-	}
 	return t.generate(sub, "")
 }
 
-func (t *versionTriggers) versionSuccess(sub *event.Subscription) (*notification.Notification, error) {
-	if t.data.Status != evergreen.VersionSucceeded {
+func (t *versionTriggers) versionFamilySuccess(sub *event.Subscription) (*notification.Notification, error) {
+	if t.data.Status != evergreen.VersionSucceeded || t.event.EventType != event.VersionChildrenCompletion {
 		return nil, nil
 	}
 
-	isReady, err := t.waitOnChildrenOrSiblings()
-	if err != nil {
-		return nil, err
-	}
-	if !isReady {
-		return nil, nil
-	}
 	return t.generate(sub, "")
-}
-
-func (t *versionTriggers) versionExceedsDuration(sub *event.Subscription) (*notification.Notification, error) {
-	if t.data.Status != evergreen.VersionSucceeded && t.data.Status != evergreen.VersionFailed {
-		return nil, nil
-	}
-	thresholdString, ok := sub.TriggerData[event.VersionDurationKey]
-	if !ok {
-		return nil, fmt.Errorf("subscription %s has no build time threshold", sub.ID)
-	}
-	threshold, err := strconv.Atoi(thresholdString)
-	if err != nil {
-		return nil, fmt.Errorf("subscription %s has an invalid time threshold", sub.ID)
-	}
-
-	maxDuration := time.Duration(threshold) * time.Second
-	if !t.version.StartTime.Add(maxDuration).Before(t.version.FinishTime) {
-		return nil, nil
-	}
-	return t.generate(sub, fmt.Sprintf("exceeded %d seconds", threshold))
 }
 
 func (t *versionTriggers) versionRuntimeChange(sub *event.Subscription) (*notification.Notification, error) {
@@ -256,16 +312,16 @@ func (t *versionTriggers) versionRuntimeChange(sub *event.Subscription) (*notifi
 	}
 	percentString, ok := sub.TriggerData[event.VersionPercentChangeKey]
 	if !ok {
-		return nil, fmt.Errorf("subscription %s has no percentage increase", sub.ID)
+		return nil, fmt.Errorf("subscription '%s' has no percentage increase", sub.ID)
 	}
 	percent, err := strconv.ParseFloat(percentString, 64)
 	if err != nil {
-		return nil, fmt.Errorf("subscription %s has an invalid percentage", sub.ID)
+		return nil, fmt.Errorf("subscription '%s' has an invalid percentage", sub.ID)
 	}
 
 	lastGreen, err := t.version.LastSuccessful()
 	if err != nil {
-		return nil, errors.Wrap(err, "error retrieving last green build")
+		return nil, errors.Wrap(err, "retrieving last green build")
 	}
 	if lastGreen == nil {
 		return nil, nil
@@ -286,61 +342,17 @@ func (t *versionTriggers) versionRegression(sub *event.Subscription) (*notificat
 
 	versionTasks, err := task.FindAll(db.Query(task.ByVersion(t.version.Id)))
 	if err != nil {
-		return nil, errors.Wrap(err, "error retrieving tasks for version")
+		return nil, errors.Wrapf(err, "finding tasks for version '%s'", t.version.Id)
 	}
 	for i := range versionTasks {
 		task := &versionTasks[i]
 		isRegression, _, err := isTaskRegression(sub, task)
 		if err != nil {
-			return nil, errors.Wrap(err, "error evaluating task regression")
+			return nil, errors.Wrap(err, "evaluating task regression")
 		}
 		if isRegression {
 			return t.generate(sub, "")
 		}
 	}
 	return nil, nil
-}
-
-func (t *versionTriggers) waitOnChildrenOrSiblings() (bool, error) {
-	// only patches have to wait on children/siblings
-	if !evergreen.IsPatchRequester(t.version.Requester) {
-		return true, nil
-	}
-	isReady := false
-	patchDoc, err := patch.FindOne(patch.ByVersion(t.version.Id))
-	if err != nil {
-		return isReady, errors.Wrapf(err, "error getting patch '%s'", t.version.Id)
-	}
-	if patchDoc == nil {
-		return isReady, errors.Errorf("patch '%s' not found", t.version.Id)
-	}
-
-	// don't wait on children or siblings if the patch is a regular patch
-	if !(patchDoc.IsParent() || patchDoc.IsChild()) {
-		return true, nil
-	}
-
-	// get the collective status
-	isReady, _, isFailingStatus, err := checkPatchStatus(patchDoc)
-	if err != nil {
-		return false, errors.Wrapf(err, "error getting patch status for '%s'", patchDoc.Id)
-	}
-
-	if isFailingStatus {
-		t.data.Status = evergreen.PatchFailed
-	}
-
-	if t.version.IsChild() {
-		parentVersion, err := t.version.GetParentVersion()
-		if err != nil {
-			return isReady, errors.Wrap(err, "error getting parent version")
-		}
-		if parentVersion == nil {
-			return isReady, errors.Errorf("parent version not found for '%s'", t.version.Id)
-		}
-		t.version = parentVersion
-
-	}
-
-	return isReady, nil
 }

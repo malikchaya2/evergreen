@@ -32,7 +32,8 @@ import (
 )
 
 type Host struct {
-	Id              string        `bson:"_id" json:"id"`
+	Id string `bson:"_id" json:"id"`
+	// Host is the DNS name of the host.
 	Host            string        `bson:"host_id" json:"host"`
 	User            string        `bson:"user" json:"user"`
 	Secret          string        `bson:"secret" json:"secret"`
@@ -61,6 +62,7 @@ type Host struct {
 
 	// the task that is currently running on the host
 	RunningTask             string `bson:"running_task,omitempty" json:"running_task,omitempty"`
+	RunningTaskExecution    int    `bson:"running_task_execution" json:"running_task_execution"`
 	RunningTaskBuildVariant string `bson:"running_task_bv,omitempty" json:"running_task_bv,omitempty"`
 	RunningTaskVersion      string `bson:"running_task_version,omitempty" json:"running_task_version,omitempty"`
 	RunningTaskProject      string `bson:"running_task_project,omitempty" json:"running_task_project,omitempty"`
@@ -83,6 +85,8 @@ type Host struct {
 	// creation is when the host document was inserted to the DB, start is when it was started on the cloud provider
 	CreationTime time.Time `bson:"creation_time" json:"creation_time"`
 	StartTime    time.Time `bson:"start_time" json:"start_time"`
+	// BillingStartTime is when billing started for the host.
+	BillingStartTime time.Time `bson:"billing_start_time" json:"billing_start_time"`
 	// AgentStartTime is when the agent first initiates contact with the app
 	// server.
 	AgentStartTime  time.Time `bson:"agent_start_time" json:"agent_start_time"`
@@ -193,7 +197,6 @@ type VolumeAttachment struct {
 	VolumeID   string `bson:"volume_id" json:"volume_id"`
 	DeviceName string `bson:"device_name" json:"device_name"`
 	IsHome     bool   `bson:"is_home" json:"is_home"`
-	HostID     string `bson:"host_id" json:"host_id"`
 }
 
 // PortMap maps container port to the parent host ports (container port is formatted as <port>/<protocol>)
@@ -213,7 +216,9 @@ func GetPortMap(m nat.PortMap) PortMap {
 	return res
 }
 
-// DockerOptions contains options for starting a container
+// DockerOptions contains options for starting a container. This fulfills the
+// ProviderSettings interface to populate container information from the distro
+// settings.
 type DockerOptions struct {
 	// Optional parameters to define a registry name and authentication
 	RegistryName     string `mapstructure:"docker_registry_name" bson:"docker_registry_name,omitempty" json:"docker_registry_name,omitempty"`
@@ -237,6 +242,8 @@ type DockerOptions struct {
 	EnvironmentVars []string `mapstructure:"environment_vars" bson:"environment_vars,omitempty" json:"environment_vars,omitempty"`
 }
 
+// FromDistroSettings loads the Docker container options from the provider
+// settings.
 func (opts *DockerOptions) FromDistroSettings(d distro.Distro, _ string) error {
 	if len(d.ProviderSettingsList) != 0 {
 		bytes, err := d.ProviderSettingsList[0].MarshalBSON()
@@ -381,26 +388,58 @@ func (h *Host) GetTaskGroupString() string {
 
 // IdleTime returns how long has this host been idle
 func (h *Host) IdleTime() time.Duration {
-
-	// if the host is currently running a task, it is not idle
+	// If the host is currently running a task, it is not idle.
 	if h.RunningTask != "" {
-		return time.Duration(0)
+		return 0
 	}
 
-	// if the host has run a task before, then the idle time is just the time
-	// passed since the last task finished
+	// If the host is not running a task then the idle time is the time
+	// elapsed since the last task finished.
+	return h.SinceLastTaskCompletion()
+}
+
+// SinceLastTaskCompletion returns the duration since the last task to run on the host
+// completed or, if no task has run, the host's uptime.
+func (h *Host) SinceLastTaskCompletion() time.Duration {
+	// If the host has run a task, return the time the last task finished running.
 	if h.LastTask != "" {
 		return time.Since(h.LastTaskCompletedTime)
 	}
 
-	// if the host has been provisioned, the idle time is how long it has been provisioned
-	if !utility.IsZeroTime(h.ProvisionTime) {
-		return time.Since(h.ProvisionTime)
+	// If the host has not yet run a task, return how long it has been billable.
+	if !utility.IsZeroTime(h.BillingStartTime) {
+		return time.Since(h.BillingStartTime)
 	}
 
-	// if the host has not run a task before, the idle time is just
-	// how long is has been since the host was created
-	return time.Since(h.CreationTime)
+	// If the host hasn't run a task and its billing start time is not set, return
+	// how long it has been since the host was started.
+	return time.Since(h.StartTime)
+}
+
+func (h *Host) TaskStartMessage() message.Fields {
+	msg := message.Fields{
+		"stat":                 "host-start-task",
+		"distro":               h.Distro.Id,
+		"provider":             h.Distro.Provider,
+		"provisioning":         h.Distro.BootstrapSettings.Method,
+		"host_id":              h.Id,
+		"status":               h.Status,
+		"since_last_task_secs": h.SinceLastTaskCompletion().Seconds(),
+		"spawn_host":           h.StartedBy != evergreen.User && !h.SpawnOptions.SpawnedByTask,
+		"task_spawn_host":      h.SpawnOptions.SpawnedByTask,
+		"has_containers":       h.HasContainers,
+		"task_host":            h.StartedBy == evergreen.User && !h.HasContainers,
+	}
+
+	if strings.HasPrefix(h.Distro.Provider, "ec2") {
+		msg["provider"] = "ec2"
+	}
+
+	if h.Provider != evergreen.ProviderNameStatic {
+		msg["host_task_count"] = h.TaskCount
+	}
+
+	return msg
 }
 
 func (h *Host) GetAMI() string {
@@ -698,6 +737,17 @@ func (h *Host) CreateSecret() error {
 		return err
 	}
 	h.Secret = secret
+	return nil
+}
+
+func (h *Host) SetBillingStartTime(startTime time.Time) error {
+	if err := UpdateOne(
+		bson.M{IdKey: h.Id},
+		bson.M{"$set": bson.M{BillingStartTimeKey: startTime}},
+	); err != nil {
+		return errors.Wrap(err, "setting billing start time")
+	}
+	h.BillingStartTime = startTime
 	return nil
 }
 
@@ -1294,8 +1344,9 @@ func (h *Host) ClearRunningAndSetLastTask(t *task.Task) error {
 	now := time.Now()
 	err := UpdateOne(
 		bson.M{
-			IdKey:          h.Id,
-			RunningTaskKey: h.RunningTask,
+			IdKey:                   h.Id,
+			RunningTaskKey:          h.RunningTask,
+			RunningTaskExecutionKey: h.RunningTaskExecution,
 		},
 		bson.M{
 			"$set": bson.M{
@@ -1308,6 +1359,7 @@ func (h *Host) ClearRunningAndSetLastTask(t *task.Task) error {
 			},
 			"$unset": bson.M{
 				RunningTaskKey:             1,
+				RunningTaskExecutionKey:    1,
 				RunningTaskGroupKey:        1,
 				RunningTaskGroupOrderKey:   1,
 				RunningTaskBuildVariantKey: 1,
@@ -1320,17 +1372,19 @@ func (h *Host) ClearRunningAndSetLastTask(t *task.Task) error {
 		return err
 	}
 
-	event.LogHostRunningTaskCleared(h.Id, h.RunningTask)
+	event.LogHostRunningTaskCleared(h.Id, h.RunningTask, h.RunningTaskExecution)
 	grip.Info(message.Fields{
 		"message":         "cleared host running task and set last task",
 		"host_id":         h.Id,
 		"host_tag":        h.Tag,
 		"distro":          h.Distro.Id,
 		"running_task_id": h.RunningTask,
+		"task_execution":  h.RunningTaskExecution,
 		"last_task_id":    t.Id,
 	})
 
 	h.RunningTask = ""
+	h.RunningTaskExecution = 0
 	h.RunningTaskBuildVariant = ""
 	h.RunningTaskVersion = ""
 	h.RunningTaskProject = ""
@@ -1346,39 +1400,64 @@ func (h *Host) ClearRunningAndSetLastTask(t *task.Task) error {
 	return nil
 }
 
-// ClearRunningTask unsets the running task on the host.
+// ClearRunningTask unsets the running task on the host and logs an event
+// indicating it is no longer running the task.
 func (h *Host) ClearRunningTask() error {
-	err := UpdateOne(
-		bson.M{
-			IdKey: h.Id,
-		},
-		bson.M{
-			"$unset": bson.M{
-				RunningTaskKey:             1,
-				RunningTaskGroupKey:        1,
-				RunningTaskGroupOrderKey:   1,
-				RunningTaskBuildVariantKey: 1,
-				RunningTaskVersionKey:      1,
-				RunningTaskProjectKey:      1,
-			},
-		})
-
-	if err != nil {
+	hadRunningTask := h.RunningTask != ""
+	doUpdate := func(update bson.M) error {
+		return UpdateOne(bson.M{IdKey: h.Id}, update)
+	}
+	if err := h.clearRunningTaskWithFunc(doUpdate); err != nil {
 		return err
 	}
 
-	if h.RunningTask != "" {
-		event.LogHostRunningTaskCleared(h.Id, h.RunningTask)
+	if hadRunningTask {
+		event.LogHostRunningTaskCleared(h.Id, h.RunningTask, h.RunningTaskExecution)
 		grip.Info(message.Fields{
-			"message":  "cleared host running task",
-			"host_id":  h.Id,
-			"host_tag": h.Tag,
-			"distro":   h.Distro.Id,
-			"task_id":  h.RunningTask,
+			"message":        "cleared host running task",
+			"host_id":        h.Id,
+			"host_tag":       h.Tag,
+			"distro":         h.Distro.Id,
+			"task_id":        h.RunningTask,
+			"task_execution": h.RunningTaskExecution,
 		})
 	}
 
+	return nil
+}
+
+// ClearRunningTaskWithContext unsets the running task on the log. It does not
+// log an event for clearing the task.
+func (h *Host) ClearRunningTaskWithContext(ctx context.Context, env evergreen.Environment) error {
+	doUpdate := func(update bson.M) error {
+		_, err := env.DB().Collection(Collection).UpdateByID(ctx, h.Id, update)
+		return err
+	}
+	return h.clearRunningTaskWithFunc(doUpdate)
+}
+
+func (h *Host) clearRunningTaskWithFunc(doUpdate func(update bson.M) error) error {
+	if h.RunningTask == "" {
+		return nil
+	}
+
+	update := bson.M{
+		"$unset": bson.M{
+			RunningTaskKey:             1,
+			RunningTaskExecutionKey:    1,
+			RunningTaskGroupKey:        1,
+			RunningTaskGroupOrderKey:   1,
+			RunningTaskBuildVariantKey: 1,
+			RunningTaskVersionKey:      1,
+			RunningTaskProjectKey:      1,
+		},
+	}
+	if err := doUpdate(update); err != nil {
+		return err
+	}
+
 	h.RunningTask = ""
+	h.RunningTaskExecution = 0
 	h.RunningTaskBuildVariant = ""
 	h.RunningTaskVersion = ""
 	h.RunningTaskProject = ""
@@ -1388,16 +1467,14 @@ func (h *Host) ClearRunningTask() error {
 	return nil
 }
 
-// UpdateRunningTask updates the running task in the host document, returns
-// - true, nil on success
-// - false, nil on duplicate key error, task is already assigned to another host
-// - false, error on all other errors
-func (h *Host) UpdateRunningTask(t *task.Task) (bool, error) {
+// UpdateRunningTaskWithContext updates the running task for the host. It does
+// not log an event for task assignment.
+func (h *Host) UpdateRunningTaskWithContext(ctx context.Context, env evergreen.Environment, t *task.Task) error {
 	if t == nil {
-		return false, errors.New("received nil task, cannot update")
+		return errors.New("received nil task, cannot update")
 	}
 	if t.Id == "" {
-		return false, errors.New("task has empty task ID, cannot update")
+		return errors.New("task has empty task ID, cannot update")
 	}
 
 	statuses := []string{evergreen.HostRunning}
@@ -1406,7 +1483,7 @@ func (h *Host) UpdateRunningTask(t *task.Task) (bool, error) {
 	if h.Distro.BootstrapSettings.Method == distro.BootstrapMethodUserData {
 		statuses = append(statuses, evergreen.HostStarting)
 	}
-	selector := bson.M{
+	query := bson.M{
 		IdKey:          h.Id,
 		StatusKey:      bson.M{"$in": statuses},
 		RunningTaskKey: bson.M{"$exists": false},
@@ -1415,6 +1492,7 @@ func (h *Host) UpdateRunningTask(t *task.Task) (bool, error) {
 	update := bson.M{
 		"$set": bson.M{
 			RunningTaskKey:             t.Id,
+			RunningTaskExecutionKey:    t.Execution,
 			RunningTaskGroupKey:        t.TaskGroup,
 			RunningTaskGroupOrderKey:   t.TaskGroupOrder,
 			RunningTaskBuildVariantKey: t.BuildVariant,
@@ -1423,28 +1501,24 @@ func (h *Host) UpdateRunningTask(t *task.Task) (bool, error) {
 		},
 	}
 
-	err := UpdateOne(selector, update)
-	if err != nil {
-		if db.IsDuplicateKey(err) {
-			grip.Debug(message.Fields{
-				"message": "found duplicate running task",
-				"task":    t.Id,
-				"host_id": h.Id,
-			})
-			return false, nil
-		}
-		return false, errors.Wrapf(err, "setting running task to '%s' for host '%s'", t.Id, h.Id)
+	if _, err := env.DB().Collection(Collection).UpdateOne(ctx, query, update); err != nil {
+		grip.DebugWhen(db.IsDuplicateKey(err), message.WrapError(err, message.Fields{
+			"message": "found duplicate running task",
+			"task":    t.Id,
+			"host_id": h.Id,
+		}))
+		return err
 	}
-	event.LogHostRunningTaskSet(h.Id, t.Id)
-	grip.Info(message.Fields{
-		"message":  "host running task set",
-		"host_id":  h.Id,
-		"host_tag": h.Tag,
-		"task_id":  t.Id,
-		"distro":   h.Distro.Id,
-	})
 
-	return true, nil
+	h.RunningTask = t.Id
+	h.RunningTaskExecution = t.Execution
+	h.RunningTaskGroup = t.TaskGroup
+	h.RunningTaskGroupOrder = t.TaskGroupOrder
+	h.RunningTaskBuildVariant = t.BuildVariant
+	h.RunningTaskVersion = t.Version
+	h.RunningTaskProject = t.Project
+
+	return nil
 }
 
 // SetAgentRevision sets the updated agent revision for the host
@@ -1625,6 +1699,24 @@ func (h *Host) CacheHostData() error {
 }
 
 func (h *Host) Insert() error {
+	if err := db.Insert(Collection, h); err != nil {
+		return errors.Wrap(err, "inserting host")
+	}
+	h.logHostCreated()
+	return nil
+}
+
+// InsertWithContext is the same as Insert but accepts a context for the
+// operation.
+func (h *Host) InsertWithContext(ctx context.Context, env evergreen.Environment) error {
+	if _, err := env.DB().Collection(Collection).InsertOne(ctx, h); err != nil {
+		return errors.Wrap(err, "inserting host")
+	}
+	h.logHostCreated()
+	return nil
+}
+
+func (h *Host) logHostCreated() {
 	event.LogHostCreated(h.Id)
 	grip.Info(message.Fields{
 		"message":  "host created",
@@ -1632,9 +1724,14 @@ func (h *Host) Insert() error {
 		"host_tag": h.Tag,
 		"distro":   h.Distro.Id,
 	})
-	return db.Insert(Collection, h)
 }
 
+// Remove removes the host document from the DB.
+// While it's fine to use this in tests, this should generally not be called in
+// production code since deleting the host document makes it difficult to trace
+// what happened to it. Instead, it's preferable to set a host to a failure
+// state (e.g. building-failed, decommissioned) so that it can be cleaned up by
+// host termination.
 func (h *Host) Remove() error {
 	return db.Remove(
 		Collection,
@@ -1644,11 +1741,9 @@ func (h *Host) Remove() error {
 	)
 }
 
-// RemoveStrict deletes a host and errors if the host is not found
-func RemoveStrict(id string) error {
-	ctx, cancel := evergreen.GetEnvironment().Context()
-	defer cancel()
-	result, err := evergreen.GetEnvironment().DB().Collection(Collection).DeleteOne(ctx, bson.M{IdKey: id})
+// RemoveStrict deletes a host and errors if the host is not found.
+func RemoveStrict(ctx context.Context, env evergreen.Environment, id string) error {
+	result, err := env.DB().Collection(Collection).DeleteOne(ctx, bson.M{IdKey: id})
 	if err != nil {
 		return err
 	}
@@ -2126,7 +2221,7 @@ func FindHostsSpawnedByBuild(buildID string) ([]Host, error) {
 }
 
 // FindTerminatedHostsRunningTasks finds all hosts that were running tasks when
-// they were either terminated or needed to be re-provisioned.
+// they were terminated.
 func FindTerminatedHostsRunningTasks() ([]Host, error) {
 	hosts, err := Find(db.Query(bson.M{
 		StatusKey: evergreen.HostTerminated,
@@ -2657,6 +2752,22 @@ func (h *Host) MarkShouldExpire(expireOnValue string) error {
 	)
 }
 
+// UnsetHomeVolume disassociates a home volume from a (stopped) host.
+// This is for internal use, and should only be used on hosts that
+// will be terminated imminently; otherwise, the host will fail to boot.
+func (h *Host) UnsetHomeVolume() error {
+	err := UpdateOne(
+		bson.M{IdKey: h.Id},
+		bson.M{"$set": bson.M{HomeVolumeIDKey: ""}},
+	)
+	if err != nil {
+		return err
+	}
+
+	h.HomeVolumeID = ""
+	return nil
+}
+
 func (h *Host) SetHomeVolumeID(volumeID string) error {
 	h.HomeVolumeID = volumeID
 	return UpdateOne(bson.M{
@@ -2697,6 +2808,33 @@ func FindHostWithVolume(volumeID string) (*Host, error) {
 			bsonutil.GetDottedKeyName(VolumesKey, VolumeAttachmentIDKey): volumeID,
 		},
 	)
+	return FindOne(q)
+}
+
+// FindUpHostWithHomeVolume finds the up host associated with the
+// specified home volume ID.
+func FindUpHostWithHomeVolume(homeVolumeID string) (*Host, error) {
+	q := db.Query(
+		bson.M{
+			StatusKey:       bson.M{"$in": evergreen.UpHostStatus},
+			UserHostKey:     true,
+			HomeVolumeIDKey: homeVolumeID,
+		},
+	)
+	return FindOne(q)
+}
+
+// FindLatestTerminatedHostWithHomeVolume finds the user's most recently terminated host
+// associated with the specified home volume ID.
+func FindLatestTerminatedHostWithHomeVolume(homeVolumeID string, startedBy string) (*Host, error) {
+	q := db.Query(
+		bson.M{
+			StatusKey:       evergreen.HostTerminated,
+			StartedByKey:    startedBy,
+			UserHostKey:     true,
+			HomeVolumeIDKey: homeVolumeID,
+		},
+	).Sort([]string{"-" + TerminationTimeKey})
 	return FindOne(q)
 }
 

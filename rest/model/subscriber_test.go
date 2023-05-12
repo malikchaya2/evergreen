@@ -25,11 +25,9 @@ func TestSubscriberModelsGithubStatusAPI(t *testing.T) {
 	err := apiPrSubscriber.BuildFromService(prSubscriber)
 	assert.NoError(err)
 
-	origPrSubscriberInterface, err := apiPrSubscriber.ToService()
+	origPrSubscriber, err := apiPrSubscriber.ToService()
 	assert.NoError(err)
 
-	origPrSubscriber, ok := origPrSubscriberInterface.(event.Subscriber)
-	assert.True(ok)
 	assert.EqualValues(prSubscriber.Type, origPrSubscriber.Type)
 	assert.EqualValues(target, origPrSubscriber.Target)
 
@@ -53,9 +51,12 @@ func TestSubscriberModelsWebhook(t *testing.T) {
 	assert := assert.New(t)
 
 	target := event.WebhookSubscriber{
-		URL:     "foo",
-		Secret:  []byte("bar"),
-		Headers: []event.WebhookHeader{},
+		URL:        "foo",
+		Secret:     []byte("bar"),
+		Retries:    3,
+		MinDelayMS: 500,
+		TimeoutMS:  10000,
+		Headers:    []event.WebhookHeader{},
 	}
 	webhookSubscriber := event.Subscriber{
 		Type:   event.EvergreenWebhookSubscriberType,
@@ -65,11 +66,9 @@ func TestSubscriberModelsWebhook(t *testing.T) {
 	err := apiWebhookSubscriber.BuildFromService(webhookSubscriber)
 	assert.NoError(err)
 
-	origWebhookSubscriberInterface, err := apiWebhookSubscriber.ToService()
+	origWebhookSubscriber, err := apiWebhookSubscriber.ToService()
 	assert.NoError(err)
 
-	origWebhookSubscriber, ok := origWebhookSubscriberInterface.(event.Subscriber)
-	assert.True(ok)
 	assert.EqualValues(webhookSubscriber.Type, origWebhookSubscriber.Type)
 	assert.EqualValues(target, origWebhookSubscriber.Target)
 
@@ -77,8 +76,11 @@ func TestSubscriberModelsWebhook(t *testing.T) {
 	incoming := APISubscriber{
 		Type: utility.ToStringPtr(event.EvergreenWebhookSubscriberType),
 		Target: map[string]interface{}{
-			"url":    "foo",
-			"secret": "bar",
+			"url":          "foo",
+			"secret":       "bar",
+			"retries":      3,
+			"min_delay_ms": 500,
+			"timeout_ms":   10000,
 		},
 	}
 
@@ -102,11 +104,9 @@ func TestSubscriberModelsJIRAIssue(t *testing.T) {
 	err := apiJIRAIssueSubscriber.BuildFromService(jiraIssueSubscriber)
 	assert.NoError(err)
 
-	origJIRAIssueSubscriberInterface, err := apiJIRAIssueSubscriber.ToService()
+	origJIRAIssueSubscriber, err := apiJIRAIssueSubscriber.ToService()
 	assert.NoError(err)
 
-	origJIRAIssueSubscriber, ok := origJIRAIssueSubscriberInterface.(event.Subscriber)
-	assert.True(ok)
 	assert.EqualValues(jiraIssueSubscriber.Type, origJIRAIssueSubscriber.Type)
 	assert.EqualValues(target, origJIRAIssueSubscriber.Target)
 

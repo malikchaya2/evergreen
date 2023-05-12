@@ -2,12 +2,14 @@ package notification
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/event"
+	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
@@ -21,7 +23,7 @@ import (
 // from the given event, with the given trigger, for the given subscriber.
 // This function will produce an ID that will collide to prevent duplicate
 // notifications from being inserted
-func makeNotificationID(eventID, trigger string, subscriber *event.Subscriber) string { //nolint: interfacer
+func makeNotificationID(eventID, trigger string, subscriber *event.Subscriber) string {
 	return fmt.Sprintf("%s-%s-%s", eventID, trigger, subscriber.String())
 }
 
@@ -107,11 +109,14 @@ func (n *Notification) Composer(env evergreen.Environment) (message.Composer, er
 		payload.Secret = sub.Secret
 		payload.URL = sub.URL
 		payload.NotificationID = n.ID
+		payload.Retries = sub.Retries
+		payload.MinDelayMS = sub.MinDelayMS
+		payload.TimeoutMS = sub.TimeoutMS
 		for _, header := range sub.Headers {
 			payload.Headers.Add(header.Key, header.Value)
 		}
 
-		return util.NewWebhookMessageWithStruct(*payload), nil
+		return util.NewWebhookMessage(*payload), nil
 
 	case event.EmailSubscriberType:
 		sub, ok := n.Subscriber.Target.(*string)
@@ -164,12 +169,17 @@ func (n *Notification) Composer(env evergreen.Environment) (message.Composer, er
 			return nil, errors.New("slack subscriber is invalid")
 		}
 
+		formattedTarget, err := FormatSlackTarget(*sub)
+		if err != nil {
+			return nil, errors.Wrap(err, "formatting slack target")
+		}
+
 		payload, ok := n.Payload.(*SlackPayload)
 		if !ok || payload == nil {
 			return nil, errors.New("slack payload is invalid")
 		}
 
-		return message.NewSlackMessage(level.Notice, *sub, payload.Body, payload.Attachments), nil
+		return message.NewSlackMessage(level.Notice, formattedTarget, payload.Body, payload.Attachments), nil
 
 	case event.GithubPullRequestSubscriberType:
 		sub := n.Subscriber.Target.(*event.GithubPullRequestSubscriber)
@@ -258,6 +268,25 @@ func (n *Notification) MarkError(sendErr error) error {
 func (n *Notification) SetTaskMetadata(ID string, execution int) {
 	n.Metadata.TaskID = ID
 	n.Metadata.TaskExecution = execution
+}
+
+// FormatSlackTarget uses the slackMemberId instead of the userName when possible.
+func FormatSlackTarget(target string) (string, error) {
+	if strings.HasPrefix(target, "@") {
+		trimmedTarget := strings.TrimPrefix(target, "@")
+		user, err := user.FindBySlackUsername(trimmedTarget)
+		if err != nil {
+			grip.Error(message.WrapError(err, message.Fields{
+				"message": "could not find user by Slack username, falling back to default target instead of using the member ID",
+				"target":  target,
+			}))
+			return target, nil
+		}
+		if user != nil && user.Settings.SlackMemberId != "" {
+			return user.Settings.SlackMemberId, nil
+		}
+	}
+	return target, nil
 }
 
 type NotificationStats struct {

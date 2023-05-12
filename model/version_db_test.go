@@ -19,7 +19,7 @@ func TestVersionByMostRecentNonIgnored(t *testing.T) {
 		Id:         "v1",
 		Identifier: "proj",
 		Requester:  evergreen.RepotrackerVersionRequester,
-		CreateTime: ts,
+		CreateTime: ts.Add(-1 * time.Second),
 	}
 	v2 := Version{
 		Id:         "v2",
@@ -31,10 +31,17 @@ func TestVersionByMostRecentNonIgnored(t *testing.T) {
 		Id:         "v3",
 		Identifier: "proj",
 		Requester:  evergreen.RepotrackerVersionRequester,
-		CreateTime: ts.Add(time.Second), // created too late
+		CreateTime: ts.Add(time.Minute), // created too late
+	}
+	// Should not get picked even though it is the most recent
+	v4 := Version{
+		Id:         "v4",
+		Identifier: "proj",
+		Requester:  evergreen.AdHocRequester,
+		CreateTime: ts,
 	}
 
-	assert.NoError(t, db.InsertMany(VersionCollection, v1, v2, v3))
+	assert.NoError(t, db.InsertMany(VersionCollection, v1, v2, v3, v4))
 
 	v, err := VersionFindOne(VersionByMostRecentNonIgnored("proj", ts))
 	assert.NoError(t, err)
@@ -115,6 +122,75 @@ func TestGetVersionAuthorID(t *testing.T) {
 			author, err := GetVersionAuthorID("v0")
 			assert.NoError(t, err)
 			assert.Empty(t, author)
+		},
+	} {
+		assert.NoError(t, db.ClearCollections(VersionCollection))
+		t.Run(name, test)
+	}
+}
+
+func TestFindLatestRevisionForProject(t *testing.T) {
+	for name, test := range map[string]func(*testing.T){
+		"wrongProject": func(t *testing.T) {
+			assert.NoError(t, (&Version{
+				Id:         "v0",
+				Identifier: "project1",
+				Requester:  evergreen.RepotrackerVersionRequester,
+				Revision:   "abc",
+			}).Insert())
+			revision, err := FindLatestRevisionForProject("project2")
+			assert.Error(t, err)
+			assert.Equal(t, "", revision)
+		},
+		"rightProject": func(t *testing.T) {
+			assert.NoError(t, (&Version{
+				Id:                  "v0",
+				Identifier:          "project1",
+				Requester:           evergreen.RepotrackerVersionRequester,
+				Revision:            "abc",
+				RevisionOrderNumber: 12,
+			}).Insert())
+			assert.NoError(t, (&Version{
+				Id:                  "v1",
+				Identifier:          "project1",
+				Requester:           evergreen.RepotrackerVersionRequester,
+				Revision:            "def",
+				RevisionOrderNumber: 10,
+			}).Insert())
+			revision, err := FindLatestRevisionForProject("project1")
+			assert.NoError(t, err)
+			assert.Equal(t, "abc", revision)
+		},
+		"wrongRequester": func(t *testing.T) {
+			assert.NoError(t, (&Version{
+				Id:                  "v0",
+				Identifier:          "project1",
+				Requester:           evergreen.AdHocRequester,
+				Revision:            "abc",
+				RevisionOrderNumber: 12,
+			}).Insert())
+			assert.NoError(t, (&Version{
+				Id:                  "v1",
+				Identifier:          "project1",
+				Requester:           evergreen.TriggerRequester,
+				Revision:            "def",
+				RevisionOrderNumber: 10,
+			}).Insert())
+			revision, err := FindLatestRevisionForProject("project1")
+			assert.Error(t, err)
+			assert.Equal(t, "", revision)
+		},
+		"emptyRevision": func(t *testing.T) {
+			assert.NoError(t, (&Version{
+				Id:         "v0",
+				Identifier: "project1",
+				Requester:  evergreen.RepotrackerVersionRequester,
+				Revision:   "",
+			}).Insert())
+			revision, err := FindLatestRevisionForProject("project1")
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "has no revision")
+			assert.Equal(t, "", revision)
 		},
 	} {
 		assert.NoError(t, db.ClearCollections(VersionCollection))

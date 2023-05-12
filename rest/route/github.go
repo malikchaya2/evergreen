@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"strconv"
 	"strings"
 	"time"
 
@@ -13,12 +12,11 @@ import (
 	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/rest/data"
-	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/evergreen/units"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/amboy"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
@@ -30,11 +28,15 @@ const (
 	githubActionOpened      = "opened"
 	githubActionSynchronize = "synchronize"
 	githubActionReopened    = "reopened"
-	commitUnsigned          = "unsigned"
 
-	retryComment = "evergreen retry"
-	patchComment = "evergreen patch"
-	refTags      = "refs/tags/"
+	// pull request comments
+	retryComment            = "evergreen retry"
+	refreshStatusComment    = "evergreen refresh"
+	patchComment            = "evergreen patch"
+	commitQueueMergeComment = "evergreen merge"
+	evergreenHelpComment    = "evergreen help"
+
+	refTags = "refs/tags/"
 )
 
 type githubHookApi struct {
@@ -162,8 +164,8 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 				"action":  *event.Action,
 				"message": "pull request closed; aborting patch",
 			})
-			err := data.AbortPatchesFromPullRequest(event)
-			if err != nil {
+
+			if err := data.AbortPatchesFromPullRequest(event); err != nil {
 				grip.Error(message.WrapError(err, message.Fields{
 					"source":  "GitHub hook",
 					"msg_id":  gh.msgID,
@@ -174,21 +176,8 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 				return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "aborting patches"))
 			}
 
-			// if the item is on a commit queue, remove it
-			if err = gh.tryDequeueCommitQueueItemForPR(event.PullRequest); err != nil {
-				grip.Error(message.WrapError(err, message.Fields{
-					"source":  "GitHub hook",
-					"msg_id":  gh.msgID,
-					"event":   gh.eventType,
-					"action":  *event.Action,
-					"message": "commit queue item not dequeued",
-				}))
-				return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "dequeueing item from commit queue"))
-			}
-
 			return gimlet.NewJSONResponse(struct{}{})
 		}
-
 	case *github.PushEvent:
 		grip.Debug(message.Fields{
 			"source":     "GitHub hook",
@@ -204,61 +193,13 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 			}
 			return gimlet.NewJSONResponse(struct{}{})
 		}
-		if err := data.TriggerRepotracker(gh.queue, gh.msgID, event); err != nil {
+		if err := data.TriggerRepotracker(ctx, gh.queue, gh.msgID, event); err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "triggering repotracker"))
 		}
 
 	case *github.IssueCommentEvent:
-		if event.Issue.IsPullRequest() {
-			if commitqueue.TriggersCommitQueue(*event.Action, *event.Comment.Body) {
-				grip.Info(message.Fields{
-					"source":    "GitHub hook",
-					"msg_id":    gh.msgID,
-					"event":     gh.eventType,
-					"repo":      *event.Repo.FullName,
-					"pr_number": *event.Issue.Number,
-					"user":      *event.Sender.Login,
-					"message":   "commit queue triggered",
-				})
-				if err := gh.commitQueueEnqueue(ctx, event); err != nil {
-					grip.Error(message.WrapError(err, message.Fields{
-						"source":    "GitHub hook",
-						"msg_id":    gh.msgID,
-						"event":     gh.eventType,
-						"action":    event.Action,
-						"repo":      *event.Repo.FullName,
-						"pr_number": *event.Issue.Number,
-						"user":      *event.Sender.Login,
-						"message":   "can't enqueue on commit queue",
-					}))
-					return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "enqueueing in commit queue"))
-				}
-			}
-			triggerPatch, callerType := triggersPatch(*event.Action, *event.Comment.Body)
-			if triggerPatch {
-				grip.Info(message.Fields{
-					"source":    "GitHub hook",
-					"msg_id":    gh.msgID,
-					"event":     gh.eventType,
-					"repo":      *event.Repo.FullName,
-					"pr_number": *event.Issue.Number,
-					"user":      *event.Sender.Login,
-					"message":   fmt.Sprintf("'%s' triggered", *event.Comment.Body),
-				})
-				if err := gh.createPRPatch(ctx, event.Repo.Owner.GetLogin(), event.Repo.GetName(), callerType, event.Issue.GetNumber()); err != nil {
-					grip.Error(message.WrapError(err, message.Fields{
-						"source":    "GitHub hook",
-						"msg_id":    gh.msgID,
-						"event":     gh.eventType,
-						"action":    event.Action,
-						"repo":      *event.Repo.FullName,
-						"pr_number": *event.Issue.Number,
-						"user":      *event.Sender.Login,
-						"message":   fmt.Sprintf("can't create PR for '%s'", *event.Comment.Body),
-					}))
-					return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "creating patch"))
-				}
-			}
+		if err := gh.handleComment(ctx, event); err != nil {
+			return gimlet.MakeJSONInternalErrorResponder(err)
 		}
 
 	case *github.MetaEvent:
@@ -284,6 +225,151 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 	return gimlet.NewJSONResponse(struct{}{})
 }
 
+// handleComment parses a given comment and takes the relevant action, if it's an Evergreen-tracked comment.
+func (gh *githubHookApi) handleComment(ctx context.Context, event *github.IssueCommentEvent) error {
+	if !event.Issue.IsPullRequest() {
+		return nil
+	}
+
+	commentBody := event.Comment.GetBody()
+	commentAction := event.GetAction()
+	if commentAction == "deleted" {
+		return nil
+	}
+	if triggersCommitQueue(event.Comment.GetBody()) {
+		grip.Info(gh.getCommentLogWithMessage(event, "commit queue triggered"))
+
+		_, err := data.EnqueuePRToCommitQueue(ctx, evergreen.GetEnvironment(), gh.sc, createEnqueuePRInfo(event))
+		grip.Error(message.WrapError(err, gh.getCommentLogWithMessage(event, "can't enqueue on commit queue")))
+		return errors.Wrap(err, "enqueueing in commit queue")
+	}
+
+	if triggerPatch, callerType := triggersPatch(commentBody); triggerPatch {
+		grip.Info(gh.getCommentLogWithMessage(event, fmt.Sprintf("'%s' triggered", commentBody)))
+
+		err := gh.createPRPatch(ctx, event.Repo.Owner.GetLogin(), event.Repo.GetName(), callerType, event.Issue.GetNumber())
+		grip.Error(message.WrapError(err, gh.getCommentLogWithMessage(event,
+			fmt.Sprintf("can't create PR for '%s'", commentBody))))
+		return errors.Wrap(err, "creating patch")
+	}
+
+	if triggersStatusRefresh(commentBody) {
+		grip.Info(gh.getCommentLogWithMessage(event, fmt.Sprintf("'%s' triggered", commentBody)))
+
+		err := gh.refreshPatchStatus(ctx, event.Repo.Owner.GetLogin(), event.Repo.GetName(), event.Issue.GetNumber())
+		grip.Error(message.WrapError(err, gh.getCommentLogWithMessage(event,
+			"problem triggering status refresh")))
+		return errors.Wrap(err, "triggering status refresh")
+	}
+
+	if triggersHelpText(commentBody) {
+		grip.Info(gh.getCommentLogWithMessage(event, fmt.Sprintf("'%s' triggered", commentBody)))
+		err := gh.displayHelpText(ctx, event.Repo.Owner.GetLogin(), event.Repo.GetName(), event.Issue.GetNumber())
+		grip.Error(message.WrapError(err, gh.getCommentLogWithMessage(event,
+			"problem sending help comment")))
+		return errors.Wrap(err, "sending help comment")
+	}
+
+	return nil
+}
+
+func (gh *githubHookApi) getCommentLogWithMessage(event *github.IssueCommentEvent, msg string) message.Fields {
+	return message.Fields{
+		"source":    "GitHub hook",
+		"msg_id":    gh.msgID,
+		"event":     gh.eventType,
+		"repo":      *event.Repo.FullName,
+		"pr_number": *event.Issue.Number,
+		"user":      *event.Sender.Login,
+		"message":   msg,
+	}
+}
+
+func (gh *githubHookApi) displayHelpText(ctx context.Context, owner, repo string, prNum int) error {
+	pr, err := gh.sc.GetGitHubPR(ctx, owner, repo, prNum)
+	if err != nil {
+		return errors.Wrap(err, "getting PR from GitHub API")
+	}
+
+	if pr == nil || pr.Base == nil || pr.Base.Ref == nil {
+		return errors.New("PR contains no base branch label")
+	}
+	branch := pr.Base.GetRef()
+	repoRef, err := model.FindRepoRefByOwnerAndRepo(owner, repo)
+	if err != nil {
+		return errors.Wrapf(err, "fetching repo ref for '%s'%s'", owner, repo)
+	}
+	projectRefs, err := model.FindMergedEnabledProjectRefsByRepoAndBranch(owner, repo, branch)
+	if err != nil {
+		return errors.Wrapf(err, "fetching merged project refs for repo '%s/%s' with branch '%s'",
+			owner, repo, branch)
+	}
+
+	helpMarkdown := getHelpTextFromProjects(repoRef, projectRefs)
+	return gh.sc.AddCommentToPR(ctx, owner, repo, prNum, helpMarkdown)
+}
+
+func getHelpTextFromProjects(repoRef *model.RepoRef, projectRefs []model.ProjectRef) string {
+	var manualPRProjectEnabled, autoPRProjectEnabled, cqProjectEnabled bool
+	var cqProjectMessage string
+
+	canInheritRepoPRSettings := true
+	for _, p := range projectRefs {
+		if p.Enabled && p.IsManualPRTestingEnabled() {
+			manualPRProjectEnabled = true
+		}
+		if p.Enabled && p.IsAutoPRTestingEnabled() {
+			autoPRProjectEnabled = true
+		}
+		// If the project is explicitly disabled, then we shouldn't consider if the repo allows for PR testing.
+		if !p.Enabled {
+			canInheritRepoPRSettings = false
+		}
+
+		if err := p.CommitQueueIsOn(); err == nil {
+			cqProjectEnabled = true
+		} else if cqMessage := p.CommitQueue.Message; cqMessage != "" {
+			cqProjectMessage += cqMessage
+		}
+	}
+
+	// If the branch isn't explicitly disabled, also consider the repo settings.
+	if canInheritRepoPRSettings && repoRef != nil {
+		if repoRef.IsManualPRTestingEnabled() {
+			manualPRProjectEnabled = true
+		}
+		if repoRef.IsAutoPRTestingEnabled() {
+			autoPRProjectEnabled = true
+		}
+	}
+
+	formatStr := "- `%s`    - %s\n"
+	formatStrStrikethrough := "- ~`%s`~ \n    - %s\n"
+	res := fmt.Sprintf("### %s\n", "Available Evergreen Comment Commands")
+	if autoPRProjectEnabled {
+		res += fmt.Sprintf(formatStr, retryComment, "attempts to create a new PR patch; "+
+			"this is useful when something went wrong with automatically creating PR patches")
+	}
+	if manualPRProjectEnabled {
+		res += fmt.Sprintf(formatStr, patchComment, "attempts to create a new PR patch; "+""+
+			"this is required to create a PR patch when only manual PR testing is enabled")
+	}
+	if autoPRProjectEnabled || manualPRProjectEnabled {
+		res += fmt.Sprintf(formatStr, refreshStatusComment, "resyncs PR GitHub checks")
+	}
+	if cqProjectEnabled {
+		res += fmt.Sprintf(formatStr, commitQueueMergeComment, "adds PR to the commit queue")
+	} else if cqProjectMessage != "" {
+		// Should only display this if the commit queue isn't enabled for a different branch.
+		text := fmt.Sprintf("the commit queue is NOT enabled for this branch: %s", cqProjectMessage)
+		res += fmt.Sprintf(formatStrStrikethrough, commitQueueMergeComment, text)
+	}
+	if !autoPRProjectEnabled && !manualPRProjectEnabled && !cqProjectEnabled && cqProjectMessage == "" {
+		res = "No commands available for this branch."
+	}
+	return res
+}
+
 func (gh *githubHookApi) createPRPatch(ctx context.Context, owner, repo, calledBy string, prNumber int) error {
 	settings, err := evergreen.GetConfig()
 	if err != nil {
@@ -300,6 +386,23 @@ func (gh *githubHookApi) createPRPatch(ctx context.Context, owner, repo, calledB
 	}
 
 	return gh.AddIntentForPR(pr, pr.User.GetLogin(), calledBy)
+}
+
+func (gh *githubHookApi) refreshPatchStatus(ctx context.Context, owner, repo string, prNumber int) error {
+	p, err := patch.FindLatestGithubPRPatch(owner, repo, prNumber)
+	if err != nil {
+		return errors.Wrap(err, "finding patch")
+	}
+	if p == nil {
+		return errors.Errorf("couldn't find patch for PR '%s/%s:%d'", owner, repo, prNumber)
+	}
+	if p.Version == "" {
+		return errors.Errorf("patch '%s' not finalized", p.Version)
+	}
+
+	job := units.NewGithubStatusRefreshJob(p)
+	job.Run(ctx)
+	return nil
 }
 
 func (gh *githubHookApi) AddIntentForPR(pr *github.PullRequest, owner, calledBy string) error {
@@ -500,6 +603,7 @@ func (gh *githubHookApi) createVersionForTag(ctx context.Context, pRef model.Pro
 		Revision:   revision,
 		GitTag:     tag,
 		RemotePath: remotePath,
+		Activate:   true,
 	}
 	var projectInfo model.ProjectInfo
 	if remotePath != "" {
@@ -516,14 +620,14 @@ func (gh *githubHookApi) createVersionForTag(ctx context.Context, pRef model.Pro
 		}
 	} else {
 		// use the standard project config with the git tag alias
-		projectInfo, err = model.LoadProjectForVersion(existingVersion, pRef.Id, false)
+		projectInfo, err = model.LoadProjectInfoForVersion(ctx, gh.settings, existingVersion, pRef.Id)
 		if err != nil {
 			return nil, errors.Wrapf(err, "getting project '%s'", pRef.Identifier)
 		}
 		metadata.Alias = evergreen.GitTagAlias
 	}
 	projectInfo.Ref = &pRef
-	return gh.sc.CreateVersionFromConfig(ctx, &projectInfo, metadata, true)
+	return gh.sc.CreateVersionFromConfig(ctx, &projectInfo, metadata)
 }
 
 func validatePushTagEvent(event *github.PushEvent) error {
@@ -549,151 +653,14 @@ func validatePushTagEvent(event *github.PushEvent) error {
 	return nil
 }
 
-func (gh *githubHookApi) commitQueueEnqueue(ctx context.Context, event *github.IssueCommentEvent) error {
-	userRepo := data.UserRepoInfo{
-		Username: *event.Comment.User.Login,
-		Owner:    *event.Repo.Owner.Login,
-		Repo:     *event.Repo.Name,
+func createEnqueuePRInfo(event *github.IssueCommentEvent) commitqueue.EnqueuePRInfo {
+	return commitqueue.EnqueuePRInfo{
+		Username:      *event.Comment.User.Login,
+		Owner:         *event.Repo.Owner.Login,
+		Repo:          *event.Repo.Name,
+		PR:            *event.Issue.Number,
+		CommitMessage: *event.Comment.Body,
 	}
-	authorized, err := gh.sc.IsAuthorizedToPatchAndMerge(ctx, gh.settings, userRepo)
-	if err != nil {
-		return errors.Wrap(err, "getting user info from GitHub API")
-	}
-	if !authorized {
-		return errors.Errorf("user '%s' is not authorized to merge", userRepo.Username)
-	}
-
-	prNum := *event.Issue.Number
-	pr, err := gh.sc.GetGitHubPR(ctx, userRepo.Owner, userRepo.Repo, prNum)
-	if err != nil {
-		return errors.Wrap(err, "getting PR from GitHub API")
-	}
-
-	if pr == nil || pr.Base == nil || pr.Base.Ref == nil {
-		return errors.New("PR contains no base branch label")
-	}
-
-	cqInfo := restModel.ParseGitHubComment(*event.Comment.Body)
-	baseBranch := *pr.Base.Ref
-	projectRef, err := model.FindOneProjectRefWithCommitQueueByOwnerRepoAndBranch(userRepo.Owner, userRepo.Repo, baseBranch)
-	if err != nil {
-		return errors.Wrapf(err, "getting project for '%s:%s' tracking branch '%s'", userRepo.Owner, userRepo.Repo, baseBranch)
-	}
-	if projectRef == nil {
-		return errors.Errorf("no project with commit queue enabled for '%s:%s' tracking branch '%s'", userRepo.Owner, userRepo.Repo, baseBranch)
-	}
-
-	if utility.FromBoolPtr(projectRef.CommitQueue.RequireSigned) {
-		err = gh.requireSigned(ctx, userRepo, *pr.Head.Ref, pr, prNum)
-		if err != nil {
-			sendErr := thirdparty.SendCommitQueueGithubStatus(pr, message.GithubStateFailure, "can't enqueue with unsigned commits", "")
-			grip.Error(message.WrapError(sendErr, message.Fields{
-				"message": "error sending patch creation failure to github",
-				"owner":   userRepo.Owner,
-				"repo":    userRepo.Repo,
-				"pr":      prNum,
-			}))
-			return errors.Wrapf(err, "checking commit signing")
-		}
-	}
-
-	patchId, err := gh.sc.AddPatchForPr(ctx, *projectRef, prNum, cqInfo.Modules, cqInfo.MessageOverride)
-	if err != nil {
-		sendErr := thirdparty.SendCommitQueueGithubStatus(pr, message.GithubStateFailure, "failed to create patch", "")
-		grip.Error(message.WrapError(sendErr, message.Fields{
-			"message": "error sending patch creation failure to github",
-			"owner":   userRepo.Owner,
-			"repo":    userRepo.Repo,
-			"pr":      prNum,
-		}))
-		return errors.Wrap(err, "adding patch for PR")
-	}
-
-	item := restModel.APICommitQueueItem{
-		Issue:           utility.ToStringPtr(strconv.Itoa(prNum)),
-		MessageOverride: &cqInfo.MessageOverride,
-		Modules:         cqInfo.Modules,
-		Source:          utility.ToStringPtr(commitqueue.SourcePullRequest),
-		PatchId:         &patchId,
-	}
-	_, err = data.EnqueueItem(projectRef.Id, item, false)
-	if err != nil {
-		return errors.Wrap(err, "enqueueing commit queue item")
-	}
-
-	if pr == nil || pr.Head == nil || pr.Head.SHA == nil {
-		return errors.New("PR contains no head branch SHA")
-	}
-	pushJob := units.NewGithubStatusUpdateJobForPushToCommitQueue(userRepo.Owner, userRepo.Repo, *pr.Head.SHA, prNum, patchId)
-	q := evergreen.GetEnvironment().LocalQueue()
-	grip.Error(message.WrapError(q.Put(ctx, pushJob), message.Fields{
-		"source":  "GitHub hook",
-		"msg_id":  gh.msgID,
-		"event":   gh.eventType,
-		"action":  event.Action,
-		"owner":   userRepo.Owner,
-		"repo":    userRepo.Repo,
-		"item":    prNum,
-		"message": "failed to queue notification for commit queue push",
-	}))
-
-	return nil
-}
-
-func (gh *githubHookApi) requireSigned(ctx context.Context, userRepo data.UserRepoInfo, baseBranch string, pr *github.PullRequest, prNum int) error {
-	settings, err := evergreen.GetConfig()
-	if err != nil {
-		return errors.Wrap(err, "getting admin settings")
-	}
-
-	githubToken, err := settings.GetGithubOauthToken()
-	if err != nil {
-		return errors.Wrap(err, "getting GitHub OAuth token from settings")
-	}
-
-	commits, err := thirdparty.GetGithubPullRequestCommits(ctx, githubToken, userRepo.Owner, userRepo.Repo, prNum)
-	if err != nil {
-		return errors.Wrap(err, "getting GitHub commits")
-	}
-
-	for _, c := range commits {
-		commit := c.GetCommit()
-		if commit.Verification != nil && !utility.FromBoolPtr(commit.Verification.Verified) &&
-			utility.FromStringPtr(commit.Verification.Reason) == commitUnsigned {
-			return errors.Errorf("commit '%s' is not signed", utility.FromStringPtr(commit.SHA))
-		}
-
-	}
-	return nil
-}
-
-// Because the PR isn't necessarily on a commit queue, we only error if item is on the queue and can't be removed correctly
-func (gh *githubHookApi) tryDequeueCommitQueueItemForPR(pr *github.PullRequest) error {
-	err := thirdparty.ValidatePR(pr)
-	if err != nil {
-		return errors.Wrap(err, "GitHub sent an incomplete PR")
-	}
-	projRef, err := model.FindOneProjectRefWithCommitQueueByOwnerRepoAndBranch(*pr.Base.Repo.Owner.Login, *pr.Base.Repo.Name, *pr.Base.Ref)
-	if err != nil {
-		return errors.Wrapf(err, "finding valid project for '%s/%s', branch '%s'", *pr.Base.Repo.Owner.Login, *pr.Base.Repo.Name, *pr.Base.Ref)
-	}
-	if projRef == nil {
-		return nil
-	}
-
-	exists, err := isItemOnCommitQueue(projRef.Id, strconv.Itoa(*pr.Number))
-	if err != nil {
-		return errors.Wrapf(err, "checking if item is on commit queue for project '%s'", projRef.Id)
-	}
-	if !exists {
-		return nil
-	}
-
-	_, err = data.CommitQueueRemoveItem(projRef.Id, strconv.Itoa(*pr.Number), evergreen.GithubPatchUser)
-	if err != nil {
-		return errors.Wrapf(err, "can't remove item %d from commit queue for project '%s'", *pr.Number, projRef.Id)
-	}
-	return nil
 }
 
 func isItemOnCommitQueue(id, item string) (bool, error) {
@@ -712,21 +679,42 @@ func isItemOnCommitQueue(id, item string) (bool, error) {
 	return false, nil
 }
 
+func trimComment(comment string) string {
+	return strings.Join(strings.Fields(strings.ToLower(comment)), " ")
+}
+
+func isRetryComment(comment string) bool {
+	return trimComment(comment) == retryComment
+}
+
+func isPatchComment(comment string) bool {
+	return trimComment(comment) == patchComment
+}
+
+// triggersCommitQueue checks if "evergreen merge" is present in the comment, as
+// it may be followed by a newline and a message.
+func triggersCommitQueue(comment string) bool {
+	return strings.HasPrefix(trimComment(comment), commitQueueMergeComment)
+}
+
 // The bool value returns whether the patch should be created or not.
 // The string value returns the correct caller for the command.
-func triggersPatch(action, comment string) (bool, string) {
-	if action == "deleted" {
-		return false, ""
-	}
-	comment = strings.TrimSpace(comment)
-	switch comment {
-	case patchComment:
+func triggersPatch(comment string) (bool, string) {
+	if isPatchComment(comment) {
 		return true, patch.ManualCaller
-	case retryComment:
-		return true, patch.AllCallers
-	default:
-		return false, ""
 	}
+	if isRetryComment(comment) {
+		return true, patch.AllCallers
+	}
+
+	return false, ""
+}
+func triggersStatusRefresh(comment string) bool {
+	return trimComment(comment) == refreshStatusComment
+}
+
+func triggersHelpText(comment string) bool {
+	return trimComment(comment) == evergreenHelpComment
 }
 
 func isTag(ref string) bool {

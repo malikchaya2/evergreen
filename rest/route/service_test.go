@@ -9,21 +9,19 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"testing"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/auth"
 	"github.com/evergreen-ci/evergreen/db"
-	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
 	serviceModel "github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/distro"
 	"github.com/evergreen-ci/evergreen/model/host"
 	"github.com/evergreen-ci/evergreen/model/task"
-	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/evergreen-ci/evergreen/model/user"
-	"github.com/evergreen-ci/evergreen/rest/data"
 	"github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/gimlet"
@@ -323,9 +321,10 @@ func TestTasksByProjectAndCommitPaginator(t *testing.T) {
 					prefix = 0
 				}
 				nextTask := task.Task{
-					Id:       fmt.Sprintf("%dtask_%d", prefix, i),
-					Revision: commit,
-					Project:  projectId,
+					Id:        fmt.Sprintf("%dtask_%d", prefix, i),
+					Revision:  commit,
+					Project:   projectId,
+					Requester: evergreen.RepotrackerVersionRequester,
 				}
 				cachedTasks = append(cachedTasks, nextTask)
 			}
@@ -344,12 +343,13 @@ func TestTasksByProjectAndCommitPaginator(t *testing.T) {
 						prefix = 0
 					}
 					serviceTask := &task.Task{
-						Id:       fmt.Sprintf("%dtask_%d", prefix, i),
-						Revision: commit,
-						Project:  projectId,
+						Id:        fmt.Sprintf("%dtask_%d", prefix, i),
+						Revision:  commit,
+						Project:   projectId,
+						Requester: evergreen.RepotrackerVersionRequester,
 					}
 					nextModelTask := &model.APITask{}
-					err := nextModelTask.BuildFromArgs(serviceTask, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
+					err := nextModelTask.BuildFromService(serviceTask, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
 					So(err, ShouldBeNil)
 					expectedTasks = append(expectedTasks, nextModelTask)
 				}
@@ -385,12 +385,17 @@ func TestTasksByProjectAndCommitPaginator(t *testing.T) {
 						prefix = 0
 					}
 					serviceTask := &task.Task{
-						Id:       fmt.Sprintf("%dtask_%d", prefix, i),
-						Revision: commit,
-						Project:  projectId,
+						Id:        fmt.Sprintf("%dtask_%d", prefix, i),
+						Revision:  commit,
+						Project:   projectId,
+						Requester: evergreen.RepotrackerVersionRequester,
 					}
 					nextModelTask := &model.APITask{}
-					err := nextModelTask.BuildFromArgs(serviceTask, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
+					err := nextModelTask.BuildFromService(serviceTask, &model.APITaskArgs{
+						LogURL:                   "http://evergreen.example.net",
+						ParsleyLogURL:            "http://parsley.example.net",
+						IncludeProjectIdentifier: true,
+					})
 					So(err, ShouldBeNil)
 					expectedTasks = append(expectedTasks, nextModelTask)
 				}
@@ -411,6 +416,7 @@ func TestTasksByProjectAndCommitPaginator(t *testing.T) {
 					key:        fmt.Sprintf("%dtask_%d", prefix, taskToStartAt),
 					limit:      limit,
 					url:        "http://evergreen.example.net",
+					parsleyURL: "http://parsley.example.net",
 				}
 
 				validatePaginatedResponse(t, handler, expectedTasks, expectedPages)
@@ -426,12 +432,13 @@ func TestTasksByProjectAndCommitPaginator(t *testing.T) {
 						prefix = 0
 					}
 					serviceTask := &task.Task{
-						Id:       fmt.Sprintf("%dtask_%d", prefix, i),
-						Revision: commit,
-						Project:  projectId,
+						Id:        fmt.Sprintf("%dtask_%d", prefix, i),
+						Revision:  commit,
+						Project:   projectId,
+						Requester: evergreen.RepotrackerVersionRequester,
 					}
 					nextModelTask := &model.APITask{}
-					err := nextModelTask.BuildFromArgs(serviceTask, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
+					err := nextModelTask.BuildFromService(serviceTask, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
 					So(err, ShouldBeNil)
 					expectedTasks = append(expectedTasks, nextModelTask)
 				}
@@ -468,12 +475,13 @@ func TestTasksByProjectAndCommitPaginator(t *testing.T) {
 						prefix = 0
 					}
 					serviceTask := &task.Task{
-						Id:       fmt.Sprintf("%dtask_%d", prefix, i),
-						Revision: commit,
-						Project:  projectId,
+						Id:        fmt.Sprintf("%dtask_%d", prefix, i),
+						Revision:  commit,
+						Project:   projectId,
+						Requester: evergreen.RepotrackerVersionRequester,
 					}
 					nextModelTask := &model.APITask{}
-					err := nextModelTask.BuildFromArgs(serviceTask, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
+					err := nextModelTask.BuildFromService(serviceTask, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
 					So(err, ShouldBeNil)
 					expectedTasks = append(expectedTasks, nextModelTask)
 				}
@@ -499,6 +507,49 @@ func TestTasksByProjectAndCommitPaginator(t *testing.T) {
 
 				validatePaginatedResponse(t, handler, expectedTasks, expectedPages)
 			})
+		})
+	})
+}
+
+func TestTaskByProjectHandlerParse(t *testing.T) {
+	Convey("Parsing get task by projects handler", t, func() {
+		tep := &tasksByProjectHandler{}
+		ctx := context.Background()
+		Convey("should successfully parse with no url query and default requester to mainline", func() {
+			req, err := http.NewRequest(http.MethodGet, "/projects/evergreen/revisions/hash123/tasks", bytes.NewReader(nil))
+			req = gimlet.SetURLVars(req, map[string]string{"commit_hash": "hash123", "project_id": "evergreen"})
+			So(err, ShouldBeNil)
+			err = tep.Parse(ctx, req)
+			So(err, ShouldBeNil)
+			So(tep.project, ShouldEqual, "evergreen")
+			So(tep.commitHash, ShouldEqual, "hash123")
+		})
+		Convey("should successfully parse all query params", func() {
+			req, err := http.NewRequest(http.MethodGet, "/projects/evergreen/revisions/hash123/tasks?status=succeeded&variant=ubuntu1604&limit=200&task_name=task1&requesters=gitter_request,github_pull_request", bytes.NewReader(nil))
+			So(err, ShouldBeNil)
+			req = gimlet.SetURLVars(req, map[string]string{"commit_hash": "hash123", "project_id": "evergreen"})
+			err = tep.Parse(ctx, req)
+			So(err, ShouldBeNil)
+			So(tep.variant, ShouldEqual, "ubuntu1604")
+			So(tep.taskName, ShouldEqual, "task1")
+			So(tep.status, ShouldEqual, "succeeded")
+		})
+		Convey("should fail on missing project or commit hash", func() {
+			req, err := http.NewRequest(http.MethodGet, "/projects/evergreen/revisions/hash123/tasks?status=succeeded&variant=ubuntu1604&limit=200&task_name=task1&requesters=gitter_request,github_pull_request", bytes.NewReader(nil))
+			So(err, ShouldBeNil)
+			req = gimlet.SetURLVars(req, map[string]string{"commit_hash": "hash123"})
+			err = tep.Parse(ctx, req)
+			So(err, ShouldNotBeNil)
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": "evergreen"})
+			err = tep.Parse(ctx, req)
+			So(err, ShouldNotBeNil)
+		})
+		Convey("should fail on invalid limit", func() {
+			req, err := http.NewRequest(http.MethodGet, "/projects/evergreen/revisions/hash123/tasks?limit=abc", bytes.NewReader(nil))
+			So(err, ShouldBeNil)
+			req = gimlet.SetURLVars(req, map[string]string{"commit_hash": "hash123", "project_id": "evergreen"})
+			err = tep.Parse(ctx, req)
+			So(err, ShouldNotBeNil)
 		})
 	})
 }
@@ -548,7 +599,10 @@ func TestTaskByBuildPaginator(t *testing.T) {
 						Id: fmt.Sprintf("%dbuild%d", prefix, i),
 					}
 					nextModelTask := &model.APITask{}
-					err := nextModelTask.BuildFromArgs(serviceModel, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
+					err := nextModelTask.BuildFromService(serviceModel, &model.APITaskArgs{
+						LogURL:                   "http://evergreen.example.net",
+						ParsleyLogURL:            "http://parsley.example.net",
+						IncludeProjectIdentifier: true})
 					So(err, ShouldBeNil)
 					expectedTasks = append(expectedTasks, nextModelTask)
 				}
@@ -565,9 +619,10 @@ func TestTaskByBuildPaginator(t *testing.T) {
 				}
 				prefix = int(math.Log10(float64(taskToStartAt)))
 				tbh := &tasksByBuildHandler{
-					limit: limit,
-					key:   fmt.Sprintf("%dbuild%d", prefix, taskToStartAt),
-					url:   "http://evergreen.example.net",
+					limit:      limit,
+					key:        fmt.Sprintf("%dbuild%d", prefix, taskToStartAt),
+					url:        "http://evergreen.example.net",
+					parsleyURL: "http://parsley.example.net",
 				}
 
 				// SPARTA
@@ -588,7 +643,10 @@ func TestTaskByBuildPaginator(t *testing.T) {
 						Id: fmt.Sprintf("%dbuild%d", prefix, i),
 					}
 					nextModelTask := &model.APITask{}
-					err := nextModelTask.BuildFromArgs(serviceModel, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
+					err := nextModelTask.BuildFromService(serviceModel, &model.APITaskArgs{
+						LogURL:                   "http://evergreen.example.net",
+						ParsleyLogURL:            "http://parsley.example.net",
+						IncludeProjectIdentifier: true})
 					So(err, ShouldBeNil)
 					expectedTasks = append(expectedTasks, nextModelTask)
 				}
@@ -606,9 +664,10 @@ func TestTaskByBuildPaginator(t *testing.T) {
 
 				prefix = int(math.Log10(float64(taskToStartAt)))
 				tbh := &tasksByBuildHandler{
-					limit: limit,
-					key:   fmt.Sprintf("%dbuild%d", prefix, taskToStartAt),
-					url:   "http://evergreen.example.net",
+					limit:      limit,
+					key:        fmt.Sprintf("%dbuild%d", prefix, taskToStartAt),
+					url:        "http://evergreen.example.net",
+					parsleyURL: "http://parsley.example.net",
 				}
 
 				validatePaginatedResponse(t, tbh, expectedTasks, expectedPages)
@@ -628,7 +687,11 @@ func TestTaskByBuildPaginator(t *testing.T) {
 						Id: fmt.Sprintf("%dbuild%d", prefix, i),
 					}
 					nextModelTask := &model.APITask{}
-					err := nextModelTask.BuildFromArgs(serviceModel, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
+					err := nextModelTask.BuildFromService(serviceModel, &model.APITaskArgs{
+						LogURL:                   "http://evergreen.example.net",
+						ParsleyLogURL:            "http://parsley.example.net",
+						IncludeProjectIdentifier: true,
+					})
 					So(err, ShouldBeNil)
 					expectedTasks = append(expectedTasks, nextModelTask)
 				}
@@ -645,9 +708,10 @@ func TestTaskByBuildPaginator(t *testing.T) {
 				}
 				prefix = int(math.Log10(float64(taskToStartAt)))
 				tbh := &tasksByBuildHandler{
-					limit: limit,
-					key:   fmt.Sprintf("%dbuild%d", prefix, taskToStartAt),
-					url:   "http://evergreen.example.net",
+					limit:      limit,
+					key:        fmt.Sprintf("%dbuild%d", prefix, taskToStartAt),
+					url:        "http://evergreen.example.net",
+					parsleyURL: "http://parsley.example.net",
 				}
 
 				validatePaginatedResponse(t, tbh, expectedTasks, expectedPages)
@@ -667,7 +731,10 @@ func TestTaskByBuildPaginator(t *testing.T) {
 						Id: fmt.Sprintf("%dbuild%d", prefix, i),
 					}
 					nextModelTask := &model.APITask{}
-					err := nextModelTask.BuildFromArgs(serviceModel, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
+					err := nextModelTask.BuildFromService(serviceModel, &model.APITaskArgs{
+						LogURL:                   "http://evergreen.example.net",
+						ParsleyLogURL:            "http://parsley.example.net",
+						IncludeProjectIdentifier: true})
 					So(err, ShouldBeNil)
 					expectedTasks = append(expectedTasks, nextModelTask)
 				}
@@ -684,9 +751,10 @@ func TestTaskByBuildPaginator(t *testing.T) {
 				}
 
 				tbh := &tasksByBuildHandler{
-					limit: limit,
-					key:   fmt.Sprintf("%dbuild%d", 0, taskToStartAt),
-					url:   "http://evergreen.example.net",
+					limit:      limit,
+					key:        fmt.Sprintf("%dbuild%d", 0, taskToStartAt),
+					url:        "http://evergreen.example.net",
+					parsleyURL: "http://parsley.example.net",
 				}
 
 				validatePaginatedResponse(t, tbh, expectedTasks, expectedPages)
@@ -698,9 +766,13 @@ func TestTaskByBuildPaginator(t *testing.T) {
 					Id: "0build0",
 				}
 				nextModelTask := &model.APITask{}
-				err := nextModelTask.BuildFromArgs(serviceModel, &model.APITaskArgs{LogURL: "http://evergreen.example.net", IncludeProjectIdentifier: true})
+				err := nextModelTask.BuildFromService(serviceModel, &model.APITaskArgs{
+					LogURL:                   "http://evergreen.example.net",
+					ParsleyLogURL:            "http://parsley.example.net",
+					IncludeProjectIdentifier: true,
+				})
 				So(err, ShouldBeNil)
-				err = nextModelTask.BuildPreviousExecutions(cachedOldTasks, "http://evergreen.example.net")
+				err = nextModelTask.BuildPreviousExecutions(cachedOldTasks, "http://evergreen.example.net", "http://parsley.example.net")
 				So(err, ShouldBeNil)
 				expectedTasks = append(expectedTasks, nextModelTask)
 				expectedPages := &gimlet.ResponsePages{
@@ -719,161 +791,10 @@ func TestTaskByBuildPaginator(t *testing.T) {
 					key:                "0build0",
 					fetchAllExecutions: true,
 					url:                "http://evergreen.example.net",
+					parsleyURL:         "http://parsley.example.net",
 				}
 
 				validatePaginatedResponse(t, tbh, expectedTasks, expectedPages)
-			})
-		})
-	})
-}
-
-func TestTestPaginator(t *testing.T) {
-	numTests := 300
-	Convey("When paginating with a Connector", t, func() {
-		serviceContext := data.MockGitHubConnector{
-			URL: "http://evergreen.example.net",
-		}
-		Convey("and there are tasks with tests to be found", func() {
-			cachedTests := []testresult.TestResult{}
-			for i := 0; i < numTests; i++ {
-				status := "pass"
-				if i%2 == 0 {
-					status = "fail"
-				}
-				nextTest := testresult.TestResult{
-					ID:     mgobson.ObjectId(fmt.Sprintf("object_id_%d_", i)),
-					TaskID: "myTask",
-					Status: status,
-				}
-				cachedTests = append(cachedTests, nextTest)
-			}
-			myTask := task.Task{
-				Id: "myTask",
-			}
-			serviceContext.CachedTests = cachedTests
-			Convey("then finding a key in the middle of the set should produce"+
-				" a full next and previous page and a full set of models", func() {
-				testToStartAt := 100
-				limit := 100
-				expectedTests := []interface{}{}
-				for i := testToStartAt; i < testToStartAt+limit; i++ {
-					nextModelTest := &model.APITest{}
-					_ = nextModelTest.BuildFromService(&cachedTests[i])
-					_ = nextModelTest.BuildFromService("")
-					expectedTests = append(expectedTests, nextModelTest)
-				}
-				expectedPages := &gimlet.ResponsePages{
-					Next: &gimlet.Page{
-						Key:             fmt.Sprintf("object_id_%d_", testToStartAt+limit),
-						Limit:           limit,
-						Relation:        "next",
-						BaseURL:         "http://evergreen.example.net",
-						KeyQueryParam:   "start_at",
-						LimitQueryParam: "limit",
-					},
-				}
-
-				handler := &testGetHandler{
-					limit: limit,
-					key:   fmt.Sprintf("object_id_%d_", testToStartAt),
-					sc:    &serviceContext,
-					task:  &myTask,
-				}
-
-				validatePaginatedResponse(t, handler, expectedTests, expectedPages)
-			})
-			Convey("then finding a key in the near the end of the set should produce"+
-				" a limited next and full previous page and a full set of models", func() {
-				testToStartAt := 150
-				limit := 50
-				expectedTests := []interface{}{}
-				for i := testToStartAt; i < testToStartAt+limit; i++ {
-					nextModelTest := &model.APITest{}
-					_ = nextModelTest.BuildFromService(&cachedTests[i])
-					_ = nextModelTest.BuildFromService("")
-					expectedTests = append(expectedTests, nextModelTest)
-				}
-				expectedPages := &gimlet.ResponsePages{
-					Next: &gimlet.Page{
-						Key:             fmt.Sprintf("object_id_%d_", testToStartAt+50),
-						Limit:           50,
-						Relation:        "next",
-						BaseURL:         "http://evergreen.example.net",
-						KeyQueryParam:   "start_at",
-						LimitQueryParam: "limit",
-					},
-				}
-
-				handler := &testGetHandler{
-					limit: 50,
-					key:   fmt.Sprintf("object_id_%d_", testToStartAt),
-					sc:    &serviceContext,
-					task:  &myTask,
-				}
-
-				validatePaginatedResponse(t, handler, expectedTests, expectedPages)
-			})
-			Convey("then finding a key in the near the beginning of the set should produce"+
-				" a full next and a limited previous page and a full set of models", func() {
-				testToStartAt := 50
-				limit := 100
-				expectedTests := []interface{}{}
-				for i := testToStartAt; i < testToStartAt+limit; i++ {
-					nextModelTest := &model.APITest{}
-					_ = nextModelTest.BuildFromService(&cachedTests[i])
-					_ = nextModelTest.BuildFromService("")
-					expectedTests = append(expectedTests, nextModelTest)
-				}
-				expectedPages := &gimlet.ResponsePages{
-					Next: &gimlet.Page{
-						Key:             fmt.Sprintf("object_id_%d_", testToStartAt+limit),
-						Limit:           limit,
-						Relation:        "next",
-						BaseURL:         "http://evergreen.example.net",
-						KeyQueryParam:   "start_at",
-						LimitQueryParam: "limit",
-					},
-				}
-
-				handler := &testGetHandler{
-					key:   fmt.Sprintf("object_id_%d_", testToStartAt),
-					limit: limit,
-					sc:    &serviceContext,
-					task:  &myTask,
-				}
-
-				validatePaginatedResponse(t, handler, expectedTests, expectedPages)
-			})
-			Convey("then finding the first key should produce only a next"+
-				" page and a full set of models", func() {
-				testToStartAt := 0
-				limit := 100
-				expectedTests := []interface{}{}
-				for i := testToStartAt; i < testToStartAt+limit; i++ {
-					nextModelTest := &model.APITest{}
-					_ = nextModelTest.BuildFromService(&cachedTests[i])
-					_ = nextModelTest.BuildFromService("")
-					expectedTests = append(expectedTests, nextModelTest)
-				}
-				expectedPages := &gimlet.ResponsePages{
-					Next: &gimlet.Page{
-						Key:             fmt.Sprintf("object_id_%d_", testToStartAt+limit),
-						Limit:           limit,
-						Relation:        "next",
-						BaseURL:         "http://evergreen.example.net",
-						KeyQueryParam:   "start_at",
-						LimitQueryParam: "limit",
-					},
-				}
-
-				handler := &testGetHandler{
-					key:   fmt.Sprintf("object_id_%d_", testToStartAt),
-					sc:    &serviceContext,
-					limit: limit,
-					task:  &myTask,
-				}
-
-				validatePaginatedResponse(t, handler, expectedTests, expectedPages)
 			})
 		})
 	})
@@ -1017,12 +938,19 @@ func TestTaskResetPrepare(t *testing.T) {
 	Convey("With handler and a project context and user", t, func() {
 		trh := &taskRestartHandler{}
 
+		testTask := task.Task{
+			Id:           "testTaskId",
+			Activated:    false,
+			Secret:       "initialSecret",
+			DispatchTime: time.Now(),
+			BuildId:      "b0",
+			Version:      "v1",
+			Status:       evergreen.TaskSucceeded,
+			Priority:     0,
+		}
+
 		projCtx := serviceModel.Context{
-			Task: &task.Task{
-				Id:        "testTaskId",
-				Priority:  0,
-				Activated: false,
-			},
+			Task: &testTask,
 		}
 		u := user.DBUser{
 			Id: "testUser",
@@ -1054,13 +982,50 @@ func TestTaskResetPrepare(t *testing.T) {
 
 			So(err, ShouldResemble, expectedErr)
 		})
+
+		projCtx.ProjectRef = &serviceModel.ProjectRef{
+			Id:         "project_1",
+			Identifier: "project_identifier",
+		}
+
+		failedOnlyTest := func(failedOnly bool) {
+			projCtx.Task = &testTask
+			json := []byte(`{"failed_only": ` + strconv.FormatBool(failedOnly) + `}`)
+			buf := bytes.NewBuffer(json)
+			req, err := http.NewRequest(http.MethodPost, "task/testTaskId/restart", buf)
+			So(err, ShouldBeNil)
+			ctx = gimlet.AttachUser(ctx, &u)
+			ctx = context.WithValue(ctx, RequestContext, &projCtx)
+			err = trh.Parse(ctx, req)
+			So(err, ShouldBeNil)
+			So(trh.FailedOnly, ShouldEqual, failedOnly)
+		}
+
+		Convey("should register true valued failedOnly parameter", func() {
+			failedOnlyTest(true)
+		})
+
+		Convey("should register false valued failedOnly parameter", func() {
+			failedOnlyTest(false)
+		})
+
+		Convey("should have default false failedOnly with empty body", func() {
+			projCtx.Task = &testTask
+			req, err := http.NewRequest(http.MethodPost, "task/testTaskId/restart", &bytes.Buffer{})
+			So(err, ShouldBeNil)
+			ctx = gimlet.AttachUser(ctx, &u)
+			ctx = context.WithValue(ctx, RequestContext, &projCtx)
+			err = trh.Parse(ctx, req)
+			So(err, ShouldBeNil)
+			So(trh.FailedOnly, ShouldEqual, false)
+		})
 	})
 }
 
 func TestTaskGetHandler(t *testing.T) {
 	Convey("With test server with a handler and mock data", t, func() {
 		assert.NoError(t, db.ClearCollections(task.Collection, task.OldCollection))
-		rm := makeGetTaskRoute("https://example.net/test")
+		rm := makeGetTaskRoute("https://parsley.net/yee", "https://example.net/test")
 
 		Convey("and task is in the service context", func() {
 			newTask := task.Task{
@@ -1145,14 +1110,51 @@ func TestTaskResetExecute(t *testing.T) {
 			Status:       evergreen.TaskSucceeded,
 		}
 		So(testTask.Insert(), ShouldBeNil)
+
+		testTask2 := task.Task{
+			Id:           "testTaskId2",
+			Activated:    false,
+			Secret:       "initialSecret",
+			DispatchTime: timeNow,
+			BuildId:      "b0",
+			Version:      "v1",
+			Status:       evergreen.TaskFailed,
+		}
+		So(testTask2.Insert(), ShouldBeNil)
+
+		testTask3 := task.Task{
+			Id:           "testTaskId3",
+			Activated:    false,
+			Secret:       "initialSecret",
+			DispatchTime: timeNow,
+			BuildId:      "b0",
+			Version:      "v1",
+			Status:       evergreen.TaskSucceeded,
+		}
+		So(testTask3.Insert(), ShouldBeNil)
+
+		displayTask := &task.Task{
+			Id:             "displayTask",
+			DisplayName:    "displayTask",
+			BuildId:        "b0",
+			Version:        "v1",
+			Activated:      false,
+			DisplayOnly:    true,
+			ExecutionTasks: []string{testTask2.Id, testTask3.Id},
+			Status:         evergreen.TaskFailed,
+			DispatchTime:   time.Now(),
+		}
+		So(displayTask.Insert(), ShouldBeNil)
+
 		v := &serviceModel.Version{Id: "v1"}
 		So(v.Insert(), ShouldBeNil)
 		b := build.Build{Id: "b0", Version: "v1", Activated: true}
 		So(b.Insert(), ShouldBeNil)
+
 		ctx := context.Background()
 		Convey("and an error from the service function", func() {
-			testTask2 := task.Task{
-				Id:           "testTaskId2",
+			testTask4 := task.Task{
+				Id:           "testTaskId4",
 				Activated:    false,
 				Secret:       "initialSecret",
 				DispatchTime: timeNow,
@@ -1160,9 +1162,9 @@ func TestTaskResetExecute(t *testing.T) {
 				Version:      "v1",
 				Status:       evergreen.TaskStarted,
 			}
-			So(testTask2.Insert(), ShouldBeNil)
+			So(testTask4.Insert(), ShouldBeNil)
 			trh := &taskRestartHandler{
-				taskId:   "testTaskId2",
+				taskId:   "testTaskId4",
 				username: "testUser",
 			}
 			resp := trh.Run(ctx)
@@ -1173,7 +1175,7 @@ func TestTaskResetExecute(t *testing.T) {
 
 		})
 
-		Convey("calling TryReset should reset the task", func() {
+		Convey("calling TaskRestartHandler should reset the task", func() {
 			trh := &taskRestartHandler{
 				taskId:   "testTaskId",
 				username: "testUser",
@@ -1188,6 +1190,29 @@ func TestTaskResetExecute(t *testing.T) {
 			dbTask, err := task.FindOneId("testTaskId")
 			So(err, ShouldBeNil)
 			So(dbTask.Secret, ShouldNotResemble, "initialSecret")
+		})
+
+		Convey("calling TaskRestartHandler should reset the task with failedonly", func() {
+			trh := &taskRestartHandler{
+				taskId:     "displayTask",
+				username:   "testUser",
+				FailedOnly: true,
+			}
+
+			res := trh.Run(ctx)
+			So(res.Status(), ShouldEqual, http.StatusOK)
+			resTask, ok := res.Data().(*model.APITask)
+			So(ok, ShouldBeTrue)
+			So(resTask.Activated, ShouldBeTrue)
+			So(resTask.DispatchTime, ShouldEqual, nil)
+			dbTask2, err := task.FindOneId("testTaskId2")
+			So(err, ShouldBeNil)
+			So(dbTask2.Secret, ShouldNotResemble, "initialSecret")
+			So(dbTask2.Status, ShouldEqual, evergreen.TaskUndispatched)
+			dbTask3, err := task.FindOneId("testTaskId3")
+			So(err, ShouldBeNil)
+			So(dbTask3.Secret, ShouldResemble, "initialSecret")
+			So(dbTask3.Status, ShouldEqual, evergreen.TaskSucceeded)
 		})
 	})
 
@@ -1266,24 +1291,17 @@ func TestOptionsRequest(t *testing.T) {
 }
 
 func validatePaginatedResponse(t *testing.T, h gimlet.RouteHandler, expected []interface{}, pages *gimlet.ResponsePages) {
-	if !assert.NotNil(t, h) {
-		return
-	}
-	if !assert.NotNil(t, pages) {
-		return
-	}
+	require.NotNil(t, h)
+	require.NotNil(t, pages)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
 	resp := h.Run(ctx)
-	assert.NotNil(t, resp)
-	assert.Equal(t, http.StatusOK, resp.Status())
-
+	require.NotNil(t, resp)
+	require.Equal(t, http.StatusOK, resp.Status())
 	rpg := resp.Pages()
-	if !assert.NotNil(t, rpg) {
-		return
-	}
+	require.NotNil(t, rpg)
 
 	assert.True(t, pages.Next != nil || pages.Prev != nil)
 	assert.True(t, rpg.Next != nil || rpg.Prev != nil)

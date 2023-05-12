@@ -6,14 +6,18 @@ import (
 	"net/http"
 	"testing"
 
+	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
+	"github.com/evergreen-ci/evergreen/mock"
 	serviceModel "github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
+	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
 	"github.com/stretchr/testify/suite"
+	"gopkg.in/yaml.v3"
 )
 
 ////////////////////////////////////////////////////////////////////////
@@ -21,46 +25,118 @@ import (
 // Tests for fetch build by id
 
 type BuildByIdSuite struct {
-	rm gimlet.RouteHandler
 	suite.Suite
+	rm     gimlet.RouteHandler
+	ctx    context.Context
+	cancel context.CancelFunc
+	env    evergreen.Environment
 }
 
-func TestBuildSuite(t *testing.T) {
+func TestBuildByIdSuite(t *testing.T) {
 	suite.Run(t, new(BuildByIdSuite))
 }
 
 func (s *BuildByIdSuite) SetupSuite() {
-	s.NoError(db.ClearCollections(serviceModel.ProjectRefCollection, build.Collection))
+	s.NoError(db.ClearCollections(serviceModel.ProjectRefCollection, build.Collection, task.Collection, serviceModel.VersionCollection, serviceModel.ParserProjectCollection))
 	projRef := serviceModel.ProjectRef{Repo: "project", Id: "branch"}
 	s.NoError(projRef.Insert())
+	tasks := []task.Task{
+		{Id: "task1", Status: evergreen.TaskFailed, BuildId: "build1", DisplayOnly: true},
+		{Id: "task2", Status: evergreen.TaskSucceeded, BuildId: "build2"},
+	}
+	for _, task := range tasks {
+		s.Require().NoError(task.Insert())
+	}
 	builds := []build.Build{
-		{Id: "build1", Project: "branch"},
-		{Id: "build2", Project: "notbranch"},
+		{
+			Id:           "build1",
+			Version:      "myVersion",
+			BuildVariant: "build_name",
+			Project:      "branch",
+			Tasks: []build.TaskCache{
+				{Id: "task1"},
+			},
+		},
+		{
+			Id:           "build2",
+			Version:      "myVersion",
+			BuildVariant: "other_build_name",
+			Project:      "notbranch",
+			Tasks: []build.TaskCache{
+				{Id: "task2"},
+			},
+		},
 	}
-	for _, item := range builds {
-		s.Require().NoError(item.Insert())
+	for _, build := range builds {
+		s.Require().NoError(build.Insert())
 	}
+
+	v := serviceModel.Version{
+		Id: "myVersion",
+	}
+	s.Require().NoError(v.Insert())
+
+	configFile := `
+buildvariants:
+- display_name: "My Build"
+  name: "build_name"
+  cron: "@daily"
+  batchtime: 0
+- display_name: "My Other Build"
+  name: "other_build_name"
+`
+	var pp *serviceModel.ParserProject
+	s.NoError(yaml.Unmarshal([]byte(configFile), &pp))
+	pp.Id = "myVersion"
+	s.NoError(pp.Insert())
 }
 
 func (s *BuildByIdSuite) SetupTest() {
-	s.rm = makeGetBuildByID()
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	env := &mock.Environment{}
+	s.Require().NoError(env.Configure(s.ctx))
+	s.env = env
+	s.rm = makeGetBuildByID(s.env)
 }
 
-func (s *BuildByIdSuite) TestFindByIdProjFound() {
+func (s *BuildByIdSuite) TearDownTest() {
+	s.cancel()
+}
+
+func (s *BuildByIdSuite) TestFindBuildById() {
 	s.rm.(*buildGetHandler).buildId = "build1"
-	resp := s.rm.Run(context.TODO())
+	resp := s.rm.Run(s.ctx)
 	s.Equal(resp.Status(), http.StatusOK)
-	s.NotNil(resp.Data())
+	s.Require().NotNil(resp.Data())
 
 	b, ok := (resp.Data()).(*model.APIBuild)
 	s.True(ok)
 	s.Equal(utility.ToStringPtr("build1"), b.Id)
 	s.Equal(utility.ToStringPtr("branch"), b.ProjectId)
+	s.Equal("task1", b.TaskCache[0].Id)
+	s.Equal(evergreen.TaskFailed, b.TaskCache[0].Status)
+	s.Equal("@daily", utility.FromStringPtr(b.DefinitionInfo.CronBatchTime))
+	s.NotNil(b.DefinitionInfo.BatchTime)
+	s.Equal(0, utility.FromIntPtr(b.DefinitionInfo.BatchTime))
+
+	s.rm.(*buildGetHandler).buildId = "build2"
+	resp = s.rm.Run(s.ctx)
+	s.Equal(resp.Status(), http.StatusOK)
+	s.NotNil(resp.Data())
+
+	b, ok = (resp.Data()).(*model.APIBuild)
+	s.True(ok)
+	s.Equal(utility.ToStringPtr("build2"), b.Id)
+	s.Equal(utility.ToStringPtr("notbranch"), b.ProjectId)
+	s.Equal("task2", b.TaskCache[0].Id)
+	s.Equal(evergreen.TaskSucceeded, b.TaskCache[0].Status)
+	s.Nil(b.DefinitionInfo.CronBatchTime)
+	s.Nil(b.DefinitionInfo.BatchTime)
 }
 
-func (s *BuildByIdSuite) TestFindByIdFail() {
+func (s *BuildByIdSuite) TestFindBuildByIdFail() {
 	s.rm.(*buildGetHandler).buildId = "build3"
-	resp := s.rm.Run(context.TODO())
+	resp := s.rm.Run(s.ctx)
 	s.NotEqual(resp.Status(), http.StatusOK)
 }
 
@@ -83,6 +159,12 @@ func (s *BuildChangeStatusSuite) SetupSuite() {
 		{Id: "build1", Version: "v1"},
 		{Id: "build2", Version: "v1"},
 	}
+	task := &task.Task{
+		Id:      "task",
+		BuildId: "build1",
+		Status:  evergreen.TaskWillRun,
+	}
+	s.NoError(task.Insert())
 	s.NoError((&serviceModel.Version{Id: "v1"}).Insert())
 	for _, item := range builds {
 		s.Require().NoError(item.Insert())
@@ -225,14 +307,16 @@ func TestBuildRestartSuite(t *testing.T) {
 }
 
 func (s *BuildRestartSuite) SetupSuite() {
-	s.NoError(db.ClearCollections(build.Collection))
+	s.NoError(db.ClearCollections(build.Collection, serviceModel.VersionCollection))
 	builds := []build.Build{
-		{Id: "build1", Project: "branch"},
-		{Id: "build2", Project: "notbranch"},
+		{Id: "build1", Project: "branch", Version: "version"},
+		{Id: "build2", Project: "notbranch", Version: "version"},
 	}
 	for _, item := range builds {
 		s.Require().NoError(item.Insert())
 	}
+	v := &serviceModel.Version{Id: "version"}
+	s.Require().NoError(v.Insert())
 }
 
 func (s *BuildRestartSuite) SetupTest() {

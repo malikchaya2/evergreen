@@ -91,13 +91,17 @@ type cliIntent struct {
 	// GitInfo contains information about the author's git environment.
 	GitInfo *GitMetadata `bson:"git_info,omitempty"`
 
+	// RepeatDefinition reuses the latest patch's task/variants (if no patch ID is provided)
 	RepeatDefinition bool `bson:"reuse_definition"`
-
+	// RepeatFailed reuses the latest patch's failed tasks (if no patch ID is provided)
 	RepeatFailed bool `bson:"repeat_failed"`
+	// RepeatPatchId uses the given patch to reuse the task/variant definitions
+	RepeatPatchId string `bson:"repeat_patch_id"`
 }
 
 // BSON fields for the patches
-// nolint
+//
+//nolint:unused
 var (
 	cliDocumentIDKey    = bsonutil.MustHaveTag(cliIntent{}, "DocumentID")
 	cliPatchFileIDKey   = bsonutil.MustHaveTag(cliIntent{}, "PatchFileID")
@@ -165,12 +169,12 @@ func (c *cliIntent) ShouldFinalizePatch() bool {
 	return c.Finalize
 }
 
-func (c *cliIntent) ReusePreviousPatchDefinition() bool {
-	return c.RepeatDefinition
+func (c *cliIntent) RepeatPreviousPatchDefinition() (string, bool) {
+	return c.RepeatPatchId, c.RepeatDefinition
 }
 
-func (c *cliIntent) RepeatFailedTasksAndVariants() bool {
-	return c.RepeatFailed
+func (c *cliIntent) RepeatFailedTasksAndVariants() (string, bool) {
+	return c.RepeatPatchId, c.RepeatFailed
 }
 
 func (g *cliIntent) RequesterIdentity() string {
@@ -236,6 +240,7 @@ type CLIIntentParams struct {
 	TriggerAliases   []string
 	RepeatDefinition bool
 	RepeatFailed     bool
+	RepeatPatchId    string
 	SyncParams       SyncAtEndOptions
 }
 
@@ -249,14 +254,15 @@ func NewCliIntent(params CLIIntentParams) (Intent, error) {
 	if params.BaseGitHash == "" {
 		return nil, errors.New("no base hash provided")
 	}
-	if params.Finalize {
-		if params.Alias == "" {
-			if len(params.Variants) == 0 {
-				return nil, errors.New("no variants provided")
-			}
-			if len(params.Tasks) == 0 {
-				return nil, errors.New("no tasks provided")
-			}
+	if params.Finalize && params.Alias == "" && !params.RepeatFailed && !params.RepeatDefinition {
+		if len(params.Variants)+len(params.RegexVariants)+len(params.Tasks)+len(params.RegexTasks) == 0 {
+			return nil, errors.New("no tasks or variants provided")
+		}
+		if len(params.Variants)+len(params.RegexVariants) == 0 {
+			return nil, errors.New("no variants provided")
+		}
+		if len(params.Tasks)+len(params.RegexTasks) == 0 {
+			return nil, errors.New("no tasks provided")
 		}
 	}
 	if len(params.SyncParams.BuildVariants) != 0 && len(params.SyncParams.Tasks) == 0 {
@@ -298,6 +304,7 @@ func NewCliIntent(params CLIIntentParams) (Intent, error) {
 		GitInfo:            params.GitInfo,
 		RepeatDefinition:   params.RepeatDefinition,
 		RepeatFailed:       params.RepeatFailed,
+		RepeatPatchId:      params.RepeatPatchId,
 	}, nil
 }
 

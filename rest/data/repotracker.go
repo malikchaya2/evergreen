@@ -11,7 +11,7 @@ import (
 	"github.com/evergreen-ci/evergreen/units"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/amboy"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
@@ -23,7 +23,7 @@ const branchRefPrefix = "refs/heads/"
 
 // TriggerRepotracker creates an amboy job to get the commits from a
 // Github Push Event
-func TriggerRepotracker(q amboy.Queue, msgID string, event *github.PushEvent) error {
+func TriggerRepotracker(ctx context.Context, q amboy.Queue, msgID string, event *github.PushEvent) error {
 	branch, err := validatePushEvent(event)
 	if err != nil {
 		grip.Error(message.WrapError(err, message.Fields{
@@ -99,15 +99,14 @@ func TriggerRepotracker(q amboy.Queue, msgID string, event *github.PushEvent) er
 	failed := []string{}
 	catcher := grip.NewSimpleCatcher()
 	for i := range refs {
-		if !refs[i].DoesTrackPushEvents() || !refs[i].IsEnabled() || refs[i].IsRepotrackerDisabled() {
+		if !refs[i].DoesTrackPushEvents() || !refs[i].Enabled || refs[i].IsRepotrackerDisabled() {
 			unactionable = append(unactionable, refs[i].Id)
 			continue
 		}
 
-		job := units.NewRepotrackerJob(fmt.Sprintf("github-push-%s", msgID), refs[i].Id)
-		job.SetPriority(1)
+		j := units.NewRepotrackerJob(fmt.Sprintf("github-push-%s", msgID), refs[i].Id)
 
-		if err := q.Put(context.TODO(), job); err != nil {
+		if err := amboy.EnqueueUniqueJob(ctx, q, j); err != nil {
 			catcher.Wrap(err, "enqueueing repotracker job for GitHub push events")
 			failed = append(failed, refs[i].Id)
 

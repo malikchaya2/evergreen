@@ -5,12 +5,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/agent/internal"
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	"github.com/evergreen-ci/evergreen/model"
-	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/mitchellh/mapstructure"
 	"github.com/mongodb/grip"
 	"github.com/pkg/errors"
@@ -26,6 +27,11 @@ type xunitResults struct {
 	base
 }
 
+const (
+	systemOut = "system-out:"
+	systemErr = "system-err:"
+)
+
 func xunitResultsFactory() Command   { return &xunitResults{} }
 func (c *xunitResults) Name() string { return evergreen.AttachXUnitResultsCommandName }
 
@@ -33,7 +39,7 @@ func (c *xunitResults) Name() string { return evergreen.AttachXUnitResultsComman
 // to satisfy the 'Command' interface
 func (c *xunitResults) ParseParams(params map[string]interface{}) error {
 	if err := mapstructure.Decode(params, c); err != nil {
-		return errors.Wrapf(err, "error decoding '%s' params", c.Name())
+		return errors.Wrap(err, "decoding mapstructure params")
 	}
 
 	if c.File == "" && len(c.Files) == 0 {
@@ -54,10 +60,10 @@ func (c *xunitResults) expandParams(conf *internal.TaskConfig) error {
 	var err error
 	for idx, f := range c.Files {
 		c.Files[idx], err = conf.Expansions.ExpandString(f)
-		catcher.Add(err)
+		catcher.Wrapf(err, "expanding file '%s'", f)
 	}
 
-	return errors.Wrapf(catcher.Resolve(), "problem expanding paths")
+	return catcher.Resolve()
 }
 
 // Execute carries out the AttachResultsCommand command - this is required
@@ -66,19 +72,26 @@ func (c *xunitResults) Execute(ctx context.Context,
 	comm client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 
 	if err := c.expandParams(conf); err != nil {
-		return err
+		return errors.Wrap(err, "applying expansions")
 	}
 
 	errChan := make(chan error)
 	go func() {
-		errChan <- c.parseAndUploadResults(ctx, conf, logger, comm)
+		err := c.parseAndUploadResults(ctx, conf, logger, comm)
+		select {
+		case errChan <- err:
+			return
+		case <-ctx.Done():
+			logger.Task().Infof("Context canceled waiting to parse and upload results: %s.", ctx.Err())
+			return
+		}
 	}()
 
 	select {
 	case err := <-errChan:
 		return errors.WithStack(err)
 	case <-ctx.Done():
-		logger.Execution().Info("Received signal to terminate execution of attach xunit results command")
+		logger.Execution().Infof("Canceled while parsing and uploading results for command '%s': %s.", c.Name(), ctx.Err())
 		return nil
 	}
 }
@@ -90,13 +103,19 @@ func getFilePaths(workDir string, files []string) ([]string, error) {
 	out := []string{}
 
 	for _, fileSpec := range files {
-		paths, err := filepath.Glob(filepath.Join(workDir, fileSpec))
+		relativeToWorkDir := strings.TrimPrefix(filepath.ToSlash(fileSpec), filepath.ToSlash(workDir))
+		path := filepath.Join(workDir, relativeToWorkDir)
+		paths, err := filepath.Glob(path)
 		catcher.Add(err)
 		out = append(out, paths...)
 	}
 
 	if catcher.HasErrors() {
 		return nil, errors.Wrapf(catcher.Resolve(), "%d incorrect file specifications", catcher.Len())
+	}
+	// Only error for no files if the user provided files.
+	if len(out) == 0 && len(files) > 0 {
+		return nil, errors.New("Files parameter was provided but no XML files matched")
 	}
 
 	return out, nil
@@ -106,7 +125,7 @@ func (c *xunitResults) parseAndUploadResults(ctx context.Context, conf *internal
 	logger client.LoggerProducer, comm client.Communicator) error {
 
 	cumulative := testcaseAccumulator{
-		tests:           []task.TestResult{},
+		tests:           []testresult.TestResult{},
 		logs:            []*model.TestLog{},
 		logIdxToTestIdx: []int{},
 	}
@@ -120,77 +139,79 @@ func (c *xunitResults) parseAndUploadResults(ctx context.Context, conf *internal
 		file       *os.File
 		testSuites []testSuite
 	)
+	numInvalid := 0
 	for _, reportFileLoc := range reportFilePaths {
-		if ctx.Err() != nil {
-			return errors.New("operation canceled")
+		if err := ctx.Err(); err != nil {
+			return errors.Wrapf(err, "canceled while parsing xunit file '%s'", reportFileLoc)
 		}
 
 		stat, err := os.Stat(reportFileLoc)
 		if os.IsNotExist(err) {
-			logger.Task().Infof("result file '%s' does not exist", reportFileLoc)
+			numInvalid += 1
+			logger.Task().Infof("Result file '%s' does not exist.", reportFileLoc)
 			continue
 		}
 
 		if stat.IsDir() {
-			logger.Task().Infof("result file '%s' is a directory", reportFileLoc)
+			numInvalid += 1
+			logger.Task().Infof("Result file '%s' is a directory, not a file.", reportFileLoc)
 			continue
 		}
 
 		file, err = os.Open(reportFileLoc)
 		if err != nil {
-			return errors.Wrap(err, "couldn't open xunit file")
+			return errors.Wrapf(err, "opening xunit file '%s'", reportFileLoc)
 		}
 
 		testSuites, err = parseXMLResults(file)
 		if err != nil {
 			catcher := grip.NewBasicCatcher()
-			catcher.Wrap(err, "error parsing xunit file")
-			catcher.Wrap(file.Close(), "closing xunit file")
+			catcher.Wrapf(err, "parsing xunit file '%s'", reportFileLoc)
+			catcher.Wrapf(file.Close(), "closing xunit file '%s'", reportFileLoc)
 			return catcher.Resolve()
 		}
 
 		if err = file.Close(); err != nil {
-			return errors.Wrap(err, "error closing xunit file")
+			return errors.Wrapf(err, "closing xunit file '%s'", reportFileLoc)
 		}
 
 		// go through all the tests
 		for idx, suite := range testSuites {
-			cumulative = addTestCasesForSuite(suite, idx, conf, cumulative)
+			cumulative = addTestCasesForSuite(suite, idx, conf, cumulative, logger)
 		}
 	}
-
-	if len(cumulative.tests) == 0 {
-		return errors.New("no test results found")
+	if len(reportFilePaths) == numInvalid {
+		return errors.New("all given file paths do not exist or are directories")
 	}
 
 	succeeded := 0
 	for i, log := range cumulative.logs {
-		if ctx.Err() != nil {
-			return errors.New("operation canceled")
+		if err := ctx.Err(); err != nil {
+			return errors.Wrap(err, "canceled while sending test logs")
 		}
 
-		logId, err := sendTestLog(ctx, comm, conf, log)
-		if err != nil {
-			logger.Task().Warningf("problem uploading logs for %s", log.Name)
+		if err := sendTestLog(ctx, comm, conf, log); err != nil {
+			logger.Task().Error(errors.Wrap(err, "sending test log"))
 			continue
 		} else {
 			succeeded++
 		}
-		cumulative.tests[cumulative.logIdxToTestIdx[i]].LogId = logId
 		cumulative.tests[cumulative.logIdxToTestIdx[i]].LineNum = 1
 	}
-	logger.Task().Infof("Attach test logs succeeded for %d of %d files", succeeded, len(cumulative.logs))
-
-	return sendTestResults(ctx, comm, logger, conf, &task.LocalTestResults{Results: cumulative.tests})
+	logger.Task().Infof("Posting test logs succeeded for %d of %d files.", succeeded, len(cumulative.logs))
+	if len(cumulative.tests) > 0 {
+		return sendTestResults(ctx, comm, logger, conf, cumulative.tests)
+	}
+	return nil
 }
 
 type testcaseAccumulator struct {
-	tests           []task.TestResult
+	tests           []testresult.TestResult
 	logs            []*model.TestLog
 	logIdxToTestIdx []int
 }
 
-func addTestCasesForSuite(suite testSuite, idx int, conf *internal.TaskConfig, cumulative testcaseAccumulator) testcaseAccumulator {
+func addTestCasesForSuite(suite testSuite, idx int, conf *internal.TaskConfig, cumulative testcaseAccumulator, logger client.LoggerProducer) testcaseAccumulator {
 	if len(suite.TestCases) == 0 && suite.Error != nil {
 		// if no test cases but an error, generate a default test case
 		tc := testCase{
@@ -205,13 +226,10 @@ func addTestCasesForSuite(suite testSuite, idx int, conf *internal.TaskConfig, c
 	}
 	for _, tc := range suite.TestCases {
 		// logs are only created when a test case does not succeed
-		test, log := tc.toModelTestResultAndLog(conf)
+		test, log := tc.toModelTestResultAndLog(conf, logger)
 		if log != nil {
-			if suite.SysOut != "" {
-				log.Lines = append(log.Lines, "system-out:", suite.SysOut)
-			}
-			if suite.SysErr != "" {
-				log.Lines = append(log.Lines, "system-err:", suite.SysErr)
+			if systemLogs := constructSystemLogs(suite.SysOut, suite.SysErr); len(systemLogs) > 0 {
+				log.Lines = append(log.Lines, systemLogs...)
 			}
 			cumulative.logs = append(cumulative.logs, log)
 			cumulative.logIdxToTestIdx = append(cumulative.logIdxToTestIdx, len(cumulative.tests))
@@ -219,7 +237,18 @@ func addTestCasesForSuite(suite testSuite, idx int, conf *internal.TaskConfig, c
 		cumulative.tests = append(cumulative.tests, test)
 	}
 	if suite.NestedSuites != nil {
-		cumulative = addTestCasesForSuite(*suite.NestedSuites, idx, conf, cumulative)
+		cumulative = addTestCasesForSuite(*suite.NestedSuites, idx, conf, cumulative, logger)
 	}
 	return cumulative
+}
+
+func constructSystemLogs(sysOut, sysErr string) []string {
+	var lines []string
+	if sysOut != "" {
+		lines = append(lines, systemOut, sysOut)
+	}
+	if sysErr != "" {
+		lines = append(lines, systemErr, sysErr)
+	}
+	return lines
 }

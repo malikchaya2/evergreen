@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/aws/aws-sdk-go/aws"
+	"github.com/aws/aws-sdk-go/aws/awserr"
 	"github.com/aws/aws-sdk-go/aws/credentials"
 	"github.com/aws/aws-sdk-go/service/ec2"
 	"github.com/evergreen-ci/birch"
@@ -13,6 +14,7 @@ import (
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model/distro"
 	"github.com/evergreen-ci/evergreen/model/host"
+	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -32,6 +34,7 @@ func TestFleet(t *testing.T) {
 
 			statuses, err := m.GetInstanceStatuses(context.Background(), hosts)
 			assert.NoError(t, err)
+			assert.Len(t, statuses, len(hosts), "should return same number of statuses as there are hosts")
 			for _, status := range statuses {
 				assert.Equal(t, StatusRunning, status)
 			}
@@ -53,6 +56,22 @@ func TestFleet(t *testing.T) {
 			hDb, err := host.FindOneId("h1")
 			assert.NoError(t, err)
 			assert.Equal(t, "us-east-1a", hDb.Zone)
+		},
+		"GetInstanceStatusNonExistentInstance": func(*testing.T) {
+			awsError := awserr.New(EC2ErrorNotFound, "The instance ID 'test-id' does not exist", nil)
+			wrappedAwsError := errors.Wrap(awsError, "EC2 API returned error for DescribeInstances")
+			mockClient := m.client.(*awsClientMock)
+			mockClient.RequestGetInstanceInfoError = wrappedAwsError
+			status, err := m.GetInstanceStatus(context.Background(), h)
+			assert.NoError(t, err)
+			assert.Equal(t, StatusNonExistent, status)
+		},
+		"GetInstanceStatusNonExistentReservation": func(*testing.T) {
+			mockClient := m.client.(*awsClientMock)
+			mockClient.RequestGetInstanceInfoError = noReservationError
+			status, err := m.GetInstanceStatus(context.Background(), h)
+			assert.NoError(t, err)
+			assert.Equal(t, StatusNonExistent, status)
 		},
 		"TerminateInstance": func(*testing.T) {
 			assert.NoError(t, m.TerminateInstance(context.Background(), h, "evergreen", ""))
@@ -77,7 +96,7 @@ func TestFleet(t *testing.T) {
 			assert.Equal(t, "ht_1", *mockClient.DeleteLaunchTemplateInput.LaunchTemplateName)
 		},
 		"RequestFleet": func(*testing.T) {
-			ec2Settings := &EC2ProviderSettings{VpcName: "my_vpc", InstanceType: "instanceType0"}
+			ec2Settings := &EC2ProviderSettings{VpcName: "my_vpc", InstanceType: "instanceType0", IAMInstanceProfileARN: "my-profile"}
 
 			instanceID, err := m.requestFleet(context.Background(), h, ec2Settings)
 			assert.NoError(t, err)
@@ -89,7 +108,8 @@ func TestFleet(t *testing.T) {
 		},
 		"MakeOverrides": func(*testing.T) {
 			ec2Settings := &EC2ProviderSettings{
-				InstanceType: "instanceType0",
+				InstanceType:          "instanceType0",
+				IAMInstanceProfileARN: "my-profile",
 			}
 			overrides, err := m.makeOverrides(context.Background(), ec2Settings)
 			assert.NoError(t, err)
@@ -104,8 +124,9 @@ func TestFleet(t *testing.T) {
 			assert.Nil(t, overrides)
 
 			ec2Settings = &EC2ProviderSettings{
-				InstanceType: "instanceType0",
-				SubnetId:     "subnet-654321",
+				InstanceType:          "instanceType0",
+				IAMInstanceProfileARN: "my-profile",
+				SubnetId:              "subnet-654321",
 			}
 			overrides, err = m.makeOverrides(context.Background(), ec2Settings)
 			assert.NoError(t, err)

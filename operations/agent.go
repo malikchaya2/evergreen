@@ -2,10 +2,12 @@ package operations
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/agent"
 	"github.com/evergreen-ci/evergreen/agent/command"
 	"github.com/mongodb/grip"
@@ -33,6 +35,7 @@ func Agent() cli.Command {
 		modeFlagName             = "mode"
 		podIDFlagName            = "pod_id"
 		podSecretFlagName        = "pod_secret"
+		versionFlagName          = "version"
 	)
 
 	return cli.Command{
@@ -44,7 +47,7 @@ func Agent() cli.Command {
 		Flags: []cli.Flag{
 			cli.StringFlag{
 				Name:  hostIDFlagName,
-				Usage: "id of machine agent is running on (applies only to host mode)",
+				Usage: "the ID of the host the agent is running on (applies only to host mode)",
 			},
 			cli.StringFlag{
 				Name:  hostSecretFlagName,
@@ -91,26 +94,32 @@ func Agent() cli.Command {
 				Usage: "the mode that the agent should run in (host, pod)",
 				Value: "host",
 			},
+			cli.BoolFlag{
+				Name:  joinFlagNames(versionFlagName, "v"),
+				Usage: "print the agent revision of the current binary and exit",
+			},
 		},
 		Before: mergeBeforeFuncs(
-			requireStringFlag(agentAPIServerURLFlagName),
-			requireStringFlag(workingDirectoryFlagName),
 			func(c *cli.Context) error {
+				if c.Bool(versionFlagName) {
+					return nil
+				}
+
+				catcher := grip.NewBasicCatcher()
+				catcher.Add(requireStringFlag(agentAPIServerURLFlagName)(c))
+				catcher.Add(requireStringFlag(workingDirectoryFlagName)(c))
 				mode := c.String(modeFlagName)
 				switch mode {
 				case string(agent.HostMode):
-					catcher := grip.NewBasicCatcher()
 					catcher.Add(requireStringFlag(hostIDFlagName)(c))
 					catcher.Add(requireStringFlag(hostSecretFlagName)(c))
-					return catcher.Resolve()
 				case string(agent.PodMode):
-					catcher := grip.NewBasicCatcher()
 					catcher.Add(requireStringFlag(podIDFlagName)(c))
 					catcher.Add(requireStringFlag(podSecretFlagName)(c))
-					return catcher.Resolve()
 				default:
 					return errors.Errorf("invalid mode '%s'", mode)
 				}
+				return catcher.Resolve()
 			},
 			func(c *cli.Context) error {
 				grip.SetName("evergreen.agent")
@@ -118,6 +127,11 @@ func Agent() cli.Command {
 			},
 		),
 		Action: func(c *cli.Context) error {
+			if c.Bool(versionFlagName) {
+				fmt.Println(evergreen.AgentVersion)
+				return nil
+			}
+
 			opts := agent.Options{
 				HostID:           c.String(hostIDFlagName),
 				HostSecret:       c.String(hostSecretFlagName),
@@ -132,7 +146,7 @@ func Agent() cli.Command {
 			}
 
 			if err := os.MkdirAll(opts.WorkingDirectory, 0777); err != nil {
-				return errors.Wrapf(err, "problem creating working directory '%s'", opts.WorkingDirectory)
+				return errors.Wrapf(err, "creating working directory '%s'", opts.WorkingDirectory)
 			}
 
 			grip.Info(message.Fields{
@@ -147,20 +161,20 @@ func Agent() cli.Command {
 
 			agt, err := agent.New(ctx, opts, c.String(agentAPIServerURLFlagName))
 			if err != nil {
-				return errors.Wrap(err, "problem constructing agent")
+				return errors.Wrap(err, "constructing agent")
 			}
 
-			defer agt.Close()
+			defer agt.Close(ctx)
 
 			go hardShutdownForSignals(ctx, cancel)
 
 			sender, err := agt.GetSender(ctx, opts.LogPrefix)
 			if err != nil {
-				return errors.Wrap(err, "problem configuring logger")
+				return errors.Wrap(err, "configuring logger")
 			}
 
 			if err = grip.SetSender(sender); err != nil {
-				return errors.Wrap(err, "problem setting up logger")
+				return errors.Wrap(err, "setting up global logger")
 			}
 			agt.SetDefaultLogger(sender)
 

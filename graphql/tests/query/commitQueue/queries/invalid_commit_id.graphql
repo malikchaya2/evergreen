@@ -1,0 +1,13 @@
+{
+  commitQueue(projectIdentifier: "no_queue") {
+    projectId
+    queue {
+      issue
+      version
+      modules {
+        module
+        issue
+      }
+    }
+  }
+}

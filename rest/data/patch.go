@@ -15,7 +15,7 @@ import (
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/units"
 	"github.com/evergreen-ci/gimlet"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
@@ -46,7 +46,11 @@ func FindPatchesByProject(projectId string, ts time.Time, limit int) ([]restMode
 	}
 	for _, p := range patches {
 		apiPatch := restModel.APIPatch{}
-		err = apiPatch.BuildFromService(p)
+		err = apiPatch.BuildFromService(p, &restModel.APIPatchArgs{
+			IncludeProjectIdentifier:   true,
+			IncludeCommitQueuePosition: true,
+			IncludeChildPatches:        true,
+		})
 		if err != nil {
 			return nil, errors.Wrapf(err, "converting patch '%s' to API model", p.Id.Hex())
 		}
@@ -74,7 +78,11 @@ func FindPatchById(patchId string) (*restModel.APIPatch, error) {
 	}
 
 	apiPatch := restModel.APIPatch{}
-	err = apiPatch.BuildFromService(*p)
+	err = apiPatch.BuildFromService(*p, &restModel.APIPatchArgs{
+		IncludeChildPatches:        true,
+		IncludeProjectIdentifier:   true,
+		IncludeCommitQueuePosition: true,
+	})
 	if err != nil {
 		return nil, errors.Wrapf(err, "converting patch '%s' to API model", p.Id.Hex())
 	}
@@ -155,7 +163,11 @@ func FindPatchesByUser(user string, ts time.Time, limit int) ([]restModel.APIPat
 	apiPatches := []restModel.APIPatch{}
 	for _, p := range patches {
 		apiPatch := restModel.APIPatch{}
-		err = apiPatch.BuildFromService(p)
+		err = apiPatch.BuildFromService(p, &restModel.APIPatchArgs{
+			IncludeProjectIdentifier:   true,
+			IncludeCommitQueuePosition: true,
+			IncludeChildPatches:        true,
+		})
 		if err != nil {
 			return nil, errors.Wrapf(err, "converting patch '%s' to API model", p.Id.Hex())
 		}
@@ -166,16 +178,16 @@ func FindPatchesByUser(user string, ts time.Time, limit int) ([]restModel.APIPat
 }
 
 // AbortPatchesFromPullRequest aborts patches with the same PR Number,
-// in the same repository, at the pull request's close time
+// in the same repository, at the pull request's close time. This returns
+// whether or not one of the GitHub patches is a commit queue item and is
+// currently merging the PR.
 func AbortPatchesFromPullRequest(event *github.PullRequestEvent) error {
 	owner, repo, err := verifyPullRequestEventForAbort(event)
 	if err != nil {
 		return err
 	}
 
-	err = model.AbortPatchesWithGithubPatchData(*event.PullRequest.ClosedAt, true, "",
-		owner, repo, *event.Number)
-	if err != nil {
+	if err = model.AbortPatchesWithGithubPatchData(event.PullRequest.GetClosedAt().Time, true, "", owner, repo, *event.Number); err != nil {
 		return gimlet.ErrorResponse{
 			StatusCode: http.StatusInternalServerError,
 			Message:    errors.Wrap(err, "aborting patches").Error(),
@@ -199,29 +211,6 @@ func GetPatchRawPatches(patchID string) (map[string]string, error) {
 			StatusCode: http.StatusNotFound,
 			Message:    fmt.Sprintf("patch '%s' not found", patchID),
 		}
-	}
-
-	// set the patch status to the collective status between the parent and child patches
-	if patchDoc.IsParent() {
-		allStatuses := []string{patchDoc.Status}
-		for _, childPatchId := range patchDoc.Triggers.ChildPatches {
-			cp, err := patch.FindOneId(childPatchId)
-			if err != nil {
-				return nil, gimlet.ErrorResponse{
-					StatusCode: http.StatusInternalServerError,
-					Message:    errors.Wrapf(err, "finding child patch '%s'", childPatchId).Error(),
-				}
-			}
-			if cp == nil {
-				return nil, gimlet.ErrorResponse{
-					StatusCode: http.StatusNotFound,
-					Message:    fmt.Sprintf("child patch '%s' not found", childPatchId),
-				}
-			}
-			allStatuses = append(allStatuses, cp.Status)
-		}
-
-		patchDoc.Status = patch.GetCollectiveStatus(allStatuses)
 	}
 
 	if err = patchDoc.FetchPatchFiles(false); err != nil {

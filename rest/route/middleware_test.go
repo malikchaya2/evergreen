@@ -152,6 +152,41 @@ func TestNewProjectAdminMiddleware(t *testing.T) {
 	assert.Equal(http.StatusOK, rw.Code)
 }
 
+func TestNewCanCreateMiddleware(t *testing.T) {
+	assert := assert.New(t)
+	assert.NoError(db.ClearCollections(evergreen.RoleCollection))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := testutil.NewEnvironment(ctx, t)
+	adminRole := gimlet.Role{
+		ID:          "r1",
+		Scope:       "anything",
+		Permissions: map[string]int{evergreen.PermissionProjectSettings: evergreen.ProjectSettingsEdit.Value},
+	}
+	assert.NoError(env.RoleManager().UpdateRole(adminRole))
+
+	opCtx := model.Context{}
+
+	ctx = gimlet.AttachUser(ctx, &user.DBUser{Id: "not.admin"})
+	r, err := http.NewRequest(http.MethodPut, "/projects/makeFromRoute", nil)
+	assert.NoError(err)
+	assert.NotNil(r)
+	r = r.WithContext(context.WithValue(ctx, RequestContext, &opCtx))
+
+	mw := NewCanCreateMiddleware()
+	rw := httptest.NewRecorder()
+
+	mw.ServeHTTP(rw, r, func(rw http.ResponseWriter, r *http.Request) {})
+	assert.Equal(http.StatusUnauthorized, rw.Code)
+
+	ctx = gimlet.AttachUser(ctx, &user.DBUser{Id: "johnny.appleseed", SystemRoles: []string{"r1"}})
+	r = r.WithContext(context.WithValue(ctx, RequestContext, &opCtx))
+
+	rw = httptest.NewRecorder()
+	mw.ServeHTTP(rw, r, func(rw http.ResponseWriter, r *http.Request) {})
+	assert.Equal(http.StatusOK, rw.Code)
+}
+
 func TestCommitQueueItemOwnerMiddlewarePROwner(t *testing.T) {
 	assert := assert.New(t)
 	assert.NoError(db.ClearCollections(model.ProjectRefCollection, commitqueue.Collection, patch.Collection))
@@ -417,7 +452,7 @@ func TestTaskAuthMiddleware(t *testing.T) {
 
 	rw := httptest.NewRecorder()
 	m.ServeHTTP(rw, r, func(rw http.ResponseWriter, r *http.Request) {})
-	assert.Equal(http.StatusUnauthorized, rw.Code)
+	assert.Equal(http.StatusConflict, rw.Code)
 
 	r.Header.Set(evergreen.TaskSecretHeader, "abcdef")
 	rw = httptest.NewRecorder()
@@ -553,11 +588,8 @@ func TestPodAuthMiddleware(t *testing.T) {
 				TaskContainerCreationOpts: pod.TaskContainerCreationOptions{
 					EnvSecrets: map[string]pod.Secret{
 						pod.PodSecretEnvVar: {
-							Name:       "name",
-							Value:      "value",
 							ExternalID: "external_id",
-							Exists:     utility.FalsePtr(),
-							Owned:      utility.TruePtr(),
+							Value:      "value",
 						},
 					},
 				},
@@ -706,11 +738,8 @@ func TestPodOrHostAuthMiddleware(t *testing.T) {
 				TaskContainerCreationOpts: pod.TaskContainerCreationOptions{
 					EnvSecrets: map[string]pod.Secret{
 						pod.PodSecretEnvVar: {
-							Name:       "name",
-							Value:      "value",
 							ExternalID: "external_id",
-							Exists:     utility.FalsePtr(),
-							Owned:      utility.TruePtr(),
+							Value:      "value",
 						},
 					},
 				},
@@ -902,14 +931,14 @@ func TestEventLogPermission(t *testing.T) {
 
 	// no user + private project should 404
 	rw := httptest.NewRecorder()
-	req = gimlet.SetURLVars(req, map[string]string{"resource_type": model.EventResourceTypeProject, "resource_id": proj1.Id})
+	req = gimlet.SetURLVars(req, map[string]string{"resource_type": event.EventResourceTypeProject, "resource_id": proj1.Id})
 	authHandler.ServeHTTP(rw, req, checkPermission)
 	assert.Equal(http.StatusNotFound, rw.Code)
 	assert.Equal(0, counter)
 
 	// have user, project event
 	req = req.WithContext(gimlet.AttachUser(req.Context(), user))
-	req = gimlet.SetURLVars(req, map[string]string{"resource_type": model.EventResourceTypeProject, "resource_id": proj1.Id})
+	req = gimlet.SetURLVars(req, map[string]string{"resource_type": event.EventResourceTypeProject, "resource_id": proj1.Id})
 	rw = httptest.NewRecorder()
 	authHandler.ServeHTTP(rw, req, checkPermission)
 	assert.Equal(http.StatusOK, rw.Code)

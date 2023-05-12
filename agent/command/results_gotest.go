@@ -11,7 +11,7 @@ import (
 	"github.com/evergreen-ci/evergreen/agent/internal"
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	"github.com/evergreen-ci/evergreen/model"
-	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
@@ -40,19 +40,18 @@ func (c *goTestResults) Name() string { return "gotest.parse_files" }
 func (c *goTestResults) ParseParams(params map[string]interface{}) error {
 	var err error
 	if err = mapstructure.Decode(params, c); err != nil {
-		return errors.Wrapf(err, "error decoding '%s' params", c.Name())
+		return errors.Wrap(err, "decoding mapstructure params")
 	}
 
 	if c.OptionalOutput != "" {
 		c.outputIsOptional, err = strconv.ParseBool(c.OptionalOutput)
 		if err != nil {
-			return errors.WithStack(err)
+			return errors.Wrap(err, "parsing optional output parameter as a boolean")
 		}
 	}
 
 	if len(c.Files) == 0 {
-		return errors.Errorf("error validating params: must specify at least one "+
-			"file pattern to parse: '%+v'", params)
+		return errors.Errorf("must specify at least one file pattern to parse")
 	}
 	return nil
 }
@@ -63,9 +62,7 @@ func (c *goTestResults) Execute(ctx context.Context,
 	comm client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 
 	if err := util.ExpandValues(c, conf.Expansions); err != nil {
-		err = errors.Wrap(err, "error expanding params")
-		logger.Task().Errorf("Error parsing goTest files: %+v", err)
-		return err
+		return errors.Wrap(err, "applying expansions")
 	}
 
 	// All file patterns should be relative to the task's working directory.
@@ -91,7 +88,7 @@ func (c *goTestResults) Execute(ctx context.Context,
 	// parse all of the files
 	logs, results, err := parseTestOutputFiles(ctx, logger, conf, outputFiles)
 	if err != nil {
-		return errors.Wrap(err, "error parsing output results")
+		return errors.Wrap(err, "parsing output results")
 	}
 
 	if err := sendTestLogsAndResults(ctx, comm, logger, conf, logs, results); err != nil {
@@ -127,7 +124,7 @@ func globFiles(patterns ...string) ([]string, error) {
 }
 
 // parseTestOutput parses the test results and logs from a single output source.
-func parseTestOutput(ctx context.Context, conf *internal.TaskConfig, report io.Reader, suiteName string) (model.TestLog, []task.TestResult, error) {
+func parseTestOutput(ctx context.Context, conf *internal.TaskConfig, report io.Reader, suiteName string) (model.TestLog, []testresult.TestResult, error) {
 	// parse the output logs
 	parser := &goTestParser{}
 	if err := parser.Parse(report); err != nil {
@@ -147,21 +144,21 @@ func parseTestOutput(ctx context.Context, conf *internal.TaskConfig, report io.R
 		Lines:         logLines,
 	}
 
-	return testLog, ToModelTestResults(parser.Results(), suiteName).Results, nil
+	return testLog, ToModelTestResults(parser.Results(), suiteName), nil
 }
 
 // parseTestOutputFiles parses all of the files that are passed in, and returns
 // the test logs and test results found within.
 func parseTestOutputFiles(ctx context.Context, logger client.LoggerProducer,
-	conf *internal.TaskConfig, outputFiles []string) ([]model.TestLog, [][]task.TestResult, error) {
+	conf *internal.TaskConfig, outputFiles []string) ([]model.TestLog, [][]testresult.TestResult, error) {
 
-	var results [][]task.TestResult
+	var results [][]testresult.TestResult
 	var logs []model.TestLog
 
 	// now, open all the files, and parse the test results
 	for _, outputFile := range outputFiles {
-		if ctx.Err() != nil {
-			return nil, nil, errors.New("command was stopped")
+		if err := ctx.Err(); err != nil {
+			return nil, nil, errors.Wrap(err, "canceled while processing test output files")
 		}
 
 		_, suiteName := filepath.Split(outputFile)
@@ -171,8 +168,7 @@ func parseTestOutputFiles(ctx context.Context, logger client.LoggerProducer,
 		fileReader, err := os.Open(outputFile)
 		if err != nil {
 			// don't bomb out on a single bad file
-			logger.Task().Errorf("Unable to open file '%s' for parsing: %v",
-				outputFile, err)
+			logger.Task().Error(errors.Wrapf(err, "opening file '%s' for parsing", outputFile))
 			continue
 		}
 		defer fileReader.Close() //nolint: evg-lint
@@ -180,7 +176,7 @@ func parseTestOutputFiles(ctx context.Context, logger client.LoggerProducer,
 		log, result, err := parseTestOutput(ctx, conf, fileReader, suiteName)
 		if err != nil {
 			// continue on error
-			logger.Task().Errorf("Error parsing file '%s': %v", outputFile, err)
+			logger.Task().Error(errors.Wrapf(err, "parsing file '%s'", outputFile))
 			continue
 		}
 

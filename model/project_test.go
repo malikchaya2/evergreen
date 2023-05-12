@@ -7,6 +7,8 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
+	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
+	"github.com/evergreen-ci/evergreen/mock"
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/distro"
 	"github.com/evergreen-ci/evergreen/model/event"
@@ -16,6 +18,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/evergreen/thirdparty"
+	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -40,15 +43,16 @@ func TestFindProject(t *testing.T) {
 			projRef := &ProjectRef{
 				Id: "",
 			}
-			version, project, err := FindLatestVersionWithValidProject(projRef.Id)
+			version, project, pp, err := FindLatestVersionWithValidProject(projRef.Id)
 			So(err, ShouldNotBeNil)
 			So(project, ShouldBeNil)
+			So(pp, ShouldBeNil)
 			So(version, ShouldBeNil)
 		})
 
 		Convey("if the project file exists and is valid, the project spec within"+
 			"should be unmarshalled and returned", func() {
-			So(db.ClearCollections(VersionCollection), ShouldBeNil)
+			So(db.ClearCollections(VersionCollection, ParserProjectCollection), ShouldBeNil)
 			v := &Version{
 				Id:         "my_version",
 				Owner:      "fakeowner",
@@ -56,7 +60,9 @@ func TestFindProject(t *testing.T) {
 				Branch:     "fakebranch",
 				Identifier: "project_test",
 				Requester:  evergreen.RepotrackerVersionRequester,
-				Config:     "owner: fakeowner\nrepo: fakerepo\nbranch: fakebranch",
+			}
+			pp := ParserProject{
+				Id: "my_version",
 			}
 			p := &ProjectRef{
 				Id:     "project_test",
@@ -64,13 +70,14 @@ func TestFindProject(t *testing.T) {
 				Repo:   "fakerepo",
 				Branch: "fakebranch",
 			}
+			require.NoError(t, pp.Insert())
 			require.NoError(t, v.Insert(), "failed to insert test version: %v", v)
-			_, _, err := FindLatestVersionWithValidProject(p.Id)
+			_, _, _, err := FindLatestVersionWithValidProject(p.Id)
 			So(err, ShouldBeNil)
 
 		})
 		Convey("if the first version is somehow malformed, return an earlier one", func() {
-			So(db.ClearCollections(VersionCollection), ShouldBeNil)
+			So(db.ClearCollections(VersionCollection, ParserProjectCollection), ShouldBeNil)
 			badVersion := &Version{
 				Id:                  "bad_version",
 				Owner:               "fakeowner",
@@ -78,8 +85,8 @@ func TestFindProject(t *testing.T) {
 				Branch:              "fakebranch",
 				Identifier:          "project_test",
 				Requester:           evergreen.RepotrackerVersionRequester,
-				Config:              "this is just nonsense",
 				RevisionOrderNumber: 10,
+				Errors:              []string{"this is a bad version"},
 			}
 			goodVersion := &Version{
 				Id:                  "good_version",
@@ -88,18 +95,28 @@ func TestFindProject(t *testing.T) {
 				Branch:              "fakebranch",
 				Identifier:          "project_test",
 				Requester:           evergreen.RepotrackerVersionRequester,
-				Config:              "owner: fakeowner\nrepo: fakerepo\nbranch: fakebranch",
 				RevisionOrderNumber: 8,
 			}
+			pp := &ParserProject{}
+			err := util.UnmarshalYAMLWithFallback([]byte("owner: fakeowner\nrepo: fakerepo\nbranch: fakebranch"), &pp)
+			So(err, ShouldBeNil)
+			pp.Id = "good_version"
 			So(badVersion.Insert(), ShouldBeNil)
 			So(goodVersion.Insert(), ShouldBeNil)
-			v, p, err := FindLatestVersionWithValidProject("project_test")
+			So(pp.Insert(), ShouldBeNil)
+			v, p, pp, err := FindLatestVersionWithValidProject("project_test")
 			So(err, ShouldBeNil)
+			So(pp, ShouldNotBeNil)
+			So(pp.Id, ShouldEqual, "good_version")
 			So(p, ShouldNotBeNil)
 			So(p.Owner, ShouldEqual, "fakeowner")
 			So(v.Id, ShouldEqual, "good_version")
 		})
-
+		Convey("error if no version exists", func() {
+			So(db.ClearCollections(VersionCollection, ParserProjectCollection), ShouldBeNil)
+			_, _, _, err := FindLatestVersionWithValidProject("project_test")
+			So(err, ShouldNotBeNil)
+		})
 	})
 
 }
@@ -170,25 +187,26 @@ func TestPopulateBVT(t *testing.T) {
 				{
 					Name:            "task1",
 					ExecTimeoutSecs: 500,
-					Stepback:        boolPtr(false),
+					Stepback:        utility.FalsePtr(),
 					DependsOn:       []TaskUnitDependency{{Name: "other"}},
 					Priority:        1000,
-					Patchable:       boolPtr(false),
+					Patchable:       utility.FalsePtr(),
 				},
 			},
 			BuildVariants: []BuildVariant{
 				{
 					Name:  "test",
-					Tasks: []BuildVariantTaskUnit{{Name: "task1", Priority: 5}},
+					Tasks: []BuildVariantTaskUnit{{Name: "task1", Variant: "test", Priority: 5}},
 				},
 			},
 		}
 
 		Convey("updating a BuildVariantTaskUnit with unset fields", func() {
 			bvt := project.BuildVariants[0].Tasks[0]
-			spec := project.GetSpecForTask("task1")
-			So(spec.Name, ShouldEqual, "task1")
-			bvt.Populate(spec)
+			projectTask := project.FindProjectTask("task1")
+			So(projectTask, ShouldNotBeNil)
+			So(projectTask.Name, ShouldEqual, "task1")
+			bvt.Populate(*projectTask, project.BuildVariants[0])
 
 			Convey("should inherit the unset fields from the Project", func() {
 				So(bvt.Name, ShouldEqual, "task1")
@@ -204,13 +222,15 @@ func TestPopulateBVT(t *testing.T) {
 		Convey("updating a BuildVariantTaskUnit with set fields", func() {
 			bvt := BuildVariantTaskUnit{
 				Name:            "task1",
+				Variant:         "bv",
 				ExecTimeoutSecs: 2,
-				Stepback:        boolPtr(true),
+				Stepback:        utility.TruePtr(),
 				DependsOn:       []TaskUnitDependency{{Name: "task2"}, {Name: "task3"}},
 			}
-			spec := project.GetSpecForTask("task1")
-			So(spec.Name, ShouldEqual, "task1")
-			bvt.Populate(spec)
+			projectTask := project.FindProjectTask("task1")
+			So(projectTask, ShouldNotBeNil)
+			So(projectTask.Name, ShouldEqual, "task1")
+			bvt.Populate(*projectTask, project.BuildVariants[0])
 
 			Convey("should not inherit set fields from the Project", func() {
 				So(bvt.Name, ShouldEqual, "task1")
@@ -271,15 +291,13 @@ func TestIgnoresAllFiles(t *testing.T) {
 	})
 }
 
-func boolPtr(b bool) *bool {
-	return &b
-}
-
 func TestPopulateExpansions(t *testing.T) {
 	assert := assert.New(t)
-	assert.NoError(db.ClearCollections(VersionCollection, patch.Collection, ProjectRefCollection, task.Collection))
+	assert.NoError(db.ClearCollections(VersionCollection, patch.Collection, ProjectRefCollection,
+		task.Collection, ParserProjectCollection))
 	defer func() {
-		assert.NoError(db.ClearCollections(VersionCollection, patch.Collection, ProjectRefCollection, task.Collection))
+		assert.NoError(db.ClearCollections(VersionCollection, patch.Collection, ProjectRefCollection,
+			task.Collection, ParserProjectCollection))
 	}()
 
 	h := host.Host{
@@ -288,24 +306,17 @@ func TestPopulateExpansions(t *testing.T) {
 			Id:      "d1",
 			WorkDir: "/home/evg",
 			Expansions: []distro.Expansion{
-				distro.Expansion{
+				{
 					Key:   "note",
 					Value: "huge success",
 				},
-				distro.Expansion{
+				{
 					Key:   "cake",
 					Value: "truth",
 				},
 			},
 		},
 	}
-	config := `
-buildvariants:
-- name: magic
-  expansions:
-    cake: lie
-    github_org: wut?
-`
 	projectRef := &ProjectRef{
 		Id:         "mci",
 		Identifier: "mci-favorite",
@@ -317,7 +328,6 @@ buildvariants:
 		Author:              "somebody",
 		AuthorEmail:         "somebody@somewhere.com",
 		RevisionOrderNumber: 42,
-		Config:              config,
 		Requester:           evergreen.GitTagRequester,
 		TriggeredByGitTag: GitTag{
 			Tag: "release",
@@ -342,7 +352,7 @@ buildvariants:
 	assert.NoError(err)
 	expansions, err := PopulateExpansions(taskDoc, &h, oauthToken)
 	assert.NoError(err)
-	assert.Len(map[string]string(expansions), 24)
+	assert.Len(map[string]string(expansions), 23)
 	assert.Equal("0", expansions.Get("execution"))
 	assert.Equal("v1", expansions.Get("version_id"))
 	assert.Equal("t1", expansions.Get("task_id"))
@@ -365,10 +375,9 @@ buildvariants:
 	assert.Equal("", expansions.Get("is_patch"))
 	assert.False(expansions.Exists("is_commit_queue"))
 	assert.Equal("github_tag", expansions.Get("requester"))
+	assert.False(expansions.Exists("github_pr_number"))
 	assert.False(expansions.Exists("github_repo"))
 	assert.False(expansions.Exists("github_author"))
-	assert.False(expansions.Exists("github_pr_number"))
-	assert.Equal("lie", expansions.Get("cake"))
 
 	assert.NoError(VersionUpdateOne(bson.M{VersionIdKey: v.Id}, bson.M{
 		"$set": bson.M{VersionRequesterKey: evergreen.PatchVersionRequester},
@@ -380,13 +389,13 @@ buildvariants:
 
 	expansions, err = PopulateExpansions(taskDoc, &h, oauthToken)
 	assert.NoError(err)
-	assert.Len(map[string]string(expansions), 24)
+	assert.Len(map[string]string(expansions), 23)
 	assert.Equal("true", expansions.Get("is_patch"))
 	assert.Equal("patch", expansions.Get("requester"))
 	assert.False(expansions.Exists("is_commit_queue"))
+	assert.False(expansions.Exists("github_pr_number"))
 	assert.False(expansions.Exists("github_repo"))
 	assert.False(expansions.Exists("github_author"))
-	assert.False(expansions.Exists("github_pr_number"))
 	assert.False(expansions.Exists("triggered_by_git_tag"))
 	require.NoError(t, db.ClearCollections(patch.Collection))
 
@@ -396,13 +405,26 @@ buildvariants:
 	p = patch.Patch{
 		Version:     v.Id,
 		Description: "commit queue message",
+		GithubPatchData: thirdparty.GithubPatch{
+			PRNumber:       12,
+			BaseOwner:      "potato",
+			BaseRepo:       "tomato",
+			Author:         "hemingway",
+			HeadHash:       "7d2fe4649f50f87cb60c2f80ac2ceda1e5b88522",
+			MergeCommitSHA: "21",
+		},
 	}
 	require.NoError(t, p.Insert())
 	expansions, err = PopulateExpansions(taskDoc, &h, oauthToken)
 	assert.NoError(err)
-	assert.Len(map[string]string(expansions), 26)
+	assert.Len(map[string]string(expansions), 29)
 	assert.Equal("true", expansions.Get("is_patch"))
 	assert.Equal("true", expansions.Get("is_commit_queue"))
+	assert.Equal("12", expansions.Get("github_pr_number"))
+	assert.Equal("potato", expansions.Get("github_org"))
+	assert.Equal(p.GithubPatchData.BaseRepo, expansions.Get("github_repo"))
+	assert.Equal(p.GithubPatchData.Author, expansions.Get("github_author"))
+	assert.Equal(p.GithubPatchData.HeadHash, expansions.Get("github_commit"))
 	assert.Equal("commit queue message", expansions.Get("commit_message"))
 	require.NoError(t, db.ClearCollections(patch.Collection))
 
@@ -447,7 +469,7 @@ buildvariants:
 	assert.Equal("octocat", expansions.Get("github_author"))
 	assert.Equal("42", expansions.Get("github_pr_number"))
 	assert.Equal("abc123", expansions.Get("github_commit"))
-	assert.Equal("wut?", expansions.Get("github_org"))
+	assert.Equal("evergreen-ci", expansions.Get("github_org"))
 
 	upstreamTask := task.Task{
 		Id:       "upstreamTask",
@@ -550,7 +572,6 @@ func (s *projectSuite) SetupTest() {
 	for _, alias := range s.aliases {
 		s.NoError(alias.Upsert())
 	}
-
 	s.project = &Project{
 		Identifier: "project",
 		BuildVariants: []BuildVariant{
@@ -558,19 +579,24 @@ func (s *projectSuite) SetupTest() {
 				Name: "bv_1",
 				Tasks: []BuildVariantTaskUnit{
 					{
-						Name: "a_task_1",
+						Name:    "a_task_1",
+						Variant: "bv_1",
 					},
 					{
-						Name: "a_task_2",
+						Name:    "a_task_2",
+						Variant: "bv_1",
 					},
 					{
-						Name: "b_task_1",
+						Name:    "b_task_1",
+						Variant: "bv_1",
 					},
 					{
-						Name: "b_task_2",
+						Name:    "b_task_2",
+						Variant: "bv_1",
 					},
 					{
-						Name: "9001_task",
+						Name:    "9001_task",
+						Variant: "bv_1",
 						DependsOn: []TaskUnitDependency{
 							{
 								Name:    "a_task_2",
@@ -579,11 +605,13 @@ func (s *projectSuite) SetupTest() {
 						},
 					},
 					{
-						Name: "very_task",
+						Name:    "very_task",
+						Variant: "bv_1",
 					},
 					{
 						Name:      "another_disabled_task",
-						Patchable: boolPtr(false),
+						Variant:   "bv_1",
+						Patchable: utility.FalsePtr(),
 					},
 				},
 				DisplayTasks: []patch.DisplayTask{
@@ -598,29 +626,35 @@ func (s *projectSuite) SetupTest() {
 				Tags: []string{"even"},
 				Tasks: []BuildVariantTaskUnit{
 					{
-						Name: "a_task_1",
+						Name:    "a_task_1",
+						Variant: "bv_2",
 					},
 					{
-						Name: "a_task_2",
+						Name:    "a_task_2",
+						Variant: "bv_2",
 					},
 					{
-						Name: "b_task_1",
+						Name:    "b_task_1",
+						Variant: "bv_2",
 					},
 					{
-						Name: "b_task_2",
+						Name:    "b_task_2",
+						Variant: "bv_2",
 					},
 					{
 						Name:      "another_disabled_task",
-						Patchable: boolPtr(false),
+						Variant:   "bv_2",
+						Patchable: utility.TruePtr(),
 					},
 				},
 			},
 			{
-				Name:     "bv_3",
-				Disabled: true,
+				Name: "bv_3",
 				Tasks: []BuildVariantTaskUnit{
 					{
-						Name: "disabled_task",
+						Name:    "disabled_task",
+						Variant: "bv_3",
+						Disable: utility.TruePtr(),
 					},
 				},
 			},
@@ -670,11 +704,11 @@ func (s *projectSuite) SetupTest() {
 			},
 			{
 				Name:      "another_disabled_task",
-				Patchable: boolPtr(false),
+				Patchable: utility.FalsePtr(),
 			},
 		},
 		Functions: map[string]*YAMLCommandSet{
-			"go generate a thing": &YAMLCommandSet{
+			"go generate a thing": {
 				MultiCommand: []PluginCommandConf{
 					{
 						Command: "shell.exec",
@@ -693,7 +727,7 @@ func (s *projectSuite) SetupTest() {
 
 func (s *projectSuite) TestAliasResolution() {
 	// test that .* on variants and tasks selects everything
-	pairs, displayTaskPairs, err := s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[0]})
+	pairs, displayTaskPairs, err := s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[0]}, evergreen.PatchVersionRequester)
 	s.NoError(err)
 	s.Len(pairs, 11)
 	pairStrs := make([]string, len(pairs))
@@ -710,21 +744,21 @@ func (s *projectSuite) TestAliasResolution() {
 	s.Contains(pairStrs, "bv_2/a_task_2")
 	s.Contains(pairStrs, "bv_2/b_task_1")
 	s.Contains(pairStrs, "bv_2/b_task_2")
-	s.Contains(pairStrs, "bv_3/disabled_task")
+	s.Contains(pairStrs, "bv_2/another_disabled_task")
 	s.Require().Len(displayTaskPairs, 1)
 	s.Equal("bv_1/memes", displayTaskPairs[0].String())
 
 	// test that the .*_2 regex on variants selects just bv_2
-	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[1]})
+	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[1]}, evergreen.PatchVersionRequester)
 	s.NoError(err)
-	s.Len(pairs, 4)
+	s.Len(pairs, 5)
 	for _, pair := range pairs {
 		s.Equal("bv_2", pair.Variant)
 	}
 	s.Empty(displayTaskPairs)
 
 	// test that the .*_2 regex on tasks selects just the _2 tasks
-	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[2]})
+	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[2]}, evergreen.PatchVersionRequester)
 	s.NoError(err)
 	s.Len(pairs, 4)
 	for _, pair := range pairs {
@@ -733,7 +767,7 @@ func (s *projectSuite) TestAliasResolution() {
 	s.Empty(displayTaskPairs)
 
 	// test that the 'a' tag only selects 'a' tasks
-	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[3]})
+	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[3]}, evergreen.PatchVersionRequester)
 	s.NoError(err)
 	s.Len(pairs, 4)
 	for _, pair := range pairs {
@@ -742,7 +776,7 @@ func (s *projectSuite) TestAliasResolution() {
 	s.Empty(displayTaskPairs)
 
 	// test that the .*_2 regex selects the union of both
-	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[4]})
+	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[4]}, evergreen.PatchVersionRequester)
 	s.NoError(err)
 	s.Len(pairs, 4)
 	for _, pair := range pairs {
@@ -751,20 +785,19 @@ func (s *projectSuite) TestAliasResolution() {
 	s.Empty(displayTaskPairs)
 
 	// test for display tasks
-	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[5]})
+	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[5]}, evergreen.PatchVersionRequester)
 	s.NoError(err)
 	s.Empty(pairs)
 	s.Require().Len(displayTaskPairs, 1)
 	s.Equal("bv_1/memes", displayTaskPairs[0].String())
 
 	// test for alias including a task belong to a disabled variant
-	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[6]})
+	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[6]}, evergreen.PatchVersionRequester)
 	s.NoError(err)
-	s.Require().Len(pairs, 1)
-	s.Equal("bv_3/disabled_task", pairs[0].String())
+	s.Empty(pairs)
 	s.Empty(displayTaskPairs)
 
-	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[8]})
+	pairs, displayTaskPairs, err = s.project.BuildProjectTVPairsWithAlias([]ProjectAlias{s.aliases[8]}, evergreen.PatchVersionRequester)
 	s.NoError(err)
 	s.Require().Len(pairs, 2)
 	s.Equal("bv_2/a_task_1", pairs[0].String())
@@ -779,17 +812,51 @@ func (s *projectSuite) TestBuildProjectTVPairs() {
 		Tasks:         []string{"all"},
 	}
 
-	s.project.BuildProjectTVPairs(&patchDoc, "")
+	s.project.BuildProjectTVPairs(&patchDoc, evergreen.PatchVersionRequester)
 
 	s.Len(patchDoc.BuildVariants, 2)
-	s.Len(patchDoc.Tasks, 6)
+	s.ElementsMatch([]string{"bv_1", "bv_2"}, patchDoc.BuildVariants)
+	s.Len(patchDoc.Tasks, 7)
+	s.ElementsMatch([]string{
+		"a_task_1",
+		"a_task_2",
+		"b_task_1",
+		"b_task_2",
+		"9001_task",
+		"very_task",
+		"another_disabled_task"}, patchDoc.Tasks)
+	for _, vt := range patchDoc.VariantsTasks {
+		switch vt.Variant {
+		case "bv_1":
+			s.ElementsMatch([]string{
+				"a_task_1",
+				"a_task_2",
+				"b_task_1",
+				"b_task_2",
+				"9001_task",
+				"very_task",
+			}, vt.Tasks)
+			s.Len(vt.DisplayTasks, 1)
+		case "bv_2":
+			s.ElementsMatch([]string{
+				"a_task_1",
+				"a_task_2",
+				"b_task_1",
+				"b_task_2",
+				"another_disabled_task",
+			}, vt.Tasks)
+			s.Empty(vt.DisplayTasks)
+		default:
+			s.Fail("unexpected variant '%s'", vt.Variant)
+		}
+	}
 
 	// test all tasks expansion with named buildvariant expands unnamed buildvariant
 	patchDoc.BuildVariants = []string{"bv_1"}
 	patchDoc.Tasks = []string{"all"}
 	patchDoc.VariantsTasks = []patch.VariantTasks{}
 
-	s.project.BuildProjectTVPairs(&patchDoc, "")
+	s.project.BuildProjectTVPairs(&patchDoc, evergreen.PatchVersionRequester)
 
 	s.Len(patchDoc.BuildVariants, 2)
 	s.Len(patchDoc.Tasks, 6)
@@ -798,7 +865,7 @@ func (s *projectSuite) TestBuildProjectTVPairs() {
 	patchDoc.BuildVariants = []string{"all"}
 	patchDoc.VariantsTasks = []patch.VariantTasks{}
 
-	s.project.BuildProjectTVPairs(&patchDoc, "")
+	s.project.BuildProjectTVPairs(&patchDoc, evergreen.PatchVersionRequester)
 
 	s.Len(patchDoc.BuildVariants, 2)
 	s.Len(patchDoc.Tasks, 6)
@@ -813,8 +880,42 @@ func (s *projectSuite) TestResolvePatchVTs() {
 
 	bvs, tasks, variantTasks := s.project.ResolvePatchVTs(&patchDoc, patchDoc.GetRequester(), "", true)
 	s.Len(bvs, 2)
-	s.Len(tasks, 6)
+	s.ElementsMatch([]string{"bv_1", "bv_2"}, bvs)
+	s.Len(tasks, 7)
+	s.ElementsMatch([]string{
+		"a_task_1",
+		"a_task_2",
+		"b_task_1",
+		"b_task_2",
+		"9001_task",
+		"very_task",
+		"another_disabled_task"}, tasks)
 	s.Len(variantTasks, 2)
+	for _, vt := range variantTasks {
+		switch vt.Variant {
+		case "bv_1":
+			s.ElementsMatch([]string{
+				"a_task_1",
+				"a_task_2",
+				"b_task_1",
+				"b_task_2",
+				"9001_task",
+				"very_task",
+			}, vt.Tasks)
+			s.Len(vt.DisplayTasks, 1)
+		case "bv_2":
+			s.ElementsMatch([]string{
+				"a_task_1",
+				"a_task_2",
+				"b_task_1",
+				"b_task_2",
+				"another_disabled_task",
+			}, vt.Tasks)
+			s.Empty(vt.DisplayTasks)
+		default:
+			s.Fail("unexpected variant '%s'", vt.Variant)
+		}
+	}
 
 	// Build variant and tasks override regex.
 	patchDoc = patch.Patch{
@@ -826,7 +927,7 @@ func (s *projectSuite) TestResolvePatchVTs() {
 
 	bvs, tasks, variantTasks = s.project.ResolvePatchVTs(&patchDoc, patchDoc.GetRequester(), "", true)
 	s.Len(bvs, 2)
-	s.Len(tasks, 6)
+	s.Len(tasks, 7)
 	s.Len(variantTasks, 2)
 
 	// Regex build variants and tasks.
@@ -1098,12 +1199,9 @@ func (s *projectSuite) TestBuildProjectTVPairsWithDisabledBuildVariant() {
 	patchDoc := patch.Patch{}
 
 	s.project.BuildProjectTVPairs(&patchDoc, "disabled_stuff")
-	s.Equal([]string{"bv_3"}, patchDoc.BuildVariants)
-	s.Equal([]string{"disabled_task"}, patchDoc.Tasks)
-	s.Require().Len(patchDoc.VariantsTasks, 1)
-	s.Equal("bv_3", patchDoc.VariantsTasks[0].Variant)
-	s.Equal([]string{"disabled_task"}, patchDoc.VariantsTasks[0].Tasks)
-	s.Empty(patchDoc.VariantsTasks[0].DisplayTasks)
+	s.Empty(patchDoc.BuildVariants)
+	s.Empty(patchDoc.Tasks)
+	s.Empty(patchDoc.VariantsTasks)
 
 	patchDoc = patch.Patch{
 		BuildVariants: []string{"bv_3"},
@@ -1111,12 +1209,9 @@ func (s *projectSuite) TestBuildProjectTVPairsWithDisabledBuildVariant() {
 	}
 
 	s.project.BuildProjectTVPairs(&patchDoc, "")
-	s.Equal([]string{"bv_3"}, patchDoc.BuildVariants)
-	s.Equal([]string{"disabled_task"}, patchDoc.Tasks)
-	s.Require().Len(patchDoc.VariantsTasks, 1)
-	s.Equal("bv_3", patchDoc.VariantsTasks[0].Variant)
-	s.Equal([]string{"disabled_task"}, patchDoc.VariantsTasks[0].Tasks)
-	s.Empty(patchDoc.VariantsTasks[0].DisplayTasks)
+	s.Empty(patchDoc.BuildVariants)
+	s.Empty(patchDoc.Tasks)
+	s.Empty(patchDoc.VariantsTasks)
 }
 
 func (s *projectSuite) TestBuildProjectTVPairsWithDisplayTaskWithDependencies() {
@@ -1194,24 +1289,24 @@ func (s *projectSuite) TestNewPatchTaskIdTable() {
 	p := &Project{
 		Identifier: "project_id",
 		Tasks: []ProjectTask{
-			ProjectTask{
+			{
 				Name: "task1",
 			},
-			ProjectTask{
+			{
 				Name: "task2",
 			},
-			ProjectTask{
+			{
 				Name: "task3",
 			},
 		},
 		BuildVariants: []BuildVariant{
-			BuildVariant{
+			{
 				Name:  "test",
-				Tasks: []BuildVariantTaskUnit{{Name: "group_1"}},
+				Tasks: []BuildVariantTaskUnit{{Name: "group_1", Variant: "test"}},
 			},
 		},
 		TaskGroups: []TaskGroup{
-			TaskGroup{
+			{
 				Name: "group_1",
 				Tasks: []string{
 					"task1",
@@ -1232,7 +1327,8 @@ func (s *projectSuite) TestNewPatchTaskIdTable() {
 		},
 	}
 
-	config := NewPatchTaskIdTable(p, v, pairs, "project_identifier")
+	config, err := NewPatchTaskIdTable(p, v, pairs, "project_identifier")
+	s.Require().NoError(err)
 	s.Len(config.DisplayTasks, 0)
 	s.Len(config.ExecutionTasks, 2)
 	s.Equal("project_identifier_test_task1_revision_01_01_01_00_00_00",
@@ -1377,7 +1473,7 @@ func TestFindProjectsSuite(t *testing.T) {
 			{
 				Id:          "projectA",
 				Private:     utility.FalsePtr(),
-				Enabled:     utility.TruePtr(),
+				Enabled:     true,
 				CommitQueue: CommitQueueParams{Enabled: utility.TruePtr()},
 				Owner:       "evergreen-ci",
 				Repo:        "gimlet",
@@ -1386,7 +1482,7 @@ func TestFindProjectsSuite(t *testing.T) {
 			{
 				Id:          "projectB",
 				Private:     utility.TruePtr(),
-				Enabled:     utility.TruePtr(),
+				Enabled:     true,
 				CommitQueue: CommitQueueParams{Enabled: utility.TruePtr()},
 				Owner:       "evergreen-ci",
 				Repo:        "evergreen",
@@ -1395,7 +1491,7 @@ func TestFindProjectsSuite(t *testing.T) {
 			{
 				Id:          "projectC",
 				Private:     utility.TruePtr(),
-				Enabled:     utility.TruePtr(),
+				Enabled:     true,
 				CommitQueue: CommitQueueParams{Enabled: utility.TruePtr()},
 				Owner:       "mongodb",
 				Repo:        "mongo",
@@ -1435,21 +1531,24 @@ func TestFindProjectsSuite(t *testing.T) {
 		h :=
 			event.EventLogEntry{
 				Timestamp:    time.Now(),
-				ResourceType: EventResourceTypeProject,
-				EventType:    EventTypeProjectModified,
+				ResourceType: event.EventResourceTypeProject,
+				EventType:    event.EventTypeProjectModified,
 				ResourceId:   projectId,
 				Data: &ProjectChangeEvent{
-					User:   username,
-					Before: before,
-					After:  after,
+					User: username,
+					Before: ProjectSettingsEvent{
+						ProjectSettings: before,
+					},
+					After: ProjectSettingsEvent{
+						ProjectSettings: after,
+					},
 				},
 			}
 
-		s.Require().NoError(db.ClearCollections(event.AllLogCollection))
-		logger := event.NewDBEventLogger(event.AllLogCollection)
+		s.Require().NoError(db.ClearCollections(event.EventCollection))
 		for i := 0; i < projEventCount; i++ {
 			eventShallowCpy := h
-			s.NoError(logger.LogEvent(&eventShallowCpy))
+			s.NoError(eventShallowCpy.Log())
 		}
 
 		return nil
@@ -1540,7 +1639,7 @@ func (s *FindProjectsSuite) TestGetProjectWithCommitQueueByOwnerRepoAndBranch() 
 func (s *FindProjectsSuite) TestGetProjectSettings() {
 	projRef := &ProjectRef{
 		Owner:   "admin",
-		Enabled: utility.TruePtr(),
+		Enabled: true,
 		Private: utility.TruePtr(),
 		Id:      projectId,
 		Admins:  []string{},
@@ -1554,7 +1653,7 @@ func (s *FindProjectsSuite) TestGetProjectSettings() {
 func (s *FindProjectsSuite) TestGetProjectSettingsNoRepo() {
 	projRef := &ProjectRef{
 		Owner:   "admin",
-		Enabled: utility.TruePtr(),
+		Enabled: true,
 		Private: utility.TruePtr(),
 		Id:      projectId,
 		Admins:  []string{},
@@ -1575,32 +1674,32 @@ func TestModuleList(t *testing.T) {
 
 	manifest1 := manifest.Manifest{
 		Modules: map[string]*manifest.Module{
-			"wt":         &manifest.Module{Branch: "develop", Repo: "wt", Owner: "else", Revision: "123"},
-			"enterprise": &manifest.Module{Branch: "main", Repo: "enterprise", Owner: "something", Revision: "abc"},
+			"wt":         {Branch: "develop", Repo: "wt", Owner: "else", Revision: "123"},
+			"enterprise": {Branch: "main", Repo: "enterprise", Owner: "something", Revision: "abc"},
 		},
 	}
 	assert.True(projModules.IsIdentical(manifest1))
 
 	manifest2 := manifest.Manifest{
 		Modules: map[string]*manifest.Module{
-			"wt":         &manifest.Module{Branch: "different branch", Repo: "wt", Owner: "else", Revision: "123"},
-			"enterprise": &manifest.Module{Branch: "main", Repo: "enterprise", Owner: "something", Revision: "abc"},
+			"wt":         {Branch: "different branch", Repo: "wt", Owner: "else", Revision: "123"},
+			"enterprise": {Branch: "main", Repo: "enterprise", Owner: "something", Revision: "abc"},
 		},
 	}
 	assert.False(projModules.IsIdentical(manifest2))
 
 	manifest3 := manifest.Manifest{
 		Modules: map[string]*manifest.Module{
-			"wt":         &manifest.Module{Branch: "develop", Repo: "wt", Owner: "else", Revision: "123"},
-			"enterprise": &manifest.Module{Branch: "main", Repo: "enterprise", Owner: "something", Revision: "abc"},
-			"extra":      &manifest.Module{Branch: "main", Repo: "repo", Owner: "something", Revision: "abc"},
+			"wt":         {Branch: "develop", Repo: "wt", Owner: "else", Revision: "123"},
+			"enterprise": {Branch: "main", Repo: "enterprise", Owner: "something", Revision: "abc"},
+			"extra":      {Branch: "main", Repo: "repo", Owner: "something", Revision: "abc"},
 		},
 	}
 	assert.False(projModules.IsIdentical(manifest3))
 
 	manifest4 := manifest.Manifest{
 		Modules: map[string]*manifest.Module{
-			"wt": &manifest.Module{Branch: "develop", Repo: "wt", Owner: "else", Revision: "123"},
+			"wt": {Branch: "develop", Repo: "wt", Owner: "else", Revision: "123"},
 		},
 	}
 	assert.False(projModules.IsIdentical(manifest4))
@@ -1625,43 +1724,6 @@ func TestLoggerConfigValidate(t *testing.T) {
 		System: []LogOpts{{Type: SplunkLogSender}},
 	}
 	assert.EqualError(config.IsValid(), "invalid system logger config: Splunk logger requires a server URL\nSplunk logger requires a token")
-}
-
-func TestFindContainerFromProject(t *testing.T) {
-	assert := assert.New(t)
-	require.NoError(t, db.ClearCollections(VersionCollection, ParserProjectCollection, ProjectRefCollection))
-	ref := ProjectRef{
-		Id: "p1",
-	}
-
-	pp := ParserProject{
-		Id:         "v1",
-		Identifier: utility.ToStringPtr("p1"),
-		Containers: []Container{
-			{
-				Name: "container1",
-			},
-		},
-	}
-
-	v := &Version{Id: "v1"}
-	require.NoError(t, pp.TryUpsert())
-	require.NoError(t, v.Insert())
-	require.NoError(t, ref.Insert())
-
-	task := task.Task{
-		Version:   "v1",
-		Project:   "p1",
-		Container: "container1",
-	}
-	container, err := FindContainerFromProject(task)
-	require.NoError(t, err)
-	assert.Equal(container.Name, "container1")
-
-	task.Container = "nonexistent"
-	_, err = FindContainerFromProject(task)
-	require.Error(t, err)
-	assert.Equal(err.Error(), "no such container 'nonexistent' defined on project 'p1'")
 }
 
 func TestLoggerMerge(t *testing.T) {
@@ -1855,7 +1917,7 @@ func TestCommandsRunOnBV(t *testing.T) {
 				},
 			},
 			funcs: map[string]*YAMLCommandSet{
-				"function": &YAMLCommandSet{
+				"function": {
 					SingleCommand: &PluginCommandConf{
 						Command:     cmd,
 						DisplayName: "display",
@@ -1904,7 +1966,7 @@ func TestCommandsRunOnBV(t *testing.T) {
 				},
 			},
 			funcs: map[string]*YAMLCommandSet{
-				"function": &YAMLCommandSet{
+				"function": {
 					SingleCommand: &PluginCommandConf{
 						Command:     cmd,
 						DisplayName: "display1",
@@ -1937,14 +1999,14 @@ func TestGetAllVariantTasks(t *testing.T) {
 					{
 						Name: "bv1",
 						Tasks: []BuildVariantTaskUnit{
-							{Name: "t1"},
-							{Name: "t2"},
+							{Name: "t1", Variant: "bv1"},
+							{Name: "t2", Variant: "bv1"},
 						},
 					}, {
 						Name: "bv2",
 						Tasks: []BuildVariantTaskUnit{
-							{Name: "t2"},
-							{Name: "t3"},
+							{Name: "t2", Variant: "bv2"},
+							{Name: "t3", Variant: "bv2"},
 						},
 					},
 				},
@@ -2102,8 +2164,8 @@ func TestVariantTasksForSelectors(t *testing.T) {
 				Name:         "bv0",
 				DisplayTasks: []patch.DisplayTask{{Name: "dt0", ExecTasks: []string{"t0"}}},
 				Tasks: []BuildVariantTaskUnit{
-					{Name: "t0"},
-					{Name: "t1", DependsOn: []TaskUnitDependency{{Name: "t0", Variant: "bv0"}}}},
+					{Name: "t0", Variant: "bv0"},
+					{Name: "t1", Variant: "bv0", DependsOn: []TaskUnitDependency{{Name: "t0", Variant: "bv0"}}}},
 			},
 		},
 		Tasks: []ProjectTask{
@@ -2204,15 +2266,15 @@ func TestDependencyGraph(t *testing.T) {
 			{
 				Name: "ubuntu",
 				Tasks: []BuildVariantTaskUnit{
-					{Name: "compile", DependsOn: []TaskUnitDependency{{Name: "setup"}}},
-					{Name: "setup"},
+					{Name: "compile", Variant: "ubuntu", DependsOn: []TaskUnitDependency{{Name: "setup"}}},
+					{Name: "setup", Variant: "ubuntu"},
 				},
 			},
 			{
 				Name: "rhel",
 				Tasks: []BuildVariantTaskUnit{
-					{Name: "compile", DependsOn: []TaskUnitDependency{{Name: "setup"}}},
-					{Name: "setup"},
+					{Name: "compile", Variant: "rhel", DependsOn: []TaskUnitDependency{{Name: "setup"}}},
+					{Name: "setup", Variant: "rhel"},
 				},
 			},
 		},
@@ -2228,11 +2290,12 @@ func TestFindAllBuildVariantTasks(t *testing.T) {
 			{Name: "in_group_0"},
 			{Name: "in_group_1"},
 		}
-		bvTasks := []BuildVariantTaskUnit{{Name: "task_group", IsGroup: true}}
+		const bvName = "bv"
+		bvTasks := []BuildVariantTaskUnit{{Name: "task_group", IsGroup: true, Variant: bvName}}
 		groups := []TaskGroup{{Name: bvTasks[0].Name, Tasks: []string{tasks[0].Name, tasks[1].Name}}}
 		p := Project{
 			Tasks:         tasks,
-			BuildVariants: []BuildVariant{{Name: "bv", Tasks: bvTasks}},
+			BuildVariants: []BuildVariant{{Name: bvName, Tasks: bvTasks}},
 			TaskGroups:    groups,
 		}
 
@@ -2408,9 +2471,14 @@ func TestDependenciesForTaskUnit(t *testing.T) {
 	}
 }
 
-func TestGetVariantsAndTasksFromProject(t *testing.T) {
-	ctx := context.Background()
-	patchedConfig := `
+func TestGetVariantsAndTasksFromPatchProject(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	env := &mock.Environment{}
+	require.NoError(t, env.Configure(ctx))
+
+	patchedProject := `
 buildvariants:
   - name: bv1
     display_name: bv1_display
@@ -2430,7 +2498,67 @@ tasks:
     disable: true
   - name: task3
 `
-	variantsAndTasks, err := GetVariantsAndTasksFromProject(ctx, patchedConfig, "")
-	assert.NoError(t, err)
-	assert.Len(t, variantsAndTasks.Variants["bv1"].Tasks, 1)
+
+	defer func() {
+		assert.NoError(t, db.ClearCollections(VersionCollection, ParserProjectCollection))
+	}()
+
+	for tName, tCase := range map[string]func(t *testing.T, p *patch.Patch, pp *ParserProject){
+		"SucceedsWithParserProjectInDB": func(t *testing.T, p *patch.Patch, pp *ParserProject) {
+			require.NoError(t, pp.Insert())
+			p.ProjectStorageMethod = evergreen.ProjectStorageMethodDB
+
+			variantsAndTasks, err := GetVariantsAndTasksFromPatchProject(ctx, env.Settings(), p)
+			require.NoError(t, err)
+			assert.Len(t, variantsAndTasks.Tasks, 2)
+			require.NotNil(t, variantsAndTasks.Variants)
+			assert.Len(t, variantsAndTasks.Variants["bv1"].Tasks, 1)
+			assert.Equal(t, "task3", variantsAndTasks.Variants["bv1"].Tasks[0].Name)
+		},
+		"SucceedsWithAlreadyFinalizedPatch": func(t *testing.T, p *patch.Patch, pp *ParserProject) {
+			v := Version{
+				Id:                   p.Id.Hex(),
+				ProjectStorageMethod: evergreen.ProjectStorageMethodDB,
+			}
+			require.NoError(t, v.Insert())
+			require.NoError(t, pp.Insert())
+			p.Version = v.Id
+
+			variantsAndTasks, err := GetVariantsAndTasksFromPatchProject(ctx, env.Settings(), p)
+			require.NoError(t, err)
+			assert.Len(t, variantsAndTasks.Tasks, 2)
+			require.NotZero(t, variantsAndTasks)
+			assert.Len(t, variantsAndTasks.Variants["bv1"].Tasks, 1)
+			assert.Equal(t, "task3", variantsAndTasks.Variants["bv1"].Tasks[0].Name)
+		},
+		"SucceedsWithPatchedParserProject": func(t *testing.T, p *patch.Patch, pp *ParserProject) {
+			p.PatchedParserProject = patchedProject
+
+			variantsAndTasks, err := GetVariantsAndTasksFromPatchProject(ctx, env.Settings(), p)
+			require.NoError(t, err)
+			assert.Len(t, variantsAndTasks.Tasks, 2)
+			require.NotZero(t, variantsAndTasks)
+			assert.Len(t, variantsAndTasks.Variants["bv1"].Tasks, 1)
+			assert.Equal(t, "task3", variantsAndTasks.Variants["bv1"].Tasks[0].Name)
+		},
+		"FailsWithUnfinalizedPatchThatHasNeitherPatchedParserProjectNorParserProjectStorage": func(t *testing.T, p *patch.Patch, pp *ParserProject) {
+			_, err := GetVariantsAndTasksFromPatchProject(ctx, env.Settings(), p)
+			assert.Error(t, err)
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			require.NoError(t, db.ClearCollections(VersionCollection, ParserProjectCollection))
+
+			project := &Project{}
+			pp, err := LoadProjectInto(ctx, []byte(patchedProject), nil, "", project)
+			require.NoError(t, err)
+
+			p := &patch.Patch{
+				Id: mgobson.NewObjectId(),
+			}
+			pp.Id = p.Id.Hex()
+
+			tCase(t, p, pp)
+		})
+	}
 }

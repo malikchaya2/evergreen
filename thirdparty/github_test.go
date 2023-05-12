@@ -3,10 +3,11 @@ package thirdparty
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,7 +16,7 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/testutil"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/pkg/errors"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
@@ -42,9 +43,7 @@ func (s *githubSuite) SetupTest() {
 	s.token, err = s.config.GetGithubOauthToken()
 	s.NoError(err)
 
-	s.ctx, s.cancel = context.WithTimeout(context.Background(), 10*time.Second)
-	s.Require().NotNil(s.ctx)
-	s.Require().NotNil(s.cancel)
+	s.ctx, s.cancel = context.WithTimeout(context.Background(), 30*time.Second)
 }
 
 func (s *githubSuite) TearDownTest() {
@@ -274,7 +273,7 @@ func verifyGithubAPILimitHeader(header http.Header) (int64, error) {
 func TestValidatePR(t *testing.T) {
 	assert := assert.New(t)
 
-	prBody, err := ioutil.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "..", "units", "testdata", "pull_request.json"))
+	prBody, err := os.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "..", "units", "testdata", "pull_request.json"))
 	assert.NoError(err)
 	assert.Len(prBody, 24745)
 	webhookInterface, err := github.ParseWebHook("pull_request", prBody)
@@ -300,7 +299,7 @@ func TestParseGithubErrorResponse(t *testing.T) {
 	resp := &github.Response{
 		Response: &http.Response{
 			StatusCode: http.StatusNotFound,
-			Body:       ioutil.NopCloser(strings.NewReader(fmt.Sprintf(`{"message": "%s", "documentation_url": "%s"}`, message, url))),
+			Body:       io.NopCloser(strings.NewReader(fmt.Sprintf(`{"message": "%s", "documentation_url": "%s"}`, message, url))),
 		},
 	}
 

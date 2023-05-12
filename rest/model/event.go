@@ -22,6 +22,7 @@ type TaskAPIEventLogEntry struct {
 type TaskEventData struct {
 	Execution int        `bson:"execution" json:"execution"`
 	HostId    *string    `bson:"h_id,omitempty" json:"host_id,omitempty"`
+	PodId     *string    `bson:"pod_id,omitempty" json:"pod_id,omitempty"`
 	UserId    *string    `bson:"u_id,omitempty" json:"user_id,omitempty"`
 	Status    *string    `bson:"s,omitempty" json:"status,omitempty"`
 	JiraIssue *string    `bson:"jira,omitempty" json:"jira,omitempty"`
@@ -59,6 +60,27 @@ type HostAPIEventData struct {
 	Duration           APIDuration `bson:"duration,omitempty" json:"duration"`
 }
 
+type PodAPIEventLogEntry struct {
+	ID           *string          `bson:"_id" json:"-"`
+	ResourceType *string          `bson:"r_type,omitempty" json:"resource_type,omitempty"`
+	ProcessedAt  *time.Time       `bson:"processed_at" json:"processed_at"`
+	Timestamp    *time.Time       `bson:"ts" json:"timestamp"`
+	ResourceId   *string          `bson:"r_id" json:"resource_id"`
+	EventType    *string          `bson:"e_type" json:"event_type"`
+	Data         *PodAPIEventData `bson:"data" json:"data"`
+}
+
+type PodAPIEventData struct {
+	OldStatus *string `bson:"old_status,omitempty" json:"old_status,omitempty"`
+	NewStatus *string `bson:"new_status,omitempty" json:"new_status,omitempty"`
+	Reason    *string `bson:"reason,omitempty" json:"reason,omitempty"`
+
+	// Fields related to pods running tasks
+	TaskID        *string `bson:"task_id,omitempty" json:"task_id,omitempty"`
+	TaskExecution *int    `bson:"task_execution,omitempty" json:"task_execution,omitempty"`
+	TaskStatus    *string `bson:"task_status,omitempty" json:"task_status,omitempty"`
+}
+
 func (el *TaskEventData) BuildFromService(v *event.TaskEventData) error {
 	settings, err := evergreen.GetConfig()
 	if err != nil {
@@ -71,6 +93,7 @@ func (el *TaskEventData) BuildFromService(v *event.TaskEventData) error {
 	}
 	el.Execution = v.Execution
 	el.HostId = utility.ToStringPtr(v.HostId)
+	el.PodId = utility.ToStringPtr(v.PodID)
 	el.UserId = utility.ToStringPtr(v.UserId)
 	el.JiraIssue = utility.ToStringPtr(v.JiraIssue)
 	el.JiraLink = utility.ToStringPtr(jiraLink)
@@ -80,38 +103,23 @@ func (el *TaskEventData) BuildFromService(v *event.TaskEventData) error {
 	return nil
 }
 
-// ToService is not implemented for TaskEventData.
-func (el *TaskEventData) ToService() (interface{}, error) {
-	return nil, errors.Errorf("ToService() is not implemented for TaskEventData")
-}
-
-func (el *TaskAPIEventLogEntry) BuildFromService(t interface{}) error {
-	switch v := t.(type) {
-	case *event.EventLogEntry:
-		d, ok := v.Data.(*event.TaskEventData)
-		if !ok {
-			return errors.Errorf("programmatic error: expected task event data but got type %T", v.Data)
-		}
-		taskEventData := TaskEventData{}
-		if err := taskEventData.BuildFromService(d); err != nil {
-			return errors.Wrap(err, "converting task event data to API model")
-		}
-		el.ID = utility.ToStringPtr(v.ID)
-		el.ResourceType = utility.ToStringPtr(v.ResourceType)
-		el.ProcessedAt = ToTimePtr(v.ProcessedAt)
-		el.Timestamp = ToTimePtr(v.Timestamp)
-		el.ResourceId = utility.ToStringPtr(v.ResourceId)
-		el.EventType = utility.ToStringPtr(v.EventType)
-		el.Data = &taskEventData
-	default:
-		return errors.Errorf("programmatic error: expected event log entry but got type %T", t)
+func (el *TaskAPIEventLogEntry) BuildFromService(v event.EventLogEntry) error {
+	d, ok := v.Data.(*event.TaskEventData)
+	if !ok {
+		return errors.Errorf("programmatic error: expected task event data but got type %T", v.Data)
 	}
+	taskEventData := TaskEventData{}
+	if err := taskEventData.BuildFromService(d); err != nil {
+		return errors.Wrap(err, "converting task event data to API model")
+	}
+	el.ID = utility.ToStringPtr(v.ID)
+	el.ResourceType = utility.ToStringPtr(v.ResourceType)
+	el.ProcessedAt = ToTimePtr(v.ProcessedAt)
+	el.Timestamp = ToTimePtr(v.Timestamp)
+	el.ResourceId = utility.ToStringPtr(v.ResourceId)
+	el.EventType = utility.ToStringPtr(v.EventType)
+	el.Data = &taskEventData
 	return nil
-}
-
-// ToService is not implemented for APITestStats.
-func (el *TaskAPIEventLogEntry) ToService() (interface{}, error) {
-	return nil, errors.Errorf("ToService() is not implemented for TaskAPIEventLogEntry")
 }
 
 //HostEvent functions
@@ -136,34 +144,45 @@ func (el *HostAPIEventData) BuildFromService(v *event.HostEventData) {
 	el.Duration = NewAPIDuration(v.Duration)
 }
 
-// ToService is not implemented for TaskEventData.
-func (el *HostAPIEventData) ToService() (interface{}, error) {
-	return nil, errors.Errorf("ToService() is not implemented for HostAPIEventData")
-}
-
-func (el *HostAPIEventLogEntry) BuildFromService(t interface{}) error {
-	switch v := t.(type) {
-	case *event.EventLogEntry:
-		d, ok := v.Data.(*event.HostEventData)
-		if !ok {
-			return errors.Errorf("programmatic error: expected host event data but got type %T", v.Data)
-		}
-		hostAPIEventData := HostAPIEventData{}
-		hostAPIEventData.BuildFromService(d)
-		el.ID = utility.ToStringPtr(v.ID)
-		el.ResourceType = utility.ToStringPtr(v.ResourceType)
-		el.ProcessedAt = ToTimePtr(v.ProcessedAt)
-		el.Timestamp = ToTimePtr(v.Timestamp)
-		el.ResourceId = utility.ToStringPtr(v.ResourceId)
-		el.EventType = utility.ToStringPtr(v.EventType)
-		el.Data = &hostAPIEventData
-	default:
-		return errors.Errorf("programmatic error: expected event log entry but got type %T", t)
+func (el *HostAPIEventLogEntry) BuildFromService(entry event.EventLogEntry) error {
+	d, ok := entry.Data.(*event.HostEventData)
+	if !ok {
+		return errors.Errorf("programmatic error: expected host event data but got type %T", entry.Data)
 	}
+	hostAPIEventData := HostAPIEventData{}
+	hostAPIEventData.BuildFromService(d)
+	el.ID = utility.ToStringPtr(entry.ID)
+	el.ResourceType = utility.ToStringPtr(entry.ResourceType)
+	el.ProcessedAt = ToTimePtr(entry.ProcessedAt)
+	el.Timestamp = ToTimePtr(entry.Timestamp)
+	el.ResourceId = utility.ToStringPtr(entry.ResourceId)
+	el.EventType = utility.ToStringPtr(entry.EventType)
+	el.Data = &hostAPIEventData
 	return nil
 }
 
-// ToService is not implemented for APITestStats.
-func (el *HostAPIEventLogEntry) ToService() (interface{}, error) {
-	return nil, errors.Errorf("ToService() is not implemented for HostAPIEventLogEntry")
+func (el *PodAPIEventLogEntry) BuildFromService(entry event.EventLogEntry) error {
+	d, ok := entry.Data.(*event.PodData)
+	if !ok {
+		return errors.Errorf("programmatic error: expected pod event data but got type %T", entry.Data)
+	}
+	podAPIEventData := PodAPIEventData{}
+	podAPIEventData.BuildFromService(d)
+	el.ID = utility.ToStringPtr(entry.ID)
+	el.ResourceType = utility.ToStringPtr(entry.ResourceType)
+	el.ProcessedAt = ToTimePtr(entry.ProcessedAt)
+	el.Timestamp = ToTimePtr(entry.Timestamp)
+	el.ResourceId = utility.ToStringPtr(entry.ResourceId)
+	el.EventType = utility.ToStringPtr(entry.EventType)
+	el.Data = &podAPIEventData
+	return nil
+}
+
+func (el *PodAPIEventData) BuildFromService(v *event.PodData) {
+	el.OldStatus = utility.ToStringPtr(v.OldStatus)
+	el.NewStatus = utility.ToStringPtr(v.NewStatus)
+	el.Reason = utility.ToStringPtr(v.Reason)
+	el.TaskID = utility.ToStringPtr(v.TaskID)
+	el.TaskExecution = utility.ToIntPtr(v.TaskExecution)
+	el.TaskStatus = utility.ToStringPtr(v.TaskStatus)
 }

@@ -69,10 +69,6 @@ func (h *hostsChangeStatusesHandler) Run(ctx context.Context) gimlet.Responder {
 	user := MustHaveUser(ctx)
 
 	resp := gimlet.NewResponseBuilder()
-	if err := resp.SetFormat(gimlet.JSON); err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "setting JSON response format"))
-	}
-
 	for id, status := range h.HostToStatus {
 		foundHost, err := data.FindHostByIdWithOwner(id, user)
 		if err != nil {
@@ -88,12 +84,10 @@ func (h *hostsChangeStatusesHandler) Run(ctx context.Context) gimlet.Responder {
 			return gimlet.MakeJSONInternalErrorResponder(err)
 		}
 
-		host := &model.APIHost{}
-		if err = host.BuildFromService(foundHost); err != nil {
-			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "converting host '%s' to API model", foundHost.Id))
-		}
-		if err = resp.AddData(host); err != nil {
-			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "adding response data for host '%s'", utility.FromStringPtr(host.Id)))
+		h := &model.APIHost{}
+		h.BuildFromService(foundHost, nil)
+		if err = resp.AddData(h); err != nil {
+			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "adding response data for host '%s'", utility.FromStringPtr(h.Id)))
 		}
 	}
 
@@ -137,28 +131,21 @@ func (h *hostIDGetHandler) Run(ctx context.Context) gimlet.Responder {
 		})
 	}
 
-	hostModel := &model.APIHost{}
-	if err = hostModel.BuildFromService(*foundHost); err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "converting host to API model"))
-	}
-
+	var runningTask *task.Task
 	if foundHost.RunningTask != "" {
-		runningTask, err := task.FindOneId(foundHost.RunningTask)
+		runningTask, err = task.FindOneIdAndExecution(foundHost.RunningTask, foundHost.RunningTaskExecution)
 		if err != nil {
-			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "finding host's running task '%s'", foundHost.RunningTask))
+			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "finding host's running task '%s' execution '%d'", foundHost.RunningTask, foundHost.RunningTaskExecution))
 		}
 		if runningTask == nil {
 			return gimlet.MakeJSONInternalErrorResponder(gimlet.ErrorResponse{
 				StatusCode: http.StatusNotFound,
-				Message:    fmt.Sprintf("host's running task '%s' not found", foundHost.RunningTask),
+				Message:    fmt.Sprintf("host's running task '%s' execution '%d' not found", foundHost.RunningTask, foundHost.RunningTaskExecution),
 			})
 		}
-
-		if err = hostModel.BuildFromService(runningTask); err != nil {
-			return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "adding host's running task data to response"))
-		}
 	}
-
+	hostModel := &model.APIHost{}
+	hostModel.BuildFromService(foundHost, runningTask)
 	return gimlet.NewJSONResponse(hostModel)
 }
 
@@ -213,10 +200,6 @@ func (hgh *hostGetHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	resp := gimlet.NewResponseBuilder()
-	if err = resp.SetFormat(gimlet.JSON); err != nil {
-		return gimlet.MakeJSONErrorResponder(err)
-	}
-
 	lastIndex := len(hosts)
 	if len(hosts) > hgh.limit {
 		lastIndex = hgh.limit
@@ -264,21 +247,14 @@ func (hgh *hostGetHandler) Run(ctx context.Context) gimlet.Responder {
 
 	for _, h := range hosts {
 		apiHost := &model.APIHost{}
-		if err = apiHost.BuildFromService(h); err != nil {
-			return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "converting host to API model"))
-		}
-
+		var runningTask *task.Task
 		if h.RunningTask != "" {
-			runningTask, ok := tasksById[h.RunningTask]
-			if !ok {
-				continue
-			}
-			// Add the task information to the host document.
-
-			if err = apiHost.BuildFromService(runningTask); err != nil {
-				return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "adding host's running task information to host API model"))
+			t, ok := tasksById[h.RunningTask]
+			if ok {
+				runningTask = &t
 			}
 		}
+		apiHost.BuildFromService(&h, runningTask)
 		if err = resp.AddData(apiHost); err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "adding host data to response"))
 		}
@@ -429,16 +405,18 @@ func (ch *offboardUserHandler) Run(ctx context.Context) gimlet.Responder {
 			"context": "user offboarding",
 			"user":    ch.user,
 		}))
+		err = user.ClearUser(ch.user)
+		catcher.Wrapf(err, "clearing user '%s'", ch.user)
 	}
 
 	if catcher.HasErrors() {
 		err := catcher.Resolve()
 		grip.CriticalWhen(!ch.dryRun, message.WrapError(err, message.Fields{
-			"message": "not all unexpirable hosts/volumes terminated",
+			"message": "the user did not offboard fully",
 			"context": "user offboarding",
 			"user":    ch.user,
 		}))
-		return gimlet.NewJSONInternalErrorResponse(errors.Wrapf(err, "not all unexpirable hosts/volumes terminated"))
+		return gimlet.NewJSONInternalErrorResponse(errors.Wrapf(err, "offboarding user '%s'", ch.user))
 	}
 
 	return gimlet.NewJSONResponse(toTerminate)
@@ -502,14 +480,9 @@ func (h *hostFilterGetHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	resp := gimlet.NewResponseBuilder()
-	if err = resp.SetFormat(gimlet.JSON); err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "setting JSON response format"))
-	}
-	for _, host := range hosts {
+	for _, h := range hosts {
 		apiHost := &model.APIHost{}
-		if err = apiHost.BuildFromService(host); err != nil {
-			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "converting host '%s' to API model", host.Id))
-		}
+		apiHost.BuildFromService(&h, nil)
 		if err = resp.AddData(apiHost); err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "adding response data for host '%s'", utility.FromStringPtr(apiHost.Id)))
 		}
@@ -557,7 +530,7 @@ func (rh *hostProvisioningOptionsGetHandler) Run(ctx context.Context) gimlet.Res
 	return gimlet.NewJSONResponse(apiOpts)
 }
 
-////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////
 //
 // GET /rest/v2/host/{host_id}/disable
 type disableHost struct {
@@ -657,9 +630,6 @@ func (h *hostIpAddressGetHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	hostModel := &model.APIHost{}
-	if err = hostModel.BuildFromService(*host); err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "converting host to API model"))
-	}
-
+	hostModel.BuildFromService(host, nil)
 	return gimlet.NewJSONResponse(hostModel)
 }

@@ -17,13 +17,15 @@ import (
 	"github.com/evergreen-ci/evergreen/model/artifact"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/model/testresult"
+	"github.com/evergreen-ci/evergreen/model/user"
+	"github.com/evergreen-ci/gimlet"
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
 )
 
-func insertTaskForTesting(taskId, versionId, projectName string, testResults []testresult.TestResult) (*task.Task, error) {
+func insertTaskForTesting(ctx context.Context, env evergreen.Environment, taskId, versionId, projectName string, testResults []testresult.TestResult) (*task.Task, error) {
 	task := &task.Task{
 		Id:                  taskId,
 		CreateTime:          time.Now().Add(-20 * time.Minute),
@@ -57,11 +59,17 @@ func insertTaskForTesting(taskId, versionId, projectName string, testResults []t
 		ExpectedDuration: 99 * time.Millisecond,
 	}
 
-	err := task.Insert()
-	if err != nil {
+	if len(testResults) > 0 {
+		task.ResultsService = testresult.TestResultsServiceLocal
+		if err := testresult.InsertLocal(ctx, env, testResults...); err != nil {
+			return nil, err
+		}
+	}
+	if err := task.Insert(); err != nil {
 		return nil, err
 	}
-	return task, testresult.InsertMany(testResults)
+
+	return task, nil
 }
 
 func TestGetTaskInfo(t *testing.T) {
@@ -72,8 +80,13 @@ func TestGetTaskInfo(t *testing.T) {
 	router, err := newTestUIRouter(ctx, env)
 	require.NoError(t, err, "error setting up router")
 
+	defer func() {
+		assert.NoError(t, db.ClearCollections(task.Collection))
+		assert.NoError(t, testresult.ClearLocal(ctx, env))
+	}()
+
 	Convey("When finding info on a particular task", t, func() {
-		require.NoError(t, db.ClearCollections(task.Collection, testresult.Collection),
+		require.NoError(t, db.ClearCollections(task.Collection),
 			"Error clearing '%v' collection", task.Collection)
 
 		taskId := "my-task"
@@ -81,15 +94,15 @@ func TestGetTaskInfo(t *testing.T) {
 		projectName := "project_test"
 
 		testResult := testresult.TestResult{
-			Status:    "success",
-			TaskID:    taskId,
-			Execution: 0,
-			TestFile:  "some-test",
-			URL:       "some-url",
-			StartTime: float64(time.Now().Add(-9 * time.Minute).Unix()),
-			EndTime:   float64(time.Now().Add(-1 * time.Minute).Unix()),
+			Status:        "success",
+			TaskID:        taskId,
+			Execution:     0,
+			TestName:      "some-test",
+			LogURL:        "some-url",
+			TestStartTime: time.Now().Add(-9 * time.Minute),
+			TestEndTime:   time.Now().Add(-1 * time.Minute),
 		}
-		testTask, err := insertTaskForTesting(taskId, versionId, projectName, []testresult.TestResult{testResult})
+		testTask, err := insertTaskForTesting(ctx, env, taskId, versionId, projectName, []testresult.TestResult{testResult})
 		So(err, ShouldBeNil)
 
 		file := artifact.File{
@@ -105,6 +118,7 @@ func TestGetTaskInfo(t *testing.T) {
 		url := "/rest/v1/tasks/" + taskId
 
 		request, err := http.NewRequest("GET", url, nil)
+		request = request.WithContext(gimlet.AttachUser(request.Context(), &user.DBUser{Id: "user"}))
 		So(err, ShouldBeNil)
 
 		response := httptest.NewRecorder()
@@ -197,7 +211,7 @@ func TestGetTaskInfo(t *testing.T) {
 			So(ok, ShouldBeTrue)
 			So(len(jsonTestResults), ShouldEqual, 1)
 
-			_jsonTestResult, ok := jsonTestResults[testResult.TestFile]
+			_jsonTestResult, ok := jsonTestResults[testResult.TestName]
 			So(ok, ShouldBeTrue)
 			jsonTestResult, ok := _jsonTestResult.(map[string]interface{})
 			So(ok, ShouldBeTrue)
@@ -210,7 +224,7 @@ func TestGetTaskInfo(t *testing.T) {
 			jsonTestResultLogs, ok := _jsonTestResultLogs.(map[string]interface{})
 			So(ok, ShouldBeTrue)
 
-			So(jsonTestResultLogs["url"], ShouldEqual, testResult.URL)
+			So(jsonTestResultLogs["url"], ShouldEqual, testResult.LogURL)
 
 			var jsonFiles []map[string]interface{}
 			err = json.Unmarshal(*rawJSONBody["files"], &jsonFiles)
@@ -229,6 +243,7 @@ func TestGetTaskInfo(t *testing.T) {
 		url := "/rest/v1/tasks/" + taskId
 
 		request, err := http.NewRequest("GET", url, nil)
+		request = request.WithContext(gimlet.AttachUser(request.Context(), &user.DBUser{Id: "user"}))
 		So(err, ShouldBeNil)
 
 		response := httptest.NewRecorder()
@@ -256,7 +271,7 @@ func TestGetTaskStatus(t *testing.T) {
 	require.NoError(t, err, "error setting up router")
 
 	Convey("When finding the status of a particular task", t, func() {
-		require.NoError(t, db.ClearCollections(task.Collection, testresult.Collection),
+		require.NoError(t, db.ClearCollections(task.Collection),
 			"Error clearing '%v' collection", task.Collection)
 
 		taskId := "my-task"
@@ -269,22 +284,24 @@ func TestGetTaskStatus(t *testing.T) {
 				TimedOut:    false,
 				Description: "some-stage",
 			},
+			ResultsService: testresult.TestResultsServiceLocal,
 		}
 		testResult := testresult.TestResult{
-			Status:    "success",
-			TaskID:    testTask.Id,
-			Execution: testTask.Execution,
-			TestFile:  "some-test",
-			URL:       "some-url",
-			StartTime: float64(time.Now().Add(-9 * time.Minute).Unix()),
-			EndTime:   float64(time.Now().Add(-1 * time.Minute).Unix()),
+			Status:        "success",
+			TaskID:        testTask.Id,
+			Execution:     testTask.Execution,
+			TestName:      "some-test",
+			LogURL:        "some-url",
+			TestStartTime: time.Now().Add(-9 * time.Minute),
+			TestEndTime:   time.Now().Add(-1 * time.Minute),
 		}
-		So(testTask.Insert(), ShouldBeNil)
-		So(testresult.InsertMany([]testresult.TestResult{testResult}), ShouldBeNil)
+		require.NoError(t, testTask.Insert())
+		require.NoError(t, testresult.InsertLocal(ctx, env, testResult))
 
 		url := "/rest/v1/tasks/" + taskId + "/status"
 
 		request, err := http.NewRequest("GET", url, nil)
+		request = request.WithContext(gimlet.AttachUser(request.Context(), &user.DBUser{Id: "user"}))
 		So(err, ShouldBeNil)
 
 		response := httptest.NewRecorder()
@@ -321,7 +338,7 @@ func TestGetTaskStatus(t *testing.T) {
 			So(ok, ShouldBeTrue)
 			So(len(jsonTestResults), ShouldEqual, 1)
 
-			_jsonTestResult, ok := jsonTestResults[testResult.TestFile]
+			_jsonTestResult, ok := jsonTestResults[testResult.TestName]
 			So(ok, ShouldBeTrue)
 			jsonTestResult, ok := _jsonTestResult.(map[string]interface{})
 			So(ok, ShouldBeTrue)
@@ -334,7 +351,7 @@ func TestGetTaskStatus(t *testing.T) {
 			jsonTestResultLogs, ok := _jsonTestResultLogs.(map[string]interface{})
 			So(ok, ShouldBeTrue)
 
-			So(jsonTestResultLogs["url"], ShouldEqual, testResult.URL)
+			So(jsonTestResultLogs["url"], ShouldEqual, testResult.LogURL)
 		})
 	})
 
@@ -345,6 +362,7 @@ func TestGetTaskStatus(t *testing.T) {
 
 		request, err := http.NewRequest("GET", url, nil)
 		So(err, ShouldBeNil)
+		request = request.WithContext(gimlet.AttachUser(request.Context(), &user.DBUser{Id: "user"}))
 
 		response := httptest.NewRecorder()
 		// Need match variables to be set so can call mux.Vars(request)
@@ -372,7 +390,10 @@ func TestGetDisplayTaskInfo(t *testing.T) {
 	router, err := newTestUIRouter(ctx, env)
 	require.NoError(err, "error setting up router")
 
-	require.NoError(db.ClearCollections(task.Collection, testresult.Collection))
+	defer func() {
+		assert.NoError(db.ClearCollections(task.Collection))
+		assert.NoError(testresult.ClearLocal(ctx, env))
+	}()
 
 	executionTaskId := "execution-task"
 	displayTaskId := "display-task"
@@ -380,17 +401,17 @@ func TestGetDisplayTaskInfo(t *testing.T) {
 	projectName := "project_test"
 
 	testResult := testresult.TestResult{
-		Status:    "success",
-		TaskID:    executionTaskId,
-		Execution: 0,
-		TestFile:  "some-test",
-		URL:       "some-url",
-		StartTime: float64(time.Now().Add(-9 * time.Minute).Unix()),
-		EndTime:   float64(time.Now().Add(-1 * time.Minute).Unix()),
+		Status:        "success",
+		TaskID:        executionTaskId,
+		Execution:     0,
+		TestName:      "some-test",
+		LogURL:        "some-url",
+		TestStartTime: time.Now().Add(-9 * time.Minute),
+		TestEndTime:   time.Now().Add(-1 * time.Minute),
 	}
-	_, err = insertTaskForTesting(executionTaskId, versionId, projectName, []testresult.TestResult{testResult})
+	_, err = insertTaskForTesting(ctx, env, executionTaskId, versionId, projectName, []testresult.TestResult{testResult})
 	assert.NoError(err)
-	displayTask, err := insertTaskForTesting(displayTaskId, versionId, projectName, []testresult.TestResult{})
+	displayTask, err := insertTaskForTesting(ctx, env, displayTaskId, versionId, projectName, nil)
 	assert.NoError(err)
 	displayTask.ExecutionTasks = []string{executionTaskId}
 	err = db.Update(task.Collection,
@@ -405,6 +426,7 @@ func TestGetDisplayTaskInfo(t *testing.T) {
 
 	request, err := http.NewRequest("GET", url, nil)
 	require.NoError(err)
+	request = request.WithContext(gimlet.AttachUser(request.Context(), &user.DBUser{Id: "user"}))
 
 	response := httptest.NewRecorder()
 	router.ServeHTTP(response, request)

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"fmt"
 	"time"
 
@@ -9,10 +10,13 @@ import (
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/commitqueue"
+	"github.com/evergreen-ci/evergreen/model/manifest"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/model/user"
+	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/utility"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
@@ -29,8 +33,6 @@ type Version struct {
 	Message             string               `bson:"message" json:"message,omitempty"`
 	Status              string               `bson:"status" json:"status,omitempty"`
 	RevisionOrderNumber int                  `bson:"order,omitempty" json:"order,omitempty"`
-	Config              string               `bson:"config" json:"config,omitempty"`
-	ConfigUpdateNumber  int                  `bson:"config_number" json:"config_number,omitempty"`
 	Ignored             bool                 `bson:"ignored" json:"ignored"`
 	Owner               string               `bson:"owner_name" json:"owner_name,omitempty"`
 	Repo                string               `bson:"repo_name" json:"repo_name,omitempty"`
@@ -84,6 +86,10 @@ type Version struct {
 
 	// this is only used for aggregations, and is not stored in the DB
 	Builds []build.Build `bson:"build_variants,omitempty" json:"build_variants,omitempty"`
+
+	// ProjectStorageMethod describes how the parser project for this version is
+	// stored. If this is empty, the default storage method is StorageMethodDB.
+	ProjectStorageMethod evergreen.ParserProjectStorageMethod `bson:"storage_method" json:"storage_method,omitempty"`
 }
 
 func (v *Version) MarshalBSON() ([]byte, error)  { return mgobson.Marshal(v) }
@@ -95,15 +101,10 @@ const (
 	MaxMainlineCommitVersionLimit     = 300
 )
 
-type GetVersionsOptions struct {
-	StartAfter     int    `json:"start"`
-	Requester      string `json:"requester"`
-	Limit          int    `json:"limit"`
-	Skip           int    `json:"skip"`
-	IncludeBuilds  bool   `json:"include_builds"`
-	IncludeTasks   bool   `json:"include_tasks"`
-	ByBuildVariant string `json:"by_build_variant"`
-	ByTask         string `json:"by_task"`
+// IsFinished returns whether or not the version has finished based on its
+// status.
+func (v *Version) IsFinished() bool {
+	return evergreen.IsFinishedVersionStatus(v.Status)
 }
 
 func (v *Version) LastSuccessful() (*Version, error) {
@@ -115,46 +116,35 @@ func (v *Version) LastSuccessful() (*Version, error) {
 	return lastGreen, nil
 }
 
-// UpdateBuildVariants sets this version's build variants.
-func (v *Version) UpdateBuildVariants() error {
+// ActivateAndSetBuildVariants activates the version and sets its build variants.
+func (v *Version) ActivateAndSetBuildVariants() error {
 	return VersionUpdateOne(
 		bson.M{VersionIdKey: v.Id},
 		bson.M{
 			"$set": bson.M{
+				VersionActivatedKey:     true,
 				VersionBuildVariantsKey: v.BuildVariants,
 			},
 		},
 	)
 }
 
-// SetActivated sets this version to activated if it's not already activated.
-func (v *Version) SetActivated() error {
-	if utility.FromBoolPtr(v.Activated) {
+// SetActivated sets version activated field to specified boolean.
+func (v *Version) SetActivated(activated bool) error {
+	if utility.FromBoolPtr(v.Activated) == activated {
 		return nil
 	}
-	v.Activated = utility.TruePtr()
-	return VersionUpdateOne(
-		bson.M{VersionIdKey: v.Id},
-		bson.M{
-			"$set": bson.M{
-				VersionActivatedKey: true,
-			},
-		},
-	)
+	v.Activated = utility.ToBoolPtr(activated)
+	return SetVersionActivated(v.Id, activated)
 }
 
-// SetNotActivated sets this version to inactive if it's been explicitly set to
-// activated.
-func (v *Version) SetNotActivated() error {
-	if !utility.FromBoolTPtr(v.Activated) {
-		return nil
-	}
-	v.Activated = utility.FalsePtr()
+// SetVersionActivated sets version activated field to specified boolean given a version id.
+func SetVersionActivated(versionId string, activated bool) error {
 	return VersionUpdateOne(
-		bson.M{VersionIdKey: v.Id},
+		bson.M{VersionIdKey: versionId},
 		bson.M{
 			"$set": bson.M{
-				VersionActivatedKey: false,
+				VersionActivatedKey: activated,
 			},
 		},
 	)
@@ -208,17 +198,16 @@ func (v *Version) UpdateStatus(newStatus string) error {
 	}
 
 	v.Status = newStatus
-	update := bson.M{
-		"$set": bson.M{
-			VersionStatusKey: newStatus,
-		},
-	}
-	err := VersionUpdateOne(bson.M{VersionIdKey: v.Id}, update)
-	if err != nil {
-		return err
-	}
+	return setVersionStatus(v.Id, newStatus)
+}
 
-	return nil
+func setVersionStatus(versionId, newStatus string) error {
+	return VersionUpdateOne(
+		bson.M{VersionIdKey: versionId},
+		bson.M{"$set": bson.M{
+			VersionStatusKey: newStatus,
+		}},
+	)
 }
 
 // GetTimeSpent returns the total time_taken and makespan of a version for
@@ -247,6 +236,22 @@ func (v *Version) MarkFinished(status string, finishTime time.Time) error {
 			VersionStatusKey:     status,
 		}},
 	)
+}
+
+// UpdateProjectStorageMethod updates the version's parser project storage
+// method.
+func (v *Version) UpdateProjectStorageMethod(method evergreen.ParserProjectStorageMethod) error {
+	if method == v.ProjectStorageMethod {
+		return nil
+	}
+
+	if err := VersionUpdateOne(bson.M{VersionIdKey: v.Id}, bson.M{
+		"$set": bson.M{VersionProjectStorageMethodKey: method},
+	}); err != nil {
+		return err
+	}
+	v.ProjectStorageMethod = method
+	return nil
 }
 
 func GetVersionForCommitQueueItem(cq *commitqueue.CommitQueue, issue string) (*Version, error) {
@@ -278,10 +283,10 @@ type ActivationStatus struct {
 }
 
 func (s *ActivationStatus) ShouldActivate(now time.Time) bool {
-	return !s.Activated && now.After(s.ActivateAt) && !s.ActivateAt.IsZero() && !utility.IsZeroTime(s.ActivateAt)
+	return !s.Activated && now.After(s.ActivateAt) && !utility.IsZeroTime(s.ActivateAt)
 }
 
-// VersionMetadata is used to pass information about upstream versions to downstream version creation
+// VersionMetadata is used to pass information about version creation
 type VersionMetadata struct {
 	Revision            Revision
 	TriggerID           string
@@ -290,6 +295,7 @@ type VersionMetadata struct {
 	TriggerDefinitionID string
 	SourceVersion       *Version
 	IsAdHoc             bool
+	Activate            bool
 	User                *user.DBUser
 	Message             string
 	Alias               string
@@ -319,6 +325,17 @@ type DuplicateVersions struct {
 	Versions []Version           `bson:"versions"`
 }
 
+func IsAborted(id string) (bool, error) {
+	v, err := VersionFindOne(VersionById(id))
+	if err != nil {
+		return false, errors.Errorf("finding version '%s'", id)
+	}
+	if v == nil {
+		return false, errors.Errorf("version '%s' not found", id)
+	}
+	return v.Aborted, nil
+}
+
 func VersionGetHistory(versionId string, N int) ([]Version, error) {
 	v, err := VersionFindOne(VersionById(versionId))
 	if err != nil {
@@ -337,7 +354,7 @@ func VersionGetHistory(versionId string, N int) ([]Version, error) {
 				"$in": evergreen.SystemVersionRequesterTypes,
 			},
 			VersionIdentifierKey: v.Identifier,
-		}).WithoutFields(VersionConfigKey).Sort([]string{VersionRevisionOrderNumberKey}).Limit(2*N + 1))
+		}).Sort([]string{VersionRevisionOrderNumberKey}).Limit(2*N + 1))
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -363,7 +380,7 @@ func VersionGetHistory(versionId string, N int) ([]Version, error) {
 					"$in": evergreen.SystemVersionRequesterTypes,
 				},
 				VersionIdentifierKey: v.Identifier,
-			}).WithoutFields(VersionConfigKey).Sort([]string{VersionRevisionOrderNumberKey}).Limit(N - versionIndex))
+			}).Sort([]string{VersionRevisionOrderNumberKey}).Limit(N - versionIndex))
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -383,7 +400,7 @@ func VersionGetHistory(versionId string, N int) ([]Version, error) {
 				"$in": evergreen.SystemVersionRequesterTypes,
 			},
 			VersionIdentifierKey: v.Identifier,
-		}).WithoutFields(VersionConfigKey).Sort([]string{fmt.Sprintf("-%v", VersionRevisionOrderNumberKey)}).Limit(N))
+		}).Sort([]string{fmt.Sprintf("-%v", VersionRevisionOrderNumberKey)}).Limit(N))
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -393,7 +410,7 @@ func VersionGetHistory(versionId string, N int) ([]Version, error) {
 	return versions, nil
 }
 
-func getMostRecentMainlineCommit(projectId string) (*Version, error) {
+func getMostRecentMainlineCommit(ctx context.Context, projectId string) (*Version, error) {
 	match := bson.M{
 		VersionIdentifierKey: projectId,
 		VersionRequesterKey: bson.M{
@@ -403,8 +420,14 @@ func getMostRecentMainlineCommit(projectId string) (*Version, error) {
 	pipeline := []bson.M{{"$match": match}, {"$sort": bson.M{VersionRevisionOrderNumberKey: -1}}, {"$limit": 1}}
 	res := []Version{}
 
-	if err := db.Aggregate(VersionCollection, pipeline, &res); err != nil {
+	env := evergreen.GetEnvironment()
+	cursor, err := env.DB().Collection(VersionCollection).Aggregate(ctx, pipeline)
+	if err != nil {
 		return nil, errors.Wrap(err, "aggregating versions")
+	}
+	err = cursor.All(ctx, &res)
+	if err != nil {
+		return nil, err
 	}
 
 	if len(res) == 0 {
@@ -414,13 +437,13 @@ func getMostRecentMainlineCommit(projectId string) (*Version, error) {
 }
 
 // GetPreviousPageCommitOrderNumber returns the first mainline commit that is LIMIT activated versions more recent than the specified commit
-func GetPreviousPageCommitOrderNumber(projectId string, order int, limit int, requesters []string) (*int, error) {
+func GetPreviousPageCommitOrderNumber(ctx context.Context, projectId string, order int, limit int, requesters []string) (*int, error) {
 	invalidRequesters, _ := utility.StringSliceSymmetricDifference(requesters, evergreen.SystemVersionRequesterTypes)
 	if len(invalidRequesters) > 0 {
 		return nil, errors.Errorf("invalid requesters %s", invalidRequesters)
 	}
 	// First check if we are already looking at the most recent commit.
-	mostRecentCommit, err := getMostRecentMainlineCommit(projectId)
+	mostRecentCommit, err := getMostRecentMainlineCommit(ctx, projectId)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -443,8 +466,14 @@ func GetPreviousPageCommitOrderNumber(projectId string, order int, limit int, re
 
 	res := []Version{}
 
-	if err := db.Aggregate(VersionCollection, pipeline, &res); err != nil {
+	env := evergreen.GetEnvironment()
+	cursor, err := env.DB().Collection(VersionCollection).Aggregate(ctx, pipeline)
+	if err != nil {
 		return nil, errors.Wrap(err, "aggregating versions")
+	}
+	err = cursor.All(ctx, &res)
+	if err != nil {
+		return nil, err
 	}
 
 	// If there are no newer mainline commits, return nil to indicate that we are already on the first page.
@@ -467,7 +496,7 @@ type MainlineCommitVersionOptions struct {
 	Requesters      []string
 }
 
-func GetMainlineCommitVersionsWithOptions(projectId string, opts MainlineCommitVersionOptions) ([]Version, error) {
+func GetMainlineCommitVersionsWithOptions(ctx context.Context, projectId string, opts MainlineCommitVersionOptions) ([]Version, error) {
 	invalidRequesters, _ := utility.StringSliceSymmetricDifference(opts.Requesters, evergreen.SystemVersionRequesterTypes)
 	if len(invalidRequesters) > 0 {
 		return nil, errors.Errorf("invalid requesters %s", invalidRequesters)
@@ -491,14 +520,33 @@ func GetMainlineCommitVersionsWithOptions(projectId string, opts MainlineCommitV
 	pipeline = append(pipeline, bson.M{"$limit": limit})
 
 	res := []Version{}
-
-	if err := db.Aggregate(VersionCollection, pipeline, &res); err != nil {
+	env := evergreen.GetEnvironment()
+	cursor, err := env.DB().Collection(VersionCollection).Aggregate(ctx, pipeline)
+	if err != nil {
 		return nil, errors.Wrap(err, "aggregating versions")
+	}
+	err = cursor.All(ctx, &res)
+	if err != nil {
+		return nil, err
 	}
 
 	return res, nil
 }
 
+// GetVersionsOptions is a struct that holds the options for retrieving a list of versions
+type GetVersionsOptions struct {
+	StartAfter     int    `json:"start"`
+	Requester      string `json:"requester"`
+	Limit          int    `json:"limit"`
+	Skip           int    `json:"skip"`
+	IncludeBuilds  bool   `json:"include_builds"`
+	IncludeTasks   bool   `json:"include_tasks"`
+	ByBuildVariant string `json:"by_build_variant"`
+	ByTask         string `json:"by_task"`
+}
+
+// GetVersionsWithOptions returns versions for a project, that satisfy a set of query parameters defined by
+// the input GetVersionsOptions.
 func GetVersionsWithOptions(projectName string, opts GetVersionsOptions) ([]Version, error) {
 	projectId, err := GetIdForProject(projectName)
 	if err != nil {
@@ -519,7 +567,7 @@ func GetVersionsWithOptions(projectName string, opts GetVersionsOptions) ([]Vers
 	if opts.StartAfter > 0 {
 		match[VersionRevisionOrderNumberKey] = bson.M{"$lt": opts.StartAfter}
 	}
-	pipeline := []bson.M{bson.M{"$match": match}}
+	pipeline := []bson.M{{"$match": match}}
 	pipeline = append(pipeline, bson.M{"$sort": bson.M{VersionRevisionOrderNumberKey: -1}})
 
 	// initial projection of version items
@@ -605,6 +653,138 @@ func GetVersionsWithOptions(projectName string, opts GetVersionsOptions) ([]Vers
 		return nil, errors.Wrap(err, "aggregating versions and builds")
 	}
 	return res, nil
+}
+
+// ModifyVersionsOptions is a struct containing options necessary to modify versions.
+type ModifyVersionsOptions struct {
+	Priority      *int64 `json:"priority"`
+	StartTimeStr  string `json:"start_time_str"`
+	EndTimeStr    string `json:"end_time_str"`
+	RevisionStart int    `json:"revision_start"`
+	RevisionEnd   int    `json:"revision_end"`
+	Requester     string `json:"requester"`
+}
+
+// GetVersionsToModify returns a slice of versions intended to be modified that satisfy the given ModifyVersionsOptions.
+func GetVersionsToModify(projectName string, opts ModifyVersionsOptions, startTime, endTime time.Time) ([]Version, error) {
+	projectId, err := GetIdForProject(projectName)
+	if err != nil {
+		return nil, err
+	}
+	match := bson.M{
+		VersionIdentifierKey: projectId,
+		VersionRequesterKey:  opts.Requester,
+	}
+
+	// setting revision numbers will take precedence over setting start and end times
+	if opts.RevisionStart > 0 {
+		match[VersionRevisionOrderNumberKey] = bson.M{"$lte": opts.RevisionStart, "$gte": opts.RevisionEnd}
+	} else {
+		match[VersionCreateTimeKey] = bson.M{"$gte": startTime, "$lte": endTime}
+	}
+	versions, err := VersionFind(db.Query(match))
+	if err != nil {
+		return nil, errors.Wrap(err, "finding versions")
+	}
+	return versions, nil
+}
+
+// constructManifest will construct a manifest from the given project and version.
+func constructManifest(v *Version, projectRef *ProjectRef, moduleList ModuleList, settings *evergreen.Settings) (*manifest.Manifest, error) {
+	if len(moduleList) == 0 {
+		return nil, nil
+	}
+	newManifest := &manifest.Manifest{
+		Id:          v.Id,
+		Revision:    v.Revision,
+		ProjectName: v.Identifier,
+		Branch:      projectRef.Branch,
+		IsBase:      v.Requester == evergreen.RepotrackerVersionRequester,
+	}
+	token, err := settings.GetGithubOauthToken()
+	if err != nil {
+		return nil, errors.Wrap(err, "getting github oauth token")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	var baseManifest *manifest.Manifest
+	isPatch := utility.StringSliceContains(evergreen.PatchRequesters, v.Requester)
+	if isPatch {
+		baseManifest, err = manifest.FindFromVersion(v.Id, v.Identifier, v.Revision, v.Requester)
+		if err != nil {
+			return nil, errors.Wrap(err, "getting base manifest")
+		}
+	}
+
+	var gitCommit *github.RepositoryCommit
+	modules := map[string]*manifest.Module{}
+	for _, module := range moduleList {
+		if isPatch && !module.AutoUpdate && baseManifest != nil {
+			if baseModule, ok := baseManifest.Modules[module.Name]; ok {
+				modules[module.Name] = baseModule
+				continue
+			}
+		}
+		var sha, url string
+		owner, repo := module.GetRepoOwnerAndName()
+		if module.Ref == "" {
+			var commit *github.RepositoryCommit
+			commit, err = thirdparty.GetCommitEvent(ctx, token, projectRef.Owner, projectRef.Repo, v.Revision)
+			if err != nil {
+				return nil, errors.Wrapf(err, "can't get commit '%s' on '%s/%s'", v.Revision, projectRef.Owner, projectRef.Repo)
+			}
+			if commit == nil || commit.Commit == nil || commit.Commit.Committer == nil {
+				return nil, errors.New("malformed GitHub commit response")
+			}
+			// If this is a mainline commit, retrieve the module's commit from the time of the mainline commit.
+			// Otherwise, retrieve the module's commit from the time of the patch creation.
+			revisionTime := time.Unix(0, 0)
+			if !evergreen.IsPatchRequester(v.Requester) {
+				revisionTime = commit.Commit.Committer.GetDate().Time
+			}
+			var branchCommits []*github.RepositoryCommit
+			branchCommits, _, err = thirdparty.GetGithubCommits(ctx, token, owner, repo, module.Branch, revisionTime, 0)
+			if err != nil {
+				return nil, errors.Wrapf(err, "retrieving git branch for module '%s'", module.Name)
+			}
+			if len(branchCommits) > 0 {
+				sha = branchCommits[0].GetSHA()
+				url = branchCommits[0].GetURL()
+			}
+		} else {
+			sha = module.Ref
+			gitCommit, err = thirdparty.GetCommitEvent(ctx, token, owner, repo, module.Ref)
+			if err != nil {
+				return nil, errors.Wrapf(err, "retrieving getting git commit for module %s with hash %s", module.Name, module.Ref)
+			}
+			url = gitCommit.GetURL()
+		}
+
+		modules[module.Name] = &manifest.Module{
+			Branch:   module.Branch,
+			Revision: sha,
+			Repo:     repo,
+			Owner:    owner,
+			URL:      url,
+		}
+
+	}
+	newManifest.Modules = modules
+	return newManifest, nil
+}
+
+// CreateManifest inserts a newly constructed manifest into the DB.
+func CreateManifest(v *Version, proj *Project, projectRef *ProjectRef, settings *evergreen.Settings) (*manifest.Manifest, error) {
+	newManifest, err := constructManifest(v, projectRef, proj.Modules, settings)
+	if err != nil {
+		return nil, errors.Wrap(err, "constructing manifest")
+	}
+	if newManifest == nil {
+		return nil, nil
+	}
+	_, err = newManifest.TryInsert()
+	return newManifest, errors.Wrap(err, "inserting manifest")
 }
 
 type VersionsByCreateTime []Version

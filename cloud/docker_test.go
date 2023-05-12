@@ -174,7 +174,7 @@ func (s *DockerSuite) TestSpawnInvalidSettings() {
 	defer cancel()
 
 	ec2HostOps := s.hostOpts
-	ec2HostOps.Distro.Provider = evergreen.ProviderNameEc2Auto
+	ec2HostOps.Distro.Provider = evergreen.ProviderNameEc2Fleet
 	h := host.NewIntent(ec2HostOps)
 	h, err := s.manager.SpawnHost(ctx, h)
 	s.Error(err)
@@ -371,7 +371,8 @@ func (s *DockerSuite) TestGetContainerImageFailedDownload() {
 	s.Equal("parent", parent.Id)
 
 	err = s.manager.GetContainerImage(ctx, parent, host.DockerOptions{Image: "image-url", Method: distro.DockerImageBuildTypeImport})
-	s.EqualError(err, "Unable to ensure that image 'image-url' is on host 'parent': failed to download image")
+	s.Require().Error(err)
+	s.Contains(err.Error(), "failed to download image")
 }
 
 func (s *DockerSuite) TestGetContainerImageFailedBuild() {
@@ -388,5 +389,6 @@ func (s *DockerSuite) TestGetContainerImageFailedBuild() {
 	s.Equal("parent", parent.Id)
 
 	err = s.manager.GetContainerImage(ctx, parent, host.DockerOptions{Image: "image-url", Method: distro.DockerImageBuildTypeImport})
-	s.EqualError(err, "Failed to build image 'image-url' with agent on host 'parent': failed to build image with agent")
+	s.Require().Error(err)
+	s.Contains(err.Error(), "failed to build image with agent")
 }

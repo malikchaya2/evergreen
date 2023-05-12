@@ -30,10 +30,10 @@ const (
 	ProjectAWSSSHKeyValue = "__project_aws_ssh_key_value"
 )
 
-//ProjectVars holds a map of variables specific to a given project.
-//They can be fetched at run time by the agent, so that settings which are
-//sensitive or subject to frequent change don't need to be hard-coded into
-//yml files.
+// ProjectVars holds a map of variables specific to a given project.
+// They can be fetched at run time by the agent, so that settings which are
+// sensitive or subject to frequent change don't need to be hard-coded into
+// yml files.
 type ProjectVars struct {
 
 	//Should match the identifier of the project it refers to
@@ -340,9 +340,13 @@ func (projectVars *ProjectVars) RedactPrivateVars() *ProjectVars {
 
 func GetVarsByValue(val string) ([]*ProjectVars, error) {
 	matchingProjects := []*ProjectVars{}
-	filter := fmt.Sprintf("function() { for (var field in this.vars) { if (this.vars[field] == \"%s\") return true; } return false; }", val)
-	q := db.Query(bson.M{"$where": filter})
-	err := db.FindAllQ(ProjectVarsCollection, q, &matchingProjects)
+	pipeline := []bson.M{
+		{"$addFields": bson.M{projectVarsMapKey: bson.M{"$objectToArray": "$" + projectVarsMapKey}}},
+		{"$match": bson.M{bsonutil.GetDottedKeyName(projectVarsMapKey, "v"): val}},
+		{"$addFields": bson.M{projectVarsMapKey: bson.M{"$arrayToObject": "$" + projectVarsMapKey}}},
+	}
+
+	err := db.Aggregate(ProjectVarsCollection, pipeline, &matchingProjects)
 
 	if adb.ResultsNotFound(err) {
 		return nil, nil

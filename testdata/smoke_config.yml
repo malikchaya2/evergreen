@@ -1,3 +1,8 @@
+# This file contains the admin settings used for the smoke test's app server.
+# This does not contain the entire configuration that will be used in the smoke
+# test, because it excludes the sensitive credentials necessary for the smoke
+# test to run (which are populated during task runtime).
+
 log_path: "server_logs.txt"
 
 database:
@@ -5,6 +10,11 @@ database:
   db: "mci_smoke"
   write_concern:
     wmode: majority
+
+amboy:
+  database: amboy_smoke
+  name: evg.service
+  skip_preferred_indexes: true
 
 domain_name: "evergreen.local"
 configdir: "config_test"
@@ -15,6 +25,7 @@ api:
   github_webhook_secret: "test"
   httplistenaddr: ":8080"
 ui:
+  parsley_url: "http://localhost:4173"
   secret: "secret for UI"
   defaultproject: "logkeeper"
   url: "http://localhost:9090"
@@ -65,3 +76,10 @@ repotracker:
   maxreporevisionstosearch: 10
 
 shutdown_wait_seconds: 10
+
+cedar:
+  base_url: "localhost"
+  rpc_port: "7070"
+  user: "user"
+  api_key: "key"
+  insecure: true

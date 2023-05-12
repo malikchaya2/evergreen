@@ -1,11 +1,20 @@
 package evergreen
 
 import (
+	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
 	"go.mongodb.org/mongo-driver/mongo/options"
+)
+
+var (
+	cloudProvidersAWSKey       = bsonutil.MustHaveTag(CloudProviders{}, "AWS")
+	cloudProvidersDockerKey    = bsonutil.MustHaveTag(CloudProviders{}, "Docker")
+	cloudProvidersGCEKey       = bsonutil.MustHaveTag(CloudProviders{}, "GCE")
+	cloudProvidersOpenStackKey = bsonutil.MustHaveTag(CloudProviders{}, "OpenStack")
+	cloudProvidersVSphereKey   = bsonutil.MustHaveTag(CloudProviders{}, "VSphere")
 )
 
 // CloudProviders stores configuration settings for the supported cloud host providers.
@@ -30,11 +39,11 @@ func (c *CloudProviders) Get(env Environment) error {
 			*c = CloudProviders{}
 			return nil
 		}
-		return errors.Wrapf(err, "error retrieving section %s", c.SectionId())
+		return errors.Wrapf(err, "getting config section '%s'", c.SectionId())
 	}
 
 	if err := res.Decode(c); err != nil {
-		return errors.Wrap(err, "problem decoding result")
+		return errors.Wrapf(err, "decoding config section '%s'", c.SectionId())
 	}
 
 	return nil
@@ -48,15 +57,15 @@ func (c *CloudProviders) Set() error {
 
 	_, err := coll.UpdateOne(ctx, byId(c.SectionId()), bson.M{
 		"$set": bson.M{
-			"aws":       c.AWS,
-			"docker":    c.Docker,
-			"gce":       c.GCE,
-			"openstack": c.OpenStack,
-			"vsphere":   c.VSphere,
+			cloudProvidersAWSKey:       c.AWS,
+			cloudProvidersDockerKey:    c.Docker,
+			cloudProvidersGCEKey:       c.GCE,
+			cloudProvidersOpenStackKey: c.OpenStack,
+			cloudProvidersVSphereKey:   c.VSphere,
 		},
 	}, options.Update().SetUpsert(true))
 
-	return errors.Wrapf(err, "error updating section %s", c.SectionId())
+	return errors.Wrapf(err, "updating config section '%s'", c.SectionId())
 }
 
 func (c *CloudProviders) ValidateAndDefault() error {
@@ -90,6 +99,10 @@ type AWSConfig struct {
 	// TaskSyncRead stores credentials for reading task data in S3.
 	TaskSyncRead S3Credentials `bson:"task_sync_read" json:"task_sync_read" yaml:"task_sync_read"`
 
+	// ParserProject is configuration for storing and accessing parser projects
+	// in S3.
+	ParserProject ParserProjectS3Config `bson:"parser_project" json:"parser_project" yaml:"parser_project"`
+
 	DefaultSecurityGroup string `bson:"default_security_group" json:"default_security_group" yaml:"default_security_group"`
 
 	AllowedRegions []string `bson:"allowed_regions" json:"allowed_regions" yaml:"allowed_regions"`
@@ -98,7 +111,7 @@ type AWSConfig struct {
 	MaxVolumeSizePerUser int      `bson:"max_volume_size" json:"max_volume_size" yaml:"max_volume_size"`
 
 	// Pod represents configuration for using pods in AWS.
-	Pod AWSPodConfig
+	Pod AWSPodConfig `bson:"pod" json:"pod" yaml:"pod"`
 }
 
 type S3Credentials struct {
@@ -114,6 +127,15 @@ func (c *S3Credentials) Validate() error {
 	catcher.NewWhen(c.Bucket == "", "bucket must not be empty")
 	return catcher.Resolve()
 }
+
+// ParserProjectS3Config is the configuration options for storing and accessing
+// parser projects in S3.
+type ParserProjectS3Config struct {
+	S3Credentials `bson:",inline" yaml:",inline"`
+	Prefix        string `bson:"prefix" json:"prefix" yaml:"prefix"`
+}
+
+func (c *ParserProjectS3Config) Validate() error { return nil }
 
 // AWSPodConfig represents configuration for using pods backed by AWS.
 type AWSPodConfig struct {
@@ -135,6 +157,12 @@ func (c *AWSPodConfig) Validate() error {
 
 // ECSConfig represents configuration for AWS ECS.
 type ECSConfig struct {
+	// MaxCPU is the maximum allowed CPU units (1024 CPU units = 1 vCPU) that a
+	// single pod can use.
+	MaxCPU int `bson:"max_cpu" json:"max_cpu" yaml:"max_cpu"`
+	// MaxMemoryMB is the maximum allowed memory (in MB) that a single pod can
+	// use.
+	MaxMemoryMB int `bson:"max_memory_mb" json:"max_memory_mb" yaml:"max_memory_mb"`
 	// TaskDefinitionPrefix is the prefix for the task definition families.
 	TaskDefinitionPrefix string `bson:"task_definition_prefix" json:"task_definition_prefix" yaml:"task_definition_prefix"`
 	// TaskRole is the IAM role that ECS tasks can assume to make AWS requests.
@@ -142,12 +170,22 @@ type ECSConfig struct {
 	// ExecutionRole is the IAM role that ECS container instances can assume to
 	// make AWS requests.
 	ExecutionRole string `bson:"execution_role" json:"execution_role" yaml:"execution_role"`
+	// LogRegion is the region used by the task definition's log configuration.
+	LogRegion string `bson:"log_region" json:"log_region" yaml:"log_region"`
+	// LogGroup is the log group name used by the task definition's log configuration.
+	LogGroup string `bson:"log_group" json:"log_group" yaml:"log_group"`
+	// LogStreamPrefix is the prefix used to determine log group stream names.
+	LogStreamPrefix string `bson:"log_stream_prefix" json:"log_stream_prefix" yaml:"log_stream_prefix"`
 	// AWSVPC specifies configuration when ECS tasks use AWSVPC networking.
 	AWSVPC AWSVPCConfig `bson:"awsvpc" json:"awsvpc" yaml:"awsvpc"`
 	// Clusters specify the configuration of each particular ECS cluster.
 	Clusters []ECSClusterConfig `bson:"clusters" json:"clusters" yaml:"clusters"`
 	// CapacityProviders specify the available capacity provider configurations.
 	CapacityProviders []ECSCapacityProvider `bson:"capacity_providers" json:"capacity_providers" yaml:"capacity_providers"`
+	// ClientType represents the type of Secrets Manager client implementation
+	// that will be used. This is not a value that can or should be configured
+	// for production, but is useful to explicitly set for testing purposes.
+	ClientType AWSClientType `bson:"client_type" json:"client_type" yaml:"client_type"`
 }
 
 // AWSVPCConfig represents configuration when using AWSVPC networking in ECS.
@@ -185,12 +223,53 @@ const (
 	ECSOSWindows = "windows"
 )
 
+// Validate checks that the OS is a valid one for running containers.
 func (p ECSOS) Validate() error {
 	switch p {
 	case ECSOSLinux, ECSOSWindows:
 		return nil
 	default:
 		return errors.Errorf("unrecognized ECS OS '%s'", p)
+	}
+}
+
+// ECSArch represents a CPU architecture that can run containers in ECS.
+type ECSArch string
+
+const (
+	ECSArchAMD64 = "amd64"
+	ECSArchARM64 = "arm64"
+)
+
+// Validate checks that the CPU architecture is a valid one for running
+// containers.
+func (a ECSArch) Validate() error {
+	switch a {
+	case ECSArchAMD64, ECSArchARM64:
+		return nil
+	default:
+		return errors.Errorf("unrecognized ECS capacity provider arch '%s'", a)
+	}
+}
+
+// ECSWindowsVersion represents a particular Windows OS version that can run
+// containers in ECS.
+type ECSWindowsVersion string
+
+const (
+	ECSWindowsServer2016 = "windows_server_2016"
+	ECSWindowsServer2019 = "windows_server_2019"
+	ECSWindowsServer2022 = "windows_server_2022"
+)
+
+// Validate checks that the Windows OS version is a valid one for running
+// containers.
+func (v ECSWindowsVersion) Validate() error {
+	switch v {
+	case ECSWindowsServer2016, ECSWindowsServer2019, ECSWindowsServer2022:
+		return nil
+	default:
+		return errors.Errorf("unrecognized ECS Windows version '%s'", v)
 	}
 }
 
@@ -204,6 +283,10 @@ type ECSCapacityProvider struct {
 	// Arch is the type of CPU architecture that the container instances in this
 	// capacity provider can run.
 	Arch ECSArch `bson:"arch" json:"arch" yaml:"arch"`
+	// WindowsVersion is the particular version of Windows that container
+	// instances in this capacity provider run. This only applies if the OS is
+	// Windows.
+	WindowsVersion ECSWindowsVersion `bson:"windows_version" json:"windows_version" yaml:"windows_version"`
 }
 
 // Validate checks that the required settings are given for the capacity
@@ -213,24 +296,16 @@ func (p *ECSCapacityProvider) Validate() error {
 	catcher.NewWhen(p.Name == "", "must provide a capacity provider name")
 	catcher.Add(p.OS.Validate())
 	catcher.Add(p.Arch.Validate())
-	return catcher.Resolve()
-}
-
-// ECSArch represents a CPU architecture that can run containers in ECS.
-type ECSArch string
-
-const (
-	ECSArchAMD64 = "amd64"
-	ECSArchARM64 = "arm64"
-)
-
-func (a ECSArch) Validate() error {
-	switch a {
-	case ECSArchAMD64, ECSArchARM64:
-		return nil
-	default:
-		return errors.Errorf("unrecognized ECS capacity provider arch '%s'", a)
+	if p.OS == ECSOSWindows {
+		if p.WindowsVersion == "" {
+			catcher.New("must specify a particular Windows version when using Windows OS")
+		} else {
+			catcher.Add(p.WindowsVersion.Validate())
+		}
+	} else if p.OS != ECSOSWindows && p.WindowsVersion != "" {
+		catcher.New("cannot specify a Windows version for a non-Windows OS")
 	}
+	return catcher.Resolve()
 }
 
 // Validate checks that the ECS cluster configuration has the required fields
@@ -246,7 +321,23 @@ func (c *ECSClusterConfig) Validate() error {
 type SecretsManagerConfig struct {
 	// SecretPrefix is the prefix for secret names.
 	SecretPrefix string `bson:"secret_prefix" json:"secret_prefix" yaml:"secret_prefix"`
+	// ClientType represents the type of Secrets Manager client implementation
+	// that will be used. This is not a value that can or should be configured
+	// for production, but is useful to explicitly set for testing purposes.
+	ClientType AWSClientType `bson:"client_type" json:"client_type" yaml:"client_type"`
 }
+
+// AWSClientType represents the different types of AWS client implementations
+// that can be used.
+type AWSClientType string
+
+const (
+	// AWSClientTypeBasic is the standard implementation of an AWS client.
+	AWSClientTypeBasic AWSClientType = ""
+	// AWSClientTypeMock is the mock implementation of an AWS client for testing
+	// purposes only. This should never be used in production.
+	AWSClientTypeMock AWSClientType = "mock"
+)
 
 // DockerConfig stores auth info for Docker.
 type DockerConfig struct {

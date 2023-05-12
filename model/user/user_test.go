@@ -24,7 +24,7 @@ type UserTestSuite struct {
 	users []*DBUser
 }
 
-func TestDBUser(t *testing.T) {
+func TestUserTestSuite(t *testing.T) {
 	s := &UserTestSuite{}
 	suite.Run(t, s)
 }
@@ -38,10 +38,12 @@ func (s *UserTestSuite) SetupTest() {
 	s.NoError(db.ClearCollections(Collection, evergreen.ScopeCollection, evergreen.RoleCollection))
 	s.Require().NoError(db.CreateCollections(evergreen.ScopeCollection))
 	s.users = []*DBUser{
-		&DBUser{
+		{
 			Id:     "Test1",
 			APIKey: "12345",
 			Settings: UserSettings{
+				SlackUsername: "person",
+				SlackMemberId: "12345member",
 				GithubUser: GithubUser{
 					UID:         1234,
 					LastKnownAs: "octocat",
@@ -54,7 +56,7 @@ func (s *UserTestSuite) SetupTest() {
 				TTL:          time.Now(),
 			},
 		},
-		&DBUser{
+		{
 			Id: "Test2",
 			PubKeys: []PubKey{
 				{
@@ -69,7 +71,7 @@ func (s *UserTestSuite) SetupTest() {
 				TTL:   time.Now().Add(-time.Hour),
 			},
 		},
-		&DBUser{
+		{
 			Id: "Test3",
 			PubKeys: []PubKey{
 				{
@@ -80,14 +82,14 @@ func (s *UserTestSuite) SetupTest() {
 			},
 			APIKey: "67890",
 		},
-		&DBUser{
+		{
 			Id: "Test4",
 			LoginCache: LoginCache{
 				Token: "5678",
 				TTL:   time.Now(),
 			},
 		},
-		&DBUser{
+		{
 			Id:     "Test5",
 			APIKey: "api",
 			LoginCache: LoginCache{
@@ -97,7 +99,7 @@ func (s *UserTestSuite) SetupTest() {
 				TTL:          time.Now(),
 			},
 		},
-		&DBUser{
+		{
 			Id: "Test6",
 			PubKeys: []PubKey{
 				{
@@ -467,6 +469,13 @@ func (s *UserTestSuite) TestGetPatchUser() {
 	s.Equal(evergreen.GithubPatchUser, u.Id)
 }
 
+func (s *UserTestSuite) TestGetSlackMemberId() {
+	username := "person"
+	memberId, err := GetSlackMemberId(username)
+	s.NoError(err)
+	s.Equal("12345member", memberId)
+}
+
 func (s *UserTestSuite) TestRoles() {
 	u := s.users[0]
 	for i := 1; i <= 3; i++ {
@@ -621,7 +630,7 @@ func TestServiceUserOperations(t *testing.T) {
 func TestGetOrCreateUser(t *testing.T) {
 	id := "id"
 	name := "name"
-	email := "email"
+	email := ""
 	accessToken := "access_token"
 	refreshToken := "refresh_token"
 
@@ -648,7 +657,7 @@ func TestGetOrCreateUser(t *testing.T) {
 			checkUser(t, dbUser, id, name, email, accessToken, refreshToken)
 			assert.Equal(t, apiKey, dbUser.GetAPIKey())
 		},
-		"UpdateAlwaysSetsNameAndEmail": func(t *testing.T) {
+		"UpdateAlwaysSetsName": func(t *testing.T) {
 			user, err := GetOrCreateUser(id, name, email, accessToken, refreshToken, nil)
 			require.NoError(t, err)
 
@@ -657,14 +666,13 @@ func TestGetOrCreateUser(t *testing.T) {
 			assert.NotEmpty(t, apiKey)
 
 			newName := "new_name"
-			newEmail := "new_email"
-			user, err = GetOrCreateUser(id, newName, newEmail, accessToken, refreshToken, nil)
+			user, err = GetOrCreateUser(id, newName, email, accessToken, refreshToken, nil)
 			require.NoError(t, err)
 
-			checkUser(t, user, id, newName, newEmail, accessToken, refreshToken)
+			checkUser(t, user, id, newName, email, accessToken, refreshToken)
 			assert.Equal(t, apiKey, user.GetAPIKey())
 		},
-		"UpdateSetsTokensIfNonempty": func(t *testing.T) {
+		"UpdateSetsRefreshTokenIfNonempty": func(t *testing.T) {
 			user, err := GetOrCreateUser(id, name, email, accessToken, refreshToken, nil)
 			require.NoError(t, err)
 
@@ -678,7 +686,7 @@ func TestGetOrCreateUser(t *testing.T) {
 			checkUser(t, user, id, name, email, accessToken, refreshToken)
 			assert.Equal(t, apiKey, user.GetAPIKey())
 
-			user, err = GetOrCreateUser(id, name, email, "", "", nil)
+			user, err = GetOrCreateUser(id, name, email, accessToken, "", nil)
 			require.NoError(t, err)
 
 			checkUser(t, user, id, name, email, accessToken, refreshToken)
@@ -694,9 +702,9 @@ func TestGetOrCreateUser(t *testing.T) {
 		},
 		"RolesMergeCorrectly": func(t *testing.T) {
 			roles := []string{"one", "two"}
-			user, err := GetOrCreateUser(id, "", "", "", "", roles)
+			user, err := GetOrCreateUser(id, "", "", "token", "", roles)
 			assert.NoError(t, err)
-			checkUser(t, user, id, "id", "", "", "")
+			checkUser(t, user, id, "id", "", "token", "")
 			assert.Equal(t, roles, user.Roles())
 
 			user, err = GetOrCreateUser(id, name, email, accessToken, refreshToken, nil)
@@ -798,4 +806,28 @@ func TestViewableProjectSettings(t *testing.T) {
 	assert.Contains(t, projects, "edit2")
 	assert.Contains(t, projects, "view1")
 	assert.NotContains(t, projects, "other")
+}
+
+func (s *UserTestSuite) TestClearUser() {
+	// Error on non-existent user
+	s.Error(ClearUser("asdf"))
+
+	u, err := FindOneById(s.users[0].Id)
+	s.NoError(err)
+	s.NotNil(u)
+	s.NotEmpty(u.Settings)
+	s.Equal("Test1", u.Id)
+	s.NoError(u.AddRole("r1p1"))
+	s.NotEmpty(u.SystemRoles)
+
+	s.NoError(ClearUser(u.Id))
+
+	// Settings and roles should now be empty
+	u, err = FindOneById(s.users[0].Id)
+	s.NoError(err)
+	s.NotNil(u)
+
+	s.Empty(u.Settings)
+	s.Empty(u.Roles())
+	s.Empty(u.LoginCache)
 }

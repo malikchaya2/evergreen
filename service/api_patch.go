@@ -35,39 +35,107 @@ type PatchAPIResponse struct {
 	Patch   *patch.Patch `json:"patch"`
 }
 
+// getAuthor returns the author for the patch. If githubAuthor or patchAuthor is provided and exists, will use that
+// author instead of the submitter if the submitter is authorized to submit patches on behalf of users.
+// Returns the author, status code, and error.
+func (as *APIServer) getAuthor(data patchData, dbUser *user.DBUser, projectId, patchID string) (string, int, error) {
+	author := dbUser.Id
+	if data.GithubAuthor == "" && data.PatchAuthor == "" {
+		return author, http.StatusOK, nil
+	}
+
+	opts := gimlet.PermissionOpts{
+		Resource:      projectId,
+		ResourceType:  evergreen.ProjectResourceType,
+		Permission:    evergreen.PermissionPatches,
+		RequiredLevel: evergreen.PatchSubmitAdmin.Value,
+	}
+	if !dbUser.HasPermission(opts) {
+		return "", http.StatusUnauthorized, errors.New("user is not authorized to patch on behalf of other users")
+	}
+
+	if data.GithubAuthor != "" {
+		specifiedUser, err := user.FindByGithubName(data.GithubAuthor)
+		if err != nil {
+			return "", http.StatusInternalServerError, errors.Wrapf(err, "error looking for github author '%s'", data.GithubAuthor)
+		}
+		if specifiedUser != nil {
+			grip.Info(message.Fields{
+				"message":               "overriding patch author as specified by the submitter",
+				"submitter":             dbUser.Id,
+				"new_author":            specifiedUser.Id,
+				"given_github_username": data.GithubAuthor,
+				"patch_id":              patchID,
+			})
+			author = specifiedUser.Id
+		}
+		grip.DebugWhen(specifiedUser == nil, message.Fields{
+			"message":         "github user not found",
+			"github_username": data.GithubAuthor,
+			"patch_id":        patchID,
+		})
+	} else if data.PatchAuthor != "" {
+		specifiedUser, err := user.FindOneById(data.PatchAuthor)
+		if err != nil {
+			return "", http.StatusInternalServerError, errors.Wrapf(err, "error looking for author '%s'", data.PatchAuthor)
+		}
+		if specifiedUser != nil {
+			grip.Info(message.Fields{
+				"message":    "overriding patch author as specified by the submitter",
+				"submitter":  dbUser.Id,
+				"new_author": data.PatchAuthor,
+				"patch_id":   patchID,
+			})
+			author = specifiedUser.Id
+		}
+		grip.DebugWhen(specifiedUser == nil, message.Fields{
+			"message":  "patch user not found",
+			"username": data.PatchAuthor,
+			"patch_id": patchID,
+		})
+	}
+
+	return author, http.StatusOK, nil
+}
+
+type patchData struct {
+	Description       string             `json:"desc"`
+	Path              string             `json:"path"`
+	Project           string             `json:"project"`
+	BackportInfo      patch.BackportInfo `json:"backport_info"`
+	GitMetadata       *patch.GitMetadata `json:"git_metadata"`
+	PatchBytes        []byte             `json:"patch_bytes"`
+	Githash           string             `json:"githash"`
+	Parameters        []patch.Parameter  `json:"parameters"`
+	Variants          []string           `json:"buildvariants_new"`
+	Tasks             []string           `json:"tasks"`
+	RegexVariants     []string           `json:"regex_buildvariants"`
+	RegexTasks        []string           `json:"regex_tasks"`
+	SyncBuildVariants []string           `json:"sync_build_variants"`
+	SyncTasks         []string           `json:"sync_tasks"`
+	SyncStatuses      []string           `json:"sync_statuses"`
+	SyncTimeout       time.Duration      `json:"sync_timeout"`
+	Finalize          bool               `json:"finalize"`
+	TriggerAliases    []string           `json:"trigger_aliases"`
+	Alias             string             `json:"alias"`
+	RepeatFailed      bool               `json:"repeat_failed"`
+	RepeatDefinition  bool               `json:"reuse_definition"`
+	RepeatPatchId     string             `json:"repeat_patch_id"`
+	GithubAuthor      string             `json:"github_author"`
+	PatchAuthor       string             `json:"patch_author"`
+}
+
 // submitPatch creates the Patch document, adds the patched project config to it,
 // and saves the patches to GridFS to be retrieved
 func (as *APIServer) submitPatch(w http.ResponseWriter, r *http.Request) {
 	dbUser := MustHaveUser(r)
 
-	data := struct {
-		Description       string             `json:"desc"`
-		Path              string             `json:"path"`
-		Project           string             `json:"project"`
-		BackportInfo      patch.BackportInfo `json:"backport_info"`
-		GitMetadata       *patch.GitMetadata `json:"git_metadata"`
-		PatchBytes        []byte             `json:"patch_bytes"`
-		Githash           string             `json:"githash"`
-		Parameters        []patch.Parameter  `json:"parameters"`
-		Variants          []string           `json:"buildvariants_new"`
-		Tasks             []string           `json:"tasks"`
-		RegexVariants     []string           `json:"regex_buildvariants"`
-		RegexTasks        []string           `json:"regex_tasks"`
-		SyncBuildVariants []string           `json:"sync_build_variants"`
-		SyncTasks         []string           `json:"sync_tasks"`
-		SyncStatuses      []string           `json:"sync_statuses"`
-		SyncTimeout       time.Duration      `json:"sync_timeout"`
-		Finalize          bool               `json:"finalize"`
-		TriggerAliases    []string           `json:"trigger_aliases"`
-		Alias             string             `json:"alias"`
-		RepeatFailed      bool               `json:"repeat_failed"`
-		RepeatDefinition  bool               `json:"reuse_definition"`
-		GithubAuthor      string             `json:"github_author"`
-	}{}
+	data := patchData{}
 	if err := utility.ReadJSON(utility.NewRequestReaderWithSize(r, patch.SizeLimit), &data); err != nil {
 		as.LoggedError(w, r, http.StatusBadRequest, err)
 		return
 	}
+
 	pref, err := model.FindMergedProjectRef(data.Project, "", true)
 	if err != nil {
 		as.LoggedError(w, r, http.StatusBadRequest, errors.Wrapf(err, "project '%s' is not specified", data.Project))
@@ -82,17 +150,6 @@ func (as *APIServer) submitPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	opts := gimlet.PermissionOpts{
-		Resource:      pref.Id,
-		ResourceType:  evergreen.ProjectResourceType,
-		Permission:    evergreen.PermissionPatches,
-		RequiredLevel: evergreen.PatchSubmit.Value,
-	}
-	if !dbUser.HasPermission(opts) {
-		as.LoggedError(w, r, http.StatusUnauthorized, errors.New("user is not authorized to patch this project"))
-		return
-	}
-
 	patchString := string(data.PatchBytes)
 	if len(patchString) > patch.SizeLimit {
 		as.LoggedError(w, r, http.StatusBadRequest, errors.New("Patch is too large"))
@@ -104,51 +161,22 @@ func (as *APIServer) submitPatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if pref.IsPatchingDisabled() || !pref.IsEnabled() {
-		as.LoggedError(w, r, http.StatusUnauthorized, errors.New("patching is disabled"))
+	if pref.IsPatchingDisabled() || !pref.Enabled {
+		as.LoggedError(w, r, http.StatusBadRequest, errors.New("patching is disabled"))
 		return
 	}
 
 	if !pref.TaskSync.IsPatchEnabled() && (len(data.SyncTasks) != 0 || len(data.SyncBuildVariants) != 0) {
-		as.LoggedError(w, r, http.StatusUnauthorized, errors.New("task sync at the end of a patched task is disabled by project settings"))
+		as.LoggedError(w, r, http.StatusBadRequest, errors.New("task sync at the end of a patched task is disabled by project settings"))
 		return
 	}
 
 	patchID := mgobson.NewObjectId()
-	author := dbUser.Id
-	if data.GithubAuthor != "" {
-		opts := gimlet.PermissionOpts{
-			Resource:      pref.Id,
-			ResourceType:  evergreen.ProjectResourceType,
-			Permission:    evergreen.PermissionPatches,
-			RequiredLevel: evergreen.PatchSubmitAdmin.Value,
-		}
-		if !dbUser.HasPermission(opts) {
-			as.LoggedError(w, r, http.StatusUnauthorized, errors.New("user is not authorized to patch on behalf of other users"))
-			return
-		}
-		specifiedUser, err := user.FindByGithubName(data.GithubAuthor)
-		if err != nil {
-			as.LoggedError(w, r, http.StatusInternalServerError, errors.Wrap(err, "error looking for specified author"))
-			return
-		}
-		if specifiedUser != nil {
-			grip.Info(message.Fields{
-				"message":    "overriding patch author as specified by the submitter",
-				"submitter":  dbUser.Id,
-				"new_author": data.GithubAuthor,
-				"patch_id":   patchID,
-			})
-			author = specifiedUser.Id
-		}
-		grip.DebugWhen(specifiedUser == nil, message.Fields{
-			"message":         "github user not found",
-			"github_username": data.GithubAuthor,
-			"patch_id":        patchID,
-		})
-
+	author, statusCode, err := as.getAuthor(data, dbUser, pref.Id, patchID.Hex())
+	if err != nil {
+		as.LoggedError(w, r, statusCode, err)
+		return
 	}
-
 	intent, err := patch.NewCliIntent(patch.CLIIntentParams{
 		User:             author,
 		Project:          pref.Id,
@@ -169,6 +197,7 @@ func (as *APIServer) submitPatch(w http.ResponseWriter, r *http.Request) {
 		GitInfo:          data.GitMetadata,
 		RepeatDefinition: data.RepeatDefinition,
 		RepeatFailed:     data.RepeatFailed,
+		RepeatPatchId:    data.RepeatPatchId,
 		SyncParams: patch.SyncAtEndOptions{
 			BuildVariants: data.SyncBuildVariants,
 			Tasks:         data.SyncTasks,
@@ -201,7 +230,7 @@ func (as *APIServer) submitPatch(w http.ResponseWriter, r *http.Request) {
 		"tasks":      data.Tasks,
 		"alias":      data.Alias,
 	})
-	job := units.NewPatchIntentProcessor(patchID, intent)
+	job := units.NewPatchIntentProcessor(as.env, patchID, intent)
 	job.Run(r.Context())
 
 	if err = job.Error(); err != nil {
@@ -283,7 +312,7 @@ func (as *APIServer) updatePatchModule(w http.ResponseWriter, r *http.Request) {
 		as.LoggedError(w, r, http.StatusInternalServerError, errors.Wrapf(err, "Error getting project ref with id %v", p.Project))
 		return
 	}
-	_, project, err := model.FindLatestVersionWithValidProject(projectRef.Id)
+	_, project, _, err := model.FindLatestVersionWithValidProject(projectRef.Id)
 	if err != nil {
 		as.LoggedError(w, r, http.StatusInternalServerError, errors.Wrap(err, "Error getting patch"))
 		return
@@ -434,15 +463,28 @@ func (as *APIServer) existingPatchRequest(w http.ResponseWriter, r *http.Request
 			return
 		}
 
-		var patchConfig *model.PatchConfig
-		_, patchConfig, err = model.GetPatchedProject(ctx, p, githubOauthToken)
-		if err != nil {
-			as.LoggedError(w, r, http.StatusInternalServerError, err)
-			return
+		if p.ProjectStorageMethod != "" {
+			// New patches already create the parser project at the same time as
+			// the patch, so there's no need to get the patched parser project
+			// for them.
+			projectConfig, err := model.GetPatchedProjectConfig(ctx, &as.Settings, p, githubOauthToken)
+			if err != nil {
+				as.LoggedError(w, r, http.StatusInternalServerError, err)
+				return
+			}
+			p.PatchedProjectConfig = projectConfig
+		} else {
+			// In the fallback case, old unfinalized patches had their parser
+			// projects stored as a string, so it gets stored here.
+			_, patchConfig, err := model.GetPatchedProject(ctx, &as.Settings, p, githubOauthToken)
+			if err != nil {
+				as.LoggedError(w, r, http.StatusInternalServerError, err)
+				return
+			}
+			p.PatchedParserProject = patchConfig.PatchedParserProjectYAML
+			p.PatchedProjectConfig = patchConfig.PatchedProjectConfig
 		}
 
-		p.PatchedParserProject = patchConfig.PatchedParserProject
-		p.PatchedProjectConfig = patchConfig.PatchedProjectConfig
 		_, err = model.FinalizePatch(ctx, p, evergreen.PatchVersionRequester, githubOauthToken)
 		if err != nil {
 			as.LoggedError(w, r, http.StatusInternalServerError, err)

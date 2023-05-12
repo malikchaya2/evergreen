@@ -2,7 +2,6 @@ package command
 
 import (
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -35,16 +34,13 @@ func init() {
 		"generate.tasks":                        generateTaskFactory,
 		"git.apply_patch":                       gitApplyPatchFactory,
 		"git.get_project":                       gitFetchProjectFactory,
-		"git.merge_pr":                          gitMergePrFactory,
+		"git.merge_pr":                          gitMergePRFactory,
 		"git.push":                              gitPushFactory,
 		"gotest.parse_files":                    goTestFactory,
 		"gotest.parse_json":                     goTest2JSONFactory,
-		"json.get":                              taskDataGetFactory,
-		"json.get_history":                      taskDataHistoryFactory,
-		"json.send":                             taskDataSendFactory,
 		"keyval.inc":                            keyValIncFactory,
 		"mac.sign":                              macSignFactory,
-		"manifest.load":                         manifestLoadFactory,
+		evergreen.ManifestLoadCommandName:       manifestLoadFactory,
 		"perf.send":                             perfSendFactory,
 		"downstream_expansions.set":             setExpansionsFactory,
 		"s3.get":                                s3GetFactory,
@@ -56,7 +52,6 @@ func init() {
 		evergreen.ShellExecCommandName:          shellExecFactory,
 		"shell.track":                           shellTrackFactory,
 		"subprocess.exec":                       subprocessExecFactory,
-		"subprocess.scripting":                  subprocessScriptingFactory,
 		"setup.initial":                         initialSetupFactory,
 		"timeout.update":                        timeoutUpdateFactory,
 	}
@@ -67,16 +62,15 @@ func init() {
 }
 
 func RegisterCommand(name string, factory CommandFactory) error {
-	return errors.Wrap(evgRegistry.registerCommand(name, factory),
-		"problem registering command")
+	return errors.Wrapf(evgRegistry.registerCommand(name, factory), "registering command '%s'", name)
 }
 
 func GetCommandFactory(name string) (CommandFactory, bool) {
 	return evgRegistry.getCommandFactory(name)
 }
 
-func Render(c model.PluginCommandConf, project *model.Project) ([]Command, error) {
-	return evgRegistry.renderCommands(c, project)
+func Render(c model.PluginCommandConf, project *model.Project, block string) ([]Command, error) {
+	return evgRegistry.renderCommands(c, project, block)
 }
 
 func RegisteredCommandNames() []string { return evgRegistry.registeredCommandNames() }
@@ -113,7 +107,7 @@ func (r *commandRegistry) registerCommand(name string, factory CommandFactory) e
 	defer r.mu.Unlock()
 
 	if name == "" {
-		return errors.New("cannot register a command for the empty string ''")
+		return errors.New("cannot register a command without a name")
 	}
 
 	if _, ok := r.cmds[name]; ok {
@@ -137,23 +131,26 @@ func (r *commandRegistry) getCommandFactory(name string) (CommandFactory, bool) 
 }
 
 func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
-	project *model.Project) ([]Command, error) {
+	project *model.Project, block string) ([]Command, error) {
 
 	var (
 		parsed []model.PluginCommandConf
 		out    []Command
-		errs   []string
 	)
+	catcher := grip.NewBasicCatcher()
+
+	if block != "" {
+		block = fmt.Sprintf(`in "%v"`, block)
+	}
 
 	if name := commandInfo.Function; name != "" {
 		cmds, ok := project.Functions[name]
 		if !ok {
-			errs = append(errs, fmt.Sprintf("function '%s' not found in project functions", name))
+			catcher.Errorf("function '%s' not found in project functions", name)
 		} else if cmds != nil {
 			for i, c := range cmds.List() {
 				if c.Function != "" {
-					errs = append(errs, fmt.Sprintf("can not reference a function within a "+
-						"function: '%s' referenced within '%s'", c.Function, name))
+					catcher.Errorf("cannot reference a function ('%s') within another function ('%s')", c.Function, name)
 					continue
 				}
 
@@ -163,7 +160,7 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 				}
 
 				if c.DisplayName == "" {
-					c.DisplayName = fmt.Sprintf(`'%v' in "%v" (#%d)`, c.Command, name, i+1)
+					c.DisplayName = fmt.Sprintf(`'%v' in "%v" %s (#%d)`, c.Command, name, block, i+1)
 				}
 
 				if c.TimeoutSecs == 0 {
@@ -174,19 +171,24 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 			}
 		}
 	} else {
+		if commandInfo.DisplayName == "" {
+			commandInfo.DisplayName = fmt.Sprintf(`'%v' %s `, commandInfo.Command, block)
+		}
 		parsed = append(parsed, commandInfo)
 	}
 
 	for _, c := range parsed {
 		factory, ok := r.getCommandFactory(c.Command)
 		if !ok {
-			errs = append(errs, fmt.Sprintf("command '%s' is not registered", c.Command))
+			catcher.Errorf("command '%s' is not registered", c.Command)
 			continue
 		}
 
 		cmd := factory()
+		// Note: this parses the parameters before expansions are applied.
+		// Expansions are only available when the command is executed.
 		if err := cmd.ParseParams(c.Params); err != nil {
-			errs = append(errs, errors.Wrapf(err, "problem parsing input of %s (%s)", c.Command, c.DisplayName).Error())
+			catcher.Wrapf(err, "parsing parameters for command '%s' ('%s')", c.Command, c.DisplayName)
 			continue
 		}
 		cmd.SetType(c.GetType(project))
@@ -196,8 +198,8 @@ func (r *commandRegistry) renderCommands(commandInfo model.PluginCommandConf,
 		out = append(out, cmd)
 	}
 
-	if len(errs) > 0 {
-		return nil, errors.New(strings.Join(errs, "; "))
+	if catcher.HasErrors() {
+		return nil, catcher.Resolve()
 	}
 
 	return out, nil

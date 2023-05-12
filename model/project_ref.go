@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -11,11 +13,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evergreen-ci/cocoa"
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/apimodels"
 	"github.com/evergreen-ci/evergreen/db"
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
 	"github.com/evergreen-ci/evergreen/model/build"
+	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/evergreen/model/event"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
@@ -44,7 +48,7 @@ type ProjectRef struct {
 	Identifier string `bson:"identifier" json:"identifier" yaml:"identifier"`
 
 	DisplayName            string              `bson:"display_name" json:"display_name,omitempty" yaml:"display_name"`
-	Enabled                *bool               `bson:"enabled,omitempty" json:"enabled,omitempty" yaml:"enabled"`
+	Enabled                bool                `bson:"enabled,omitempty" json:"enabled,omitempty" yaml:"enabled"`
 	Private                *bool               `bson:"private,omitempty" json:"private,omitempty" yaml:"private"`
 	Restricted             *bool               `bson:"restricted,omitempty" json:"restricted,omitempty" yaml:"restricted"`
 	Owner                  string              `bson:"owner_name" json:"owner_name" yaml:"owner"`
@@ -54,22 +58,21 @@ type ProjectRef struct {
 	PatchingDisabled       *bool               `bson:"patching_disabled,omitempty" json:"patching_disabled,omitempty"`
 	RepotrackerDisabled    *bool               `bson:"repotracker_disabled,omitempty" json:"repotracker_disabled,omitempty" yaml:"repotracker_disabled"`
 	DispatchingDisabled    *bool               `bson:"dispatching_disabled,omitempty" json:"dispatching_disabled,omitempty" yaml:"dispatching_disabled"`
+	StepbackDisabled       *bool               `bson:"stepback_disabled,omitempty" json:"stepback_disabled,omitempty" yaml:"stepback_disabled"`
 	VersionControlEnabled  *bool               `bson:"version_control_enabled,omitempty" json:"version_control_enabled,omitempty" yaml:"version_control_enabled"`
 	PRTestingEnabled       *bool               `bson:"pr_testing_enabled,omitempty" json:"pr_testing_enabled,omitempty" yaml:"pr_testing_enabled"`
 	ManualPRTestingEnabled *bool               `bson:"manual_pr_testing_enabled,omitempty" json:"manual_pr_testing_enabled,omitempty" yaml:"manual_pr_testing_enabled"`
 	GithubChecksEnabled    *bool               `bson:"github_checks_enabled,omitempty" json:"github_checks_enabled,omitempty" yaml:"github_checks_enabled"`
 	BatchTime              int                 `bson:"batch_time" json:"batch_time" yaml:"batchtime"`
 	DeactivatePrevious     *bool               `bson:"deactivate_previous,omitempty" json:"deactivate_previous,omitempty" yaml:"deactivate_previous"`
-	DefaultLogger          string              `bson:"default_logger" json:"default_logger" yaml:"default_logger"`
 	NotifyOnBuildFailure   *bool               `bson:"notify_on_failure,omitempty" json:"notify_on_failure,omitempty"`
 	Triggers               []TriggerDefinition `bson:"triggers" json:"triggers"`
 	// all aliases defined for the project
 	PatchTriggerAliases []patch.PatchTriggerDefinition `bson:"patch_trigger_aliases" json:"patch_trigger_aliases"`
 	// all PatchTriggerAliases applied to github patch intents
-	GithubTriggerAliases    []string                  `bson:"github_trigger_aliases" json:"github_trigger_aliases"`
-	PeriodicBuilds          []PeriodicBuildDefinition `bson:"periodic_builds" json:"periodic_builds"`
-	CedarTestResultsEnabled *bool                     `bson:"cedar_test_results_enabled,omitempty" json:"cedar_test_results_enabled,omitempty" yaml:"cedar_test_results_enabled"`
-	CommitQueue             CommitQueueParams         `bson:"commit_queue" json:"commit_queue" yaml:"commit_queue"`
+	GithubTriggerAliases []string                  `bson:"github_trigger_aliases" json:"github_trigger_aliases"`
+	PeriodicBuilds       []PeriodicBuildDefinition `bson:"periodic_builds" json:"periodic_builds"`
+	CommitQueue          CommitQueueParams         `bson:"commit_queue" json:"commit_queue" yaml:"commit_queue"`
 
 	// Admins contain a list of users who are able to access the projects page.
 	Admins []string `bson:"admins" json:"admins"`
@@ -93,12 +96,12 @@ type ProjectRef struct {
 	// between what is in GitHub and what is in Evergreen
 	RepotrackerError *RepositoryErrorDetails `bson:"repotracker_error" json:"repotracker_error"`
 
-	// List of regular expressions describing files to ignore when caching historical test results
-	FilesIgnoredFromCache []string `bson:"files_ignored_from_cache" json:"files_ignored_from_cache"`
-	DisabledStatsCache    *bool    `bson:"disabled_stats_cache,omitempty" json:"disabled_stats_cache,omitempty"`
+	// Disable task stats caching for this project.
+	DisabledStatsCache *bool `bson:"disabled_stats_cache,omitempty" json:"disabled_stats_cache,omitempty"`
 
 	// List of commands
-	WorkstationConfig WorkstationConfig `bson:"workstation_config,omitempty" json:"workstation_config,omitempty"`
+	// Lacks omitempty so that SetupCommands can be identified as either [] or nil in a ProjectSettingsEvent
+	WorkstationConfig WorkstationConfig `bson:"workstation_config" json:"workstation_config"`
 
 	// TaskAnnotationSettings holds settings for the file ticket button in the Task Annotations to call custom webhooks when clicked
 	TaskAnnotationSettings evergreen.AnnotationsSettings `bson:"task_annotation_settings,omitempty" json:"task_annotation_settings,omitempty"`
@@ -108,21 +111,33 @@ type ProjectRef struct {
 	PerfEnabled        *bool                        `bson:"perf_enabled,omitempty" json:"perf_enabled,omitempty" yaml:"perf_enabled,omitempty"`
 
 	// Container settings
-	ContainerSizes       map[string]ContainerResources  `bson:"container_sizes,omitempty" json:"container_sizes,omitempty" yaml:"container_sizes,omitempty"`
-	ContainerCredentials map[string]ContainerCredential `bson:"container_credentials,omitempty" json:"container_credentials,omitempty" yaml:"container_credentials,omitempty"`
+	ContainerSizeDefinitions []ContainerResources `bson:"container_size_definitions,omitempty" json:"container_size_definitions,omitempty" yaml:"container_size_definitions,omitempty"`
+	ContainerSecrets         []ContainerSecret    `bson:"container_secrets,omitempty" json:"container_secrets,omitempty" yaml:"container_secrets,omitempty"`
 
 	RepoRefId string `bson:"repo_ref_id" json:"repo_ref_id" yaml:"repo_ref_id"`
 
 	// The following fields are used by Evergreen and are not discoverable.
 	// Hidden determines whether or not the project is discoverable/tracked in the UI
-	Hidden *bool `bson:"hidden,omitempty" json:"hidden,omitempty"`
+	Hidden        *bool  `bson:"hidden,omitempty" json:"hidden,omitempty"`
+	DefaultLogger string `bson:"default_logger,omitempty" json:"default_logger,omitempty"`
+
+	ExternalLinks []ExternalLink `bson:"external_links,omitempty" json:"external_links,omitempty" yaml:"external_links,omitempty"`
+	Banner        ProjectBanner  `bson:"banner,omitempty" json:"banner,omitempty" yaml:"banner,omitempty"`
+}
+
+type ProjectBanner struct {
+	Theme evergreen.BannerTheme `bson:"theme" json:"theme"`
+	Text  string                `bson:"text" json:"text"`
+}
+type ExternalLink struct {
+	DisplayName string `bson:"display_name,omitempty" json:"display_name,omitempty" yaml:"display_name,omitempty"`
+	URLTemplate string `bson:"url_template,omitempty" json:"url_template,omitempty" yaml:"url_template,omitempty"`
 }
 
 type CommitQueueParams struct {
-	Enabled       *bool  `bson:"enabled" json:"enabled" yaml:"enabled"`
-	RequireSigned *bool  `bson:"require_signed" json:"require_signed" yaml:"require_signed"`
-	MergeMethod   string `bson:"merge_method" json:"merge_method" yaml:"merge_method"`
-	Message       string `bson:"message,omitempty" json:"message,omitempty" yaml:"message"`
+	Enabled     *bool  `bson:"enabled" json:"enabled" yaml:"enabled"`
+	MergeMethod string `bson:"merge_method" json:"merge_method" yaml:"merge_method"`
+	Message     string `bson:"message,omitempty" json:"message,omitempty" yaml:"message"`
 }
 
 // TaskSyncOptions contains information about which features are allowed for
@@ -153,16 +168,50 @@ type AlertConfig struct {
 // CPU is the CPU units that will be allocated. 1024 CPU units is
 // equivalent to 1vCPU.
 type ContainerResources struct {
-	MemoryMB int `bson:"memory_mb,omitempty" json:"memory_mb" yaml:"memory_mb"`
-	CPU      int `bson:"cpu,omitempty" json:"cpu" yaml:"cpu"`
+	Name     string `bson:"name,omitempty" json:"name" yaml:"name"`
+	MemoryMB int    `bson:"memory_mb,omitempty" json:"memory_mb" yaml:"memory_mb"`
+	CPU      int    `bson:"cpu,omitempty" json:"cpu" yaml:"cpu"`
 }
 
-// ContainerCredential specifies the username and password required for authentication
+// ContainerSecret specifies the username and password required for authentication
 // on a private image repository. The credential is saved in AWS Secrets Manager upon
 // saving to the ProjectRef
-type ContainerCredential struct {
-	Username string `bson:"username,omitempty" json:"username" yaml:"username"`
-	Password string `bson:"password,omitempty" json:"password" yaml:"password"`
+type ContainerSecret struct {
+	// Name is the user-friendly display name of the secret.
+	Name string `bson:"name" json:"name" yaml:"name"`
+	// Type is the type of secret that is stored.
+	Type ContainerSecretType `bson:"type" json:"type" yaml:"type"`
+	// ExternalName is the name of the stored secret.
+	ExternalName string `bson:"external_name" json:"external_name" yaml:"external_name"`
+	// ExternalID is the unique resource identifier for the secret. This can be
+	// used to access and modify the secret.
+	ExternalID string `bson:"external_id" json:"external_id" yaml:"external_id"`
+	// Value is the plaintext value of the secret. This is not stored and must
+	// be retrieved using the external ID.
+	Value string `bson:"-" json:"-" yaml:"-"`
+}
+
+// ContainerSecretType represents a particular type of container secret, which
+// designates its purpose.
+type ContainerSecretType string
+
+const (
+	// ContainerSecretPodSecret is a container secret representing the Evergreen
+	// agent's pod secret.
+	ContainerSecretPodSecret ContainerSecretType = "pod_secret"
+	// ContainerSecretRepoCreds is a container secret representing an image
+	// repository's credentials.
+	ContainerSecretRepoCreds ContainerSecretType = "repository_credentials"
+)
+
+// Validate checks that the container secret type is recognized.
+func (t ContainerSecretType) Validate() error {
+	switch t {
+	case ContainerSecretPodSecret, ContainerSecretRepoCreds:
+		return nil
+	default:
+		return errors.Errorf("unrecognized container secret type '%s'", t)
+	}
 }
 
 type TriggerDefinition struct {
@@ -187,6 +236,7 @@ type PeriodicBuildDefinition struct {
 	ID            string    `bson:"id" json:"id"`
 	ConfigFile    string    `bson:"config_file" json:"config_file"`
 	IntervalHours int       `bson:"interval_hours" json:"interval_hours"`
+	Cron          string    `bson:"cron" json:"cron"`
 	Alias         string    `bson:"alias,omitempty" json:"alias,omitempty"`
 	Message       string    `bson:"message,omitempty" json:"message,omitempty"`
 	NextRunTime   time.Time `bson:"next_run_time,omitempty" json:"next_run_time,omitempty"`
@@ -222,56 +272,57 @@ type EmailAlertData struct {
 
 var (
 	// bson fields for the ProjectRef struct
-	ProjectRefIdKey                      = bsonutil.MustHaveTag(ProjectRef{}, "Id")
-	ProjectRefOwnerKey                   = bsonutil.MustHaveTag(ProjectRef{}, "Owner")
-	ProjectRefRepoKey                    = bsonutil.MustHaveTag(ProjectRef{}, "Repo")
-	ProjectRefBranchKey                  = bsonutil.MustHaveTag(ProjectRef{}, "Branch")
-	ProjectRefEnabledKey                 = bsonutil.MustHaveTag(ProjectRef{}, "Enabled")
-	ProjectRefPrivateKey                 = bsonutil.MustHaveTag(ProjectRef{}, "Private")
-	ProjectRefRestrictedKey              = bsonutil.MustHaveTag(ProjectRef{}, "Restricted")
-	ProjectRefBatchTimeKey               = bsonutil.MustHaveTag(ProjectRef{}, "BatchTime")
-	ProjectRefIdentifierKey              = bsonutil.MustHaveTag(ProjectRef{}, "Identifier")
-	ProjectRefRepoRefIdKey               = bsonutil.MustHaveTag(ProjectRef{}, "RepoRefId")
-	ProjectRefDisplayNameKey             = bsonutil.MustHaveTag(ProjectRef{}, "DisplayName")
-	ProjectRefDeactivatePreviousKey      = bsonutil.MustHaveTag(ProjectRef{}, "DeactivatePrevious")
-	ProjectRefRemotePathKey              = bsonutil.MustHaveTag(ProjectRef{}, "RemotePath")
-	ProjectRefHiddenKey                  = bsonutil.MustHaveTag(ProjectRef{}, "Hidden")
-	ProjectRefRepotrackerError           = bsonutil.MustHaveTag(ProjectRef{}, "RepotrackerError")
-	ProjectRefFilesIgnoredFromCacheKey   = bsonutil.MustHaveTag(ProjectRef{}, "FilesIgnoredFromCache")
-	ProjectRefDisabledStatsCacheKey      = bsonutil.MustHaveTag(ProjectRef{}, "DisabledStatsCache")
-	ProjectRefAdminsKey                  = bsonutil.MustHaveTag(ProjectRef{}, "Admins")
-	ProjectRefGitTagAuthorizedUsersKey   = bsonutil.MustHaveTag(ProjectRef{}, "GitTagAuthorizedUsers")
-	ProjectRefGitTagAuthorizedTeamsKey   = bsonutil.MustHaveTag(ProjectRef{}, "GitTagAuthorizedTeams")
-	projectRefDefaultLoggerKey           = bsonutil.MustHaveTag(ProjectRef{}, "DefaultLogger")
-	projectRefCedarTestResultsEnabledKey = bsonutil.MustHaveTag(ProjectRef{}, "CedarTestResultsEnabled")
-	projectRefPRTestingEnabledKey        = bsonutil.MustHaveTag(ProjectRef{}, "PRTestingEnabled")
-	projectRefManualPRTestingEnabledKey  = bsonutil.MustHaveTag(ProjectRef{}, "ManualPRTestingEnabled")
-	projectRefGithubChecksEnabledKey     = bsonutil.MustHaveTag(ProjectRef{}, "GithubChecksEnabled")
-	projectRefGitTagVersionsEnabledKey   = bsonutil.MustHaveTag(ProjectRef{}, "GitTagVersionsEnabled")
-	projectRefRepotrackerDisabledKey     = bsonutil.MustHaveTag(ProjectRef{}, "RepotrackerDisabled")
-	projectRefCommitQueueKey             = bsonutil.MustHaveTag(ProjectRef{}, "CommitQueue")
-	projectRefTaskSyncKey                = bsonutil.MustHaveTag(ProjectRef{}, "TaskSync")
-	projectRefPatchingDisabledKey        = bsonutil.MustHaveTag(ProjectRef{}, "PatchingDisabled")
-	projectRefDispatchingDisabledKey     = bsonutil.MustHaveTag(ProjectRef{}, "DispatchingDisabled")
-	projectRefVersionControlEnabledKey   = bsonutil.MustHaveTag(ProjectRef{}, "VersionControlEnabled")
-	projectRefNotifyOnFailureKey         = bsonutil.MustHaveTag(ProjectRef{}, "NotifyOnBuildFailure")
-	projectRefSpawnHostScriptPathKey     = bsonutil.MustHaveTag(ProjectRef{}, "SpawnHostScriptPath")
-	projectRefTriggersKey                = bsonutil.MustHaveTag(ProjectRef{}, "Triggers")
-	projectRefPatchTriggerAliasesKey     = bsonutil.MustHaveTag(ProjectRef{}, "PatchTriggerAliases")
-	projectRefGithubTriggerAliasesKey    = bsonutil.MustHaveTag(ProjectRef{}, "GithubTriggerAliases")
-	projectRefPeriodicBuildsKey          = bsonutil.MustHaveTag(ProjectRef{}, "PeriodicBuilds")
-	projectRefWorkstationConfigKey       = bsonutil.MustHaveTag(ProjectRef{}, "WorkstationConfig")
-	projectRefTaskAnnotationSettingsKey  = bsonutil.MustHaveTag(ProjectRef{}, "TaskAnnotationSettings")
-	projectRefBuildBaronSettingsKey      = bsonutil.MustHaveTag(ProjectRef{}, "BuildBaronSettings")
-	projectRefPerfEnabledKey             = bsonutil.MustHaveTag(ProjectRef{}, "PerfEnabled")
+	ProjectRefIdKey                       = bsonutil.MustHaveTag(ProjectRef{}, "Id")
+	ProjectRefOwnerKey                    = bsonutil.MustHaveTag(ProjectRef{}, "Owner")
+	ProjectRefRepoKey                     = bsonutil.MustHaveTag(ProjectRef{}, "Repo")
+	ProjectRefBranchKey                   = bsonutil.MustHaveTag(ProjectRef{}, "Branch")
+	ProjectRefEnabledKey                  = bsonutil.MustHaveTag(ProjectRef{}, "Enabled")
+	ProjectRefPrivateKey                  = bsonutil.MustHaveTag(ProjectRef{}, "Private")
+	ProjectRefRestrictedKey               = bsonutil.MustHaveTag(ProjectRef{}, "Restricted")
+	ProjectRefBatchTimeKey                = bsonutil.MustHaveTag(ProjectRef{}, "BatchTime")
+	ProjectRefIdentifierKey               = bsonutil.MustHaveTag(ProjectRef{}, "Identifier")
+	ProjectRefRepoRefIdKey                = bsonutil.MustHaveTag(ProjectRef{}, "RepoRefId")
+	ProjectRefDisplayNameKey              = bsonutil.MustHaveTag(ProjectRef{}, "DisplayName")
+	ProjectRefDeactivatePreviousKey       = bsonutil.MustHaveTag(ProjectRef{}, "DeactivatePrevious")
+	ProjectRefRemotePathKey               = bsonutil.MustHaveTag(ProjectRef{}, "RemotePath")
+	ProjectRefHiddenKey                   = bsonutil.MustHaveTag(ProjectRef{}, "Hidden")
+	ProjectRefRepotrackerError            = bsonutil.MustHaveTag(ProjectRef{}, "RepotrackerError")
+	ProjectRefDisabledStatsCacheKey       = bsonutil.MustHaveTag(ProjectRef{}, "DisabledStatsCache")
+	ProjectRefAdminsKey                   = bsonutil.MustHaveTag(ProjectRef{}, "Admins")
+	ProjectRefGitTagAuthorizedUsersKey    = bsonutil.MustHaveTag(ProjectRef{}, "GitTagAuthorizedUsers")
+	ProjectRefGitTagAuthorizedTeamsKey    = bsonutil.MustHaveTag(ProjectRef{}, "GitTagAuthorizedTeams")
+	ProjectRefTracksPushEventsKey         = bsonutil.MustHaveTag(ProjectRef{}, "TracksPushEvents")
+	projectRefPRTestingEnabledKey         = bsonutil.MustHaveTag(ProjectRef{}, "PRTestingEnabled")
+	projectRefManualPRTestingEnabledKey   = bsonutil.MustHaveTag(ProjectRef{}, "ManualPRTestingEnabled")
+	projectRefGithubChecksEnabledKey      = bsonutil.MustHaveTag(ProjectRef{}, "GithubChecksEnabled")
+	projectRefGitTagVersionsEnabledKey    = bsonutil.MustHaveTag(ProjectRef{}, "GitTagVersionsEnabled")
+	projectRefRepotrackerDisabledKey      = bsonutil.MustHaveTag(ProjectRef{}, "RepotrackerDisabled")
+	projectRefCommitQueueKey              = bsonutil.MustHaveTag(ProjectRef{}, "CommitQueue")
+	projectRefTaskSyncKey                 = bsonutil.MustHaveTag(ProjectRef{}, "TaskSync")
+	projectRefPatchingDisabledKey         = bsonutil.MustHaveTag(ProjectRef{}, "PatchingDisabled")
+	projectRefDispatchingDisabledKey      = bsonutil.MustHaveTag(ProjectRef{}, "DispatchingDisabled")
+	projectRefStepbackDisabledKey         = bsonutil.MustHaveTag(ProjectRef{}, "StepbackDisabled")
+	projectRefVersionControlEnabledKey    = bsonutil.MustHaveTag(ProjectRef{}, "VersionControlEnabled")
+	projectRefNotifyOnFailureKey          = bsonutil.MustHaveTag(ProjectRef{}, "NotifyOnBuildFailure")
+	projectRefSpawnHostScriptPathKey      = bsonutil.MustHaveTag(ProjectRef{}, "SpawnHostScriptPath")
+	projectRefTriggersKey                 = bsonutil.MustHaveTag(ProjectRef{}, "Triggers")
+	projectRefPatchTriggerAliasesKey      = bsonutil.MustHaveTag(ProjectRef{}, "PatchTriggerAliases")
+	projectRefGithubTriggerAliasesKey     = bsonutil.MustHaveTag(ProjectRef{}, "GithubTriggerAliases")
+	projectRefPeriodicBuildsKey           = bsonutil.MustHaveTag(ProjectRef{}, "PeriodicBuilds")
+	projectRefWorkstationConfigKey        = bsonutil.MustHaveTag(ProjectRef{}, "WorkstationConfig")
+	projectRefTaskAnnotationSettingsKey   = bsonutil.MustHaveTag(ProjectRef{}, "TaskAnnotationSettings")
+	projectRefBuildBaronSettingsKey       = bsonutil.MustHaveTag(ProjectRef{}, "BuildBaronSettings")
+	projectRefPerfEnabledKey              = bsonutil.MustHaveTag(ProjectRef{}, "PerfEnabled")
+	projectRefContainerSecretsKey         = bsonutil.MustHaveTag(ProjectRef{}, "ContainerSecrets")
+	projectRefContainerSizeDefinitionsKey = bsonutil.MustHaveTag(ProjectRef{}, "ContainerSizeDefinitions")
+	projectRefExternalLinksKey            = bsonutil.MustHaveTag(ProjectRef{}, "ExternalLinks")
+	projectRefBannerKey                   = bsonutil.MustHaveTag(ProjectRef{}, "Banner")
 
-	commitQueueEnabledKey       = bsonutil.MustHaveTag(CommitQueueParams{}, "Enabled")
-	triggerDefinitionProjectKey = bsonutil.MustHaveTag(TriggerDefinition{}, "Project")
+	commitQueueEnabledKey          = bsonutil.MustHaveTag(CommitQueueParams{}, "Enabled")
+	triggerDefinitionProjectKey    = bsonutil.MustHaveTag(TriggerDefinition{}, "Project")
+	containerSecretExternalNameKey = bsonutil.MustHaveTag(ContainerSecret{}, "ExternalName")
+	containerSecretExternalIDKey   = bsonutil.MustHaveTag(ContainerSecret{}, "ExternalID")
 )
-
-func (p *ProjectRef) IsEnabled() bool {
-	return utility.FromBoolPtr(p.Enabled)
-}
 
 func (p *ProjectRef) IsPrivate() bool {
 	return utility.FromBoolPtr(p.Private)
@@ -295,6 +346,10 @@ func (p *ProjectRef) IsDispatchingDisabled() bool {
 
 func (p *ProjectRef) IsPRTestingEnabled() bool {
 	return p.IsAutoPRTestingEnabled() || p.IsManualPRTestingEnabled()
+}
+
+func (p *ProjectRef) IsStepbackDisabled() bool {
+	return utility.FromBoolPtr(p.StepbackDisabled)
 }
 
 func (p *ProjectRef) IsAutoPRTestingEnabled() bool {
@@ -326,10 +381,6 @@ func (p *ProjectRef) ShouldDeactivatePrevious() bool {
 
 func (p *ProjectRef) ShouldNotifyOnBuildFailure() bool {
 	return utility.FromBoolPtr(p.NotifyOnBuildFailure)
-}
-
-func (p *ProjectRef) IsCedarTestResultsEnabled() bool {
-	return utility.FromBoolPtr(p.CedarTestResultsEnabled)
 }
 
 func (p *ProjectRef) IsGitTagVersionsEnabled() bool {
@@ -402,11 +453,11 @@ const (
 	ProjectPageTriggersSection       = "TRIGGERS"
 	ProjectPagePeriodicBuildsSection = "PERIODIC_BUILDS"
 	ProjectPagePluginSection         = "PLUGINS"
+	ProjectPageContainerSection      = "CONTAINERS"
 )
 
 const (
-	tasksByProjectQueryMaxTime   = 90 * time.Second
-	tasksByProjectMaxNumVersions = 1000
+	tasksByProjectQueryMaxTime = 90 * time.Second
 )
 
 var adminPermissions = gimlet.Permissions{
@@ -424,8 +475,9 @@ func (p *ProjectRef) Add(creator *user.DBUser) error {
 	if p.Id == "" {
 		p.Id = mgobson.NewObjectId().Hex()
 	}
-	// Ensure that any new project is originally explicitly disabled.
-	p.Enabled = utility.FalsePtr()
+	// Ensure that any new project is originally explicitly disabled and set to private.
+	p.Enabled = false
+	p.Private = utility.TruePtr()
 
 	// if a hidden project exists for this configuration, use that ID
 	if p.Owner != "" && p.Repo != "" && p.Branch != "" {
@@ -451,6 +503,20 @@ func (p *ProjectRef) Add(creator *user.DBUser) error {
 	if err != nil {
 		return errors.Wrap(err, "inserting project ref")
 	}
+	if err = commitqueue.EnsureCommitQueueExistsForProject(p.Id); err != nil {
+		grip.Error(message.WrapError(err, message.Fields{
+			"message":            "error ensuring commit queue exists",
+			"project_id":         p.Id,
+			"project_identifier": p.Identifier,
+		}))
+	}
+
+	newProjectVars := ProjectVars{
+		Id: p.Id,
+	}
+	if err = newProjectVars.Insert(); err != nil {
+		return errors.Wrapf(err, "adding project variables for project '%s'", p.Id)
+	}
 	return p.addPermissions(creator)
 }
 
@@ -467,7 +533,7 @@ func (p *ProjectRef) GetPatchTriggerAlias(aliasName string) (patch.PatchTriggerD
 // MergeWithProjectConfig looks up the project config with the given project ref id and modifies
 // the project ref scanning for any properties that can be set on both project ref and project parser.
 // Any values that are set at the project config level will be set on the project ref IF they are not set on
-// the project ref.
+// the project ref. If the version isn't specified, we get the latest config.
 func (p *ProjectRef) MergeWithProjectConfig(version string) (err error) {
 	projectConfig, err := FindProjectConfigForProjectOrVersion(p.Id, version)
 	if err != nil {
@@ -478,9 +544,8 @@ func (p *ProjectRef) MergeWithProjectConfig(version string) (err error) {
 			err = recovery.HandlePanicWithError(recover(), err, "project ref and project config structures do not match")
 		}()
 		pRefToMerge := ProjectRef{
-			PeriodicBuilds:       projectConfig.PeriodicBuilds,
-			GithubTriggerAliases: projectConfig.GithubTriggerAliases,
-			ContainerSizes:       projectConfig.ContainerSizes,
+			GithubTriggerAliases:     projectConfig.GithubTriggerAliases,
+			ContainerSizeDefinitions: projectConfig.ContainerSizeDefinitions,
 		}
 		if projectConfig.WorkstationConfig != nil {
 			pRefToMerge.WorkstationConfig = *projectConfig.WorkstationConfig
@@ -631,8 +696,16 @@ func (p *ProjectRef) DetachFromRepo(u *user.DBUser) error {
 
 // AttachToRepo adds the branch to the relevant repo scopes, and updates the project to point to the repo.
 // Any values that previously were unset will now use the repo value, unless this would introduce
-// a Github project conflict. If no repo ref currently exists, the user attaching it will be added as the repo ref admin.
+// a GitHub project conflict. If no repo ref currently exists, the user attaching it will be added as the repo ref admin.
 func (p *ProjectRef) AttachToRepo(u *user.DBUser) error {
+	// Before allowing a project to attach to a repo, verify that this is a valid GitHub organization.
+	config, err := evergreen.GetConfig()
+	if err != nil {
+		return errors.Wrap(err, "getting config")
+	}
+	if err := p.ValidateOwnerAndRepo(config.GithubOrgs); err != nil {
+		return errors.Wrap(err, "validating new owner/repo")
+	}
 	before, err := GetProjectSettingsById(p.Id, false)
 	if err != nil {
 		return errors.Wrap(err, "getting before project settings event")
@@ -645,7 +718,8 @@ func (p *ProjectRef) AttachToRepo(u *user.DBUser) error {
 	}
 	update = p.addGithubConflictsToUpdate(update)
 	err = db.UpdateId(ProjectRefCollection, p.Id, bson.M{
-		"$set": update,
+		"$set":   update,
+		"$unset": bson.M{ProjectRefTracksPushEventsKey: 1},
 	})
 	if err != nil {
 		return errors.Wrap(err, "attaching repo to scope")
@@ -683,12 +757,15 @@ func (p *ProjectRef) AttachToNewRepo(u *user.DBUser) error {
 		ProjectRefRepoRefIdKey: p.RepoRefId,
 	}
 	update = p.addGithubConflictsToUpdate(update)
+
 	err = db.UpdateId(ProjectRefCollection, p.Id, bson.M{
-		"$set": update,
+		"$set":   update,
+		"$unset": bson.M{ProjectRefTracksPushEventsKey: 1},
 	})
 	if err != nil {
 		return errors.Wrap(err, "updating owner/repo in the DB")
 	}
+
 	return GetAndLogProjectModified(p.Id, u.Id, false, before)
 }
 
@@ -706,7 +783,7 @@ func (p *ProjectRef) addGithubConflictsToUpdate(update bson.M) bson.M {
 		}))
 		return update
 	}
-	if mergedProject.IsEnabled() {
+	if mergedProject.Enabled {
 		conflicts, err := mergedProject.GetGithubProjectConflicts()
 		if err != nil {
 			grip.Debug(message.WrapError(err, message.Fields{
@@ -808,12 +885,6 @@ func (projectRef *ProjectRef) Update() error {
 	)
 }
 
-func (projectRef *ProjectRef) checkDefaultLogger() {
-	if projectRef.DefaultLogger == "" {
-		projectRef.DefaultLogger = evergreen.GetEnvironment().Settings().LoggerConfig.DefaultLogger
-	}
-}
-
 func findOneProjectRefQ(query db.Q) (*ProjectRef, error) {
 	projectRef := &ProjectRef{}
 	err := db.FindOneQ(ProjectRefCollection, query, projectRef)
@@ -821,7 +892,6 @@ func findOneProjectRefQ(query db.Q) (*ProjectRef, error) {
 		return nil, nil
 	}
 
-	projectRef.checkDefaultLogger()
 	return projectRef, err
 
 }
@@ -863,6 +933,43 @@ func FindMergedProjectRef(identifier string, version string, includeProjectConfi
 		}
 	}
 	return pRef, nil
+}
+
+// GetNumberOfEnabledProjects returns the current number of enabled projects on evergreen.
+func GetNumberOfEnabledProjects() (int, error) {
+	// Empty owner and repo will return all enabled project count.
+	return getNumberOfEnabledProjects("", "")
+}
+
+// GetNumberOfEnabledProjectsForOwnerRepo returns the number of enabled projects for a given owner/repo.
+func GetNumberOfEnabledProjectsForOwnerRepo(owner, repo string) (int, error) {
+	if owner == "" || repo == "" {
+		return 0, errors.New("owner and repo must be specified")
+	}
+	return getNumberOfEnabledProjects(owner, repo)
+}
+
+func getNumberOfEnabledProjects(owner, repo string) (int, error) {
+	pipeline := []bson.M{
+		{"$match": bson.M{ProjectRefEnabledKey: true}},
+	}
+	if owner != "" && repo != "" {
+		// Check owner and repos in project ref or repo ref.
+		pipeline = append(pipeline, bson.M{"$match": byOwnerAndRepo(owner, repo)})
+	}
+	pipeline = append(pipeline, bson.M{"$count": "count"})
+	type Count struct {
+		Count int `bson:"count"`
+	}
+	count := []Count{}
+	err := db.Aggregate(ProjectRefCollection, pipeline, &count)
+	if err != nil {
+		return 0, err
+	}
+	if len(count) == 0 {
+		return 0, nil
+	}
+	return count[0].Count, nil
 }
 
 // GetProjectRefMergedWithRepo merges the project with the repo, if one exists.
@@ -921,15 +1028,14 @@ func setRepoFieldsFromProjects(repoRef *RepoRef, projectRefs []ProjectRef) {
 
 func (p *ProjectRef) createNewRepoRef(u *user.DBUser) (repoRef *RepoRef, err error) {
 	repoRef = &RepoRef{ProjectRef{
-		Enabled: utility.TruePtr(),
-		Admins:  []string{},
+		Admins: []string{},
 	}}
 
 	allEnabledProjects, err := FindMergedEnabledProjectRefsByOwnerAndRepo(p.Owner, p.Repo)
 	if err != nil {
 		return nil, errors.Wrap(err, "finding all enabled projects")
 	}
-	// for every setting in the project ref, if all enabled projects have the same setting, then use that
+	// For every setting in the project ref, if all enabled projects have the same setting, then use that.
 	defer func() {
 		err = recovery.HandlePanicWithError(recover(), err, "project and repo structures do not match")
 	}()
@@ -937,14 +1043,25 @@ func (p *ProjectRef) createNewRepoRef(u *user.DBUser) (repoRef *RepoRef, err err
 	if !utility.StringSliceContains(repoRef.Admins, u.Username()) {
 		repoRef.Admins = append(repoRef.Admins, u.Username())
 	}
-	// some fields shouldn't be set from projects
+	// Some fields shouldn't be set from projects.
 	repoRef.Id = mgobson.NewObjectId().Hex()
 	repoRef.RepoRefId = ""
-	// set explicitly in case no project is enabled
+	repoRef.Identifier = ""
+
+	// Set explicitly in case no project is enabled.
 	repoRef.Owner = p.Owner
 	repoRef.Repo = p.Repo
+	_, err = EnableWebhooks(context.Background(), &repoRef.ProjectRef)
+	if err != nil {
+		grip.Debug(message.WrapError(err, message.Fields{
+			"message": "error enabling webhooks",
+			"repo_id": repoRef.Id,
+			"owner":   repoRef.Owner,
+			"repo":    repoRef.Repo,
+		}))
+	}
 
-	// creates scope and give user admin access to repo
+	// Creates scope and give user admin access to repo.
 	if err = repoRef.Add(u); err != nil {
 		return nil, errors.Wrapf(err, "adding new repo repo ref for '%s/%s'", p.Owner, p.Repo)
 	}
@@ -1095,7 +1212,14 @@ func CountProjectRefsWithIdentifier(identifier string) (int, error) {
 	return db.CountQ(ProjectRefCollection, byId(identifier))
 }
 
-// GetTasksWithOptions will find the last number of tasks (denoted by Limit) that exist for a given project.
+type GetProjectTasksOpts struct {
+	Limit        int      `json:"num_versions"`
+	BuildVariant string   `json:"build_variant"`
+	StartAt      int      `json:"start_at"`
+	Requesters   []string `json:"requesters"`
+}
+
+// GetTasksWithOptions will find the matching tasks run in the last number of versions(denoted by Limit) that exist for a given project.
 // This function may also filter on tasks running on a specific build variant, or tasks that come after a specific revision order number.
 func GetTasksWithOptions(projectName string, taskName string, opts GetProjectTasksOpts) ([]task.Task, error) {
 	projectId, err := GetIdForProject(projectName)
@@ -1110,6 +1234,11 @@ func GetTasksWithOptions(projectName string, taskName string, opts GetProjectTas
 		task.ProjectKey:     projectId,
 		task.DisplayNameKey: taskName,
 		task.StatusKey:      bson.M{"$in": finishedStatuses},
+	}
+	if len(opts.Requesters) > 0 {
+		match[task.RequesterKey] = bson.M{"$in": opts.Requesters}
+	} else {
+		match[task.RequesterKey] = bson.M{"$in": evergreen.SystemVersionRequesterTypes}
 	}
 	if opts.BuildVariant != "" {
 		match[task.BuildVariantKey] = opts.BuildVariant
@@ -1127,35 +1256,38 @@ func GetTasksWithOptions(projectName string, taskName string, opts GetProjectTas
 	}
 	match["$and"] = []bson.M{
 		{task.RevisionOrderNumberKey: bson.M{"$lte": startingRevision}},
-		{task.RevisionOrderNumberKey: bson.M{"$gte": startingRevision - tasksByProjectMaxNumVersions}},
+		{task.RevisionOrderNumberKey: bson.M{"$gte": startingRevision - opts.Limit + 1}},
 	}
 	pipeline := []bson.M{{"$match": match}}
 	pipeline = append(pipeline, bson.M{"$sort": bson.M{task.RevisionOrderNumberKey: -1}})
-	pipeline = append(pipeline, bson.M{"$limit": opts.Limit})
 
 	res := []task.Task{}
-	if _, err = db.AggregateWithMaxTime(task.Collection, pipeline, &res, tasksByProjectQueryMaxTime); err != nil {
+	if err = db.AggregateWithMaxTime(task.Collection, pipeline, &res, tasksByProjectQueryMaxTime); err != nil {
 		return nil, errors.Wrapf(err, "aggregating tasks")
 	}
 	return res, nil
 }
 
 func FindFirstProjectRef() (*ProjectRef, error) {
-	projectRef := &ProjectRef{}
+	projectRefSlice := []ProjectRef{}
 	pipeline := projectRefPipelineForValueIsBool(ProjectRefPrivateKey, RepoRefPrivateKey, false)
-	pipeline = append(pipeline, bson.M{"$sort": "-" + ProjectRefDisplayNameKey}, bson.M{"$limit": 1})
+	pipeline = append(pipeline, bson.M{"$sort": bson.M{ProjectRefDisplayNameKey: -1}}, bson.M{"$limit": 1})
 	err := db.Aggregate(
 		ProjectRefCollection,
 		pipeline,
-		projectRef,
+		&projectRefSlice,
 	)
 
 	if err != nil {
 		return nil, errors.Wrap(err, "aggregating project ref")
 	}
-	projectRef.checkDefaultLogger()
 
-	return projectRef, nil
+	if len(projectRefSlice) == 0 {
+		return nil, errors.New("No project found in FindFirstProjectRef")
+	}
+	projectRef := projectRefSlice[0]
+
+	return &projectRef, nil
 }
 
 // FindAllMergedTrackedProjectRefs returns all project refs in the db
@@ -1176,7 +1308,6 @@ func FindAllMergedTrackedProjectRefs() ([]ProjectRef, error) {
 func addLoggerAndRepoSettingsToProjects(pRefs []ProjectRef) ([]ProjectRef, error) {
 	repoRefs := map[string]*RepoRef{} // cache repoRefs by id
 	for i, pRef := range pRefs {
-		pRefs[i].checkDefaultLogger()
 		if pRefs[i].UseRepoSettings() {
 			repoRef := repoRefs[pRef.RepoRefId]
 			if repoRef == nil {
@@ -1202,21 +1333,32 @@ func addLoggerAndRepoSettingsToProjects(pRefs []ProjectRef) ([]ProjectRef, error
 
 // FindAllMergedProjectRefs returns all project refs in the db, with repo ref information merged
 func FindAllMergedProjectRefs() ([]ProjectRef, error) {
-	return FindProjectRefsQ(bson.M{})
+	return findProjectRefsQ(bson.M{}, true)
+}
+
+func FindMergedProjectRefsByIds(ids ...string) ([]ProjectRef, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	return findProjectRefsQ(bson.M{
+		ProjectRefIdKey: bson.M{
+			"$in": ids,
+		},
+	}, true)
 }
 
 func FindProjectRefsByIds(ids ...string) ([]ProjectRef, error) {
 	if len(ids) == 0 {
 		return nil, nil
 	}
-	return FindProjectRefsQ(bson.M{
+	return findProjectRefsQ(bson.M{
 		ProjectRefIdKey: bson.M{
 			"$in": ids,
 		},
-	})
+	}, false)
 }
 
-func FindProjectRefsQ(filter bson.M) ([]ProjectRef, error) {
+func findProjectRefsQ(filter bson.M, merged bool) ([]ProjectRef, error) {
 	projectRefs := []ProjectRef{}
 	q := db.Query(filter)
 	err := db.FindAllQ(ProjectRefCollection, q, &projectRefs)
@@ -1224,7 +1366,10 @@ func FindProjectRefsQ(filter bson.M) ([]ProjectRef, error) {
 		return nil, err
 	}
 
-	return addLoggerAndRepoSettingsToProjects(projectRefs)
+	if merged {
+		return addLoggerAndRepoSettingsToProjects(projectRefs)
+	}
+	return projectRefs, nil
 }
 
 func byOwnerAndRepo(owner, repoName string) bson.M {
@@ -1267,8 +1412,10 @@ func byId(identifier string) db.Q {
 func FindMergedEnabledProjectRefsByRepoAndBranch(owner, repoName, branch string) ([]ProjectRef, error) {
 	projectRefs := []ProjectRef{}
 
-	pipeline := []bson.M{{"$match": byOwnerRepoAndBranch(owner, repoName, branch, true)}}
-	pipeline = append(pipeline, projectRefPipelineForValueIsBool(ProjectRefEnabledKey, RepoRefEnabledKey, true)...)
+	match := byOwnerRepoAndBranch(owner, repoName, branch, true)
+	match[ProjectRefEnabledKey] = true
+	pipeline := []bson.M{{"$match": match}}
+	pipeline = append(pipeline, lookupRepoStep)
 	err := db.Aggregate(ProjectRefCollection, pipeline, &projectRefs)
 	if err != nil {
 		return nil, err
@@ -1338,9 +1485,6 @@ func FindDownstreamProjects(project string) ([]ProjectRef, error) {
 		return nil, err
 	}
 
-	for i := range projectRefs {
-		projectRefs[i].checkDefaultLogger()
-	}
 	return projectRefs, err
 }
 
@@ -1354,7 +1498,6 @@ func FindOneProjectRefByRepoAndBranchWithPRTesting(owner, repo, branch, calledBy
 	}
 	for _, p := range projectRefs {
 		if p.IsPRTestingEnabledByCaller(calledBy) {
-			p.checkDefaultLogger()
 			return &p, nil
 		}
 	}
@@ -1374,7 +1517,7 @@ func FindOneProjectRefByRepoAndBranchWithPRTesting(owner, repo, branch, calledBy
 	if err != nil {
 		return nil, errors.Wrapf(err, "finding merged repo refs for repo '%s/%s'", owner, repo)
 	}
-	if repoRef == nil || !repoRef.IsEnabled() || !repoRef.IsPRTestingEnabledByCaller(calledBy) || repoRef.RemotePath == "" {
+	if repoRef == nil || !repoRef.IsPRTestingEnabledByCaller(calledBy) || repoRef.RemotePath == "" {
 		grip.Debug(message.Fields{
 			"source":  "find project ref for PR testing",
 			"message": "repo ref not configured for PR testing untracked branches",
@@ -1394,7 +1537,7 @@ func FindOneProjectRefByRepoAndBranchWithPRTesting(owner, repo, branch, calledBy
 	// if a disabled project exists, then return early
 	var hiddenProject *ProjectRef
 	for i, p := range projectRefs {
-		if !p.IsEnabled() && !p.IsHidden() {
+		if !p.Enabled && !p.IsHidden() {
 			grip.Debug(message.Fields{
 				"source":  "find project ref for PR testing",
 				"message": "project ref is disabled, not PR testing",
@@ -1423,7 +1566,7 @@ func FindOneProjectRefByRepoAndBranchWithPRTesting(owner, repo, branch, calledBy
 			Repo:      repo,
 			Branch:    branch,
 			RepoRefId: repoRef.Id,
-			Enabled:   utility.FalsePtr(),
+			Enabled:   false,
 			Hidden:    utility.TruePtr(),
 		}
 		if err = hiddenProject.Add(nil); err != nil {
@@ -1441,10 +1584,9 @@ func FindOneProjectRefByRepoAndBranchWithPRTesting(owner, repo, branch, calledBy
 	return hiddenProject, nil
 }
 
-// FindBranchProjectRef finds the project ref for this owner/repo/branch that has the commit queue enabled.
-// There should only ever be one project for the query because we only enable commit queue if
-// no other project ref with the same specification has it enabled.
-
+// FindOneProjectRefWithCommitQueueByOwnerRepoAndBranch finds the project ref for this owner/repo/branch
+// that has the commit queue enabled. There should only ever be one project for the query because we only enable commit
+// queue if no other project ref with the same specification has it enabled.
 func FindOneProjectRefWithCommitQueueByOwnerRepoAndBranch(owner, repo, branch string) (*ProjectRef, error) {
 	projectRefs, err := FindMergedEnabledProjectRefsByRepoAndBranch(owner, repo, branch)
 	if err != nil {
@@ -1453,7 +1595,6 @@ func FindOneProjectRefWithCommitQueueByOwnerRepoAndBranch(owner, repo, branch st
 	}
 	for _, p := range projectRefs {
 		if p.CommitQueue.IsEnabled() {
-			p.checkDefaultLogger()
 			return &p, nil
 		}
 	}
@@ -1489,7 +1630,6 @@ func EnableWebhooks(ctx context.Context, projectRef *ProjectRef) (bool, error) {
 		// sometimes people change a project to track a personal
 		// branch we don't have access to
 		grip.Error(message.WrapError(err, message.Fields{
-			"source":             "patch project",
 			"message":            "can't setup webhook",
 			"project":            projectRef.Id,
 			"project_identifier": projectRef.Identifier,
@@ -1545,8 +1685,10 @@ func FindHiddenProjectRefByOwnerRepoAndBranch(owner, repo, branch string) (*Proj
 func FindMergedEnabledProjectRefsByOwnerAndRepo(owner, repo string) ([]ProjectRef, error) {
 	projectRefs := []ProjectRef{}
 
-	pipeline := []bson.M{{"$match": byOwnerAndRepo(owner, repo)}}
-	pipeline = append(pipeline, projectRefPipelineForValueIsBool(ProjectRefEnabledKey, RepoRefEnabledKey, true)...)
+	match := byOwnerAndRepo(owner, repo)
+	match[ProjectRefEnabledKey] = true
+	pipeline := []bson.M{{"$match": match}}
+	pipeline = append(pipeline, lookupRepoStep)
 	err := db.Aggregate(ProjectRefCollection, pipeline, &projectRefs)
 	if err != nil {
 		return nil, err
@@ -1575,7 +1717,6 @@ func FindMergedProjectRefsForRepo(repoRef *RepoRef) ([]ProjectRef, error) {
 	}
 
 	for i := range projectRefs {
-		projectRefs[i].checkDefaultLogger()
 		if projectRefs[i].UseRepoSettings() {
 			mergedProject, err := mergeBranchAndRepoSettings(&projectRefs[i], repoRef)
 			if err != nil {
@@ -1665,9 +1806,12 @@ func UpdateOwnerAndRepoForBranchProjects(repoId, owner, repo string) error {
 		})
 }
 
-func FindProjectRefsWithCommitQueueEnabled() ([]ProjectRef, error) {
+// FindProjectRefIdsWithCommitQueueEnabled returns a list of project IDs that have the commit queue enabled.
+// We don't return the full projects since they aren't actually merged with the repo documents, so they
+// aren't necessarily accurate.
+func FindProjectRefIdsWithCommitQueueEnabled() ([]string, error) {
 	projectRefs := []ProjectRef{}
-
+	res := []string{}
 	err := db.Aggregate(
 		ProjectRefCollection,
 		projectRefPipelineForCommitQueueEnabled(),
@@ -1675,31 +1819,28 @@ func FindProjectRefsWithCommitQueueEnabled() ([]ProjectRef, error) {
 	if err != nil {
 		return nil, err
 	}
-
-	for i := range projectRefs {
-		projectRefs[i].checkDefaultLogger()
+	for _, p := range projectRefs {
+		res = append(res, p.Id)
 	}
 
-	return projectRefs, nil
+	return res, nil
 }
 
+// FindPeriodicProjects returns a list of merged projects that have periodic builds defined.
 func FindPeriodicProjects() ([]ProjectRef, error) {
-	projectRefs := []ProjectRef{}
+	res := []ProjectRef{}
 
-	err := db.Aggregate(
-		ProjectRefCollection,
-		projectRefPipelineForPeriodicBuilds(),
-		&projectRefs,
-	)
+	projectRefs, err := FindAllMergedTrackedProjectRefs()
 	if err != nil {
 		return nil, err
 	}
-
-	for i := range projectRefs {
-		projectRefs[i].checkDefaultLogger()
+	for _, p := range projectRefs {
+		if p.Enabled && len(p.PeriodicBuilds) > 0 {
+			res = append(res, p)
+		}
 	}
 
-	return projectRefs, nil
+	return res, nil
 }
 
 // FindProjectRefs returns limit refs starting at project id key in the sortDir direction.
@@ -1717,10 +1858,6 @@ func FindProjectRefs(key string, limit int, sortDir int) ([]ProjectRef, error) {
 
 	q := db.Query(filter).Sort([]string{sortSpec}).Limit(limit)
 	err := db.FindAllQ(ProjectRefCollection, q, &projectRefs)
-
-	for i := range projectRefs {
-		projectRefs[i].checkDefaultLogger()
-	}
 
 	return projectRefs, err
 }
@@ -1756,34 +1893,44 @@ func SaveProjectPageForSection(projectId string, p *ProjectRef, section ProjectP
 			return false, errors.New("can't default project ref for a repo")
 		}
 	}
+	defaultToRepo := false
 	if p == nil {
+		defaultToRepo = true
 		p = &ProjectRef{} // use a blank project ref to default the section to repo
 	}
+
 	var err error
 	switch section {
 	case ProjectPageGeneralSection:
 		setUpdate := bson.M{
-			ProjectRefEnabledKey:                 p.Enabled,
-			ProjectRefBranchKey:                  p.Branch,
-			ProjectRefDisplayNameKey:             p.DisplayName,
-			ProjectRefIdentifierKey:              p.Identifier,
-			ProjectRefBatchTimeKey:               p.BatchTime,
-			ProjectRefRemotePathKey:              p.RemotePath,
-			projectRefSpawnHostScriptPathKey:     p.SpawnHostScriptPath,
-			projectRefDispatchingDisabledKey:     p.DispatchingDisabled,
-			projectRefVersionControlEnabledKey:   p.VersionControlEnabled,
-			ProjectRefDeactivatePreviousKey:      p.DeactivatePrevious,
-			projectRefRepotrackerDisabledKey:     p.RepotrackerDisabled,
-			projectRefDefaultLoggerKey:           p.DefaultLogger,
-			projectRefCedarTestResultsEnabledKey: p.CedarTestResultsEnabled,
-			projectRefPatchingDisabledKey:        p.PatchingDisabled,
-			projectRefTaskSyncKey:                p.TaskSync,
-			ProjectRefDisabledStatsCacheKey:      p.DisabledStatsCache,
-			ProjectRefFilesIgnoredFromCacheKey:   p.FilesIgnoredFromCache,
+			ProjectRefBranchKey:                p.Branch,
+			ProjectRefBatchTimeKey:             p.BatchTime,
+			ProjectRefRemotePathKey:            p.RemotePath,
+			projectRefSpawnHostScriptPathKey:   p.SpawnHostScriptPath,
+			projectRefDispatchingDisabledKey:   p.DispatchingDisabled,
+			projectRefStepbackDisabledKey:      p.StepbackDisabled,
+			projectRefVersionControlEnabledKey: p.VersionControlEnabled,
+			ProjectRefDeactivatePreviousKey:    p.DeactivatePrevious,
+			projectRefRepotrackerDisabledKey:   p.RepotrackerDisabled,
+			projectRefPatchingDisabledKey:      p.PatchingDisabled,
+			projectRefTaskSyncKey:              p.TaskSync,
+			ProjectRefDisabledStatsCacheKey:    p.DisabledStatsCache,
 		}
-		if !isRepo && !p.UseRepoSettings() {
+		// Unlike other fields, this will only be set if we're actually modifying it since it's used by the backend.
+		if p.TracksPushEvents != nil {
+			setUpdate[ProjectRefTracksPushEventsKey] = p.TracksPushEvents
+		}
+		// Allow a user to modify owner and repo only if they are editing an unattached project
+		if !isRepo && !p.UseRepoSettings() && !defaultToRepo {
 			setUpdate[ProjectRefOwnerKey] = p.Owner
 			setUpdate[ProjectRefRepoKey] = p.Repo
+
+		}
+		// some fields shouldn't be set to nil when defaulting to the repo
+		if !defaultToRepo {
+			setUpdate[ProjectRefEnabledKey] = p.Enabled
+			setUpdate[ProjectRefDisplayNameKey] = p.DisplayName
+			setUpdate[ProjectRefIdentifierKey] = p.Identifier
 		}
 		err = db.Update(coll,
 			bson.M{ProjectRefIdKey: projectId},
@@ -1791,6 +1938,23 @@ func SaveProjectPageForSection(projectId string, p *ProjectRef, section ProjectP
 				"$set": setUpdate,
 			})
 	case ProjectPagePluginSection:
+		catcher := grip.NewSimpleCatcher()
+		for _, link := range p.ExternalLinks {
+			if link.DisplayName != "" && link.URLTemplate != "" {
+				// check length of link display name
+				if len(link.DisplayName) > 40 {
+					catcher.Add(errors.New(fmt.Sprintf("link display name, %s, must be 40 characters or less", link.DisplayName)))
+				}
+				// validate url template
+				formattedURL := strings.Replace(link.URLTemplate, "{version_id}", "version_id", -1)
+				if _, err := url.ParseRequestURI(formattedURL); err != nil {
+					catcher.Add(err)
+				}
+			}
+		}
+		if catcher.HasErrors() {
+			return false, errors.Wrapf(catcher.Resolve(), "validating external links")
+		}
 		err = db.Update(coll,
 			bson.M{ProjectRefIdKey: projectId},
 			bson.M{
@@ -1798,6 +1962,7 @@ func SaveProjectPageForSection(projectId string, p *ProjectRef, section ProjectP
 					projectRefTaskAnnotationSettingsKey: p.TaskAnnotationSettings,
 					projectRefBuildBaronSettingsKey:     p.BuildBaronSettings,
 					projectRefPerfEnabledKey:            p.PerfEnabled,
+					projectRefExternalLinksKey:          p.ExternalLinks,
 				},
 			})
 	case ProjectPageAccessSection:
@@ -1805,7 +1970,6 @@ func SaveProjectPageForSection(projectId string, p *ProjectRef, section ProjectP
 			bson.M{ProjectRefIdKey: projectId},
 			bson.M{
 				"$set": bson.M{
-					ProjectRefPrivateKey:    p.Private,
 					ProjectRefRestrictedKey: p.Restricted,
 					ProjectRefAdminsKey:     p.Admins,
 				},
@@ -1828,7 +1992,8 @@ func SaveProjectPageForSection(projectId string, p *ProjectRef, section ProjectP
 		err = db.Update(coll,
 			bson.M{ProjectRefIdKey: projectId},
 			bson.M{
-				"$set": bson.M{projectRefNotifyOnFailureKey: p.NotifyOnBuildFailure},
+				"$set": bson.M{projectRefNotifyOnFailureKey: p.NotifyOnBuildFailure,
+					projectRefBannerKey: p.Banner},
 			})
 	case ProjectPageWorkstationsSection:
 		err = db.Update(coll,
@@ -1859,6 +2024,21 @@ func SaveProjectPageForSection(projectId string, p *ProjectRef, section ProjectP
 			bson.M{ProjectRefIdKey: projectId},
 			bson.M{
 				"$set": bson.M{projectRefPeriodicBuildsKey: p.PeriodicBuilds},
+			})
+	case ProjectPageContainerSection:
+		catcher := grip.NewSimpleCatcher()
+		for _, size := range p.ContainerSizeDefinitions {
+			if err = size.Validate(evergreen.GetEnvironment().Settings().Providers.AWS.Pod.ECS); err != nil {
+				catcher.Add(errors.Wrapf(err, "validating container size '%s'", size.Name))
+			}
+		}
+		if catcher.HasErrors() {
+			return false, errors.Wrapf(catcher.Resolve(), "validating container size definitions")
+		}
+		err = db.Update(coll,
+			bson.M{ProjectRefIdKey: projectId},
+			bson.M{
+				"$set": bson.M{projectRefContainerSizeDefinitionsKey: p.ContainerSizeDefinitions},
 			})
 	case ProjectPageVariablesSection:
 		// this section doesn't modify the project/repo ref
@@ -1973,18 +2153,25 @@ func handleBatchTimeOverflow(in int) int {
 	return in
 }
 
-// return the next valid batch time
-func GetActivationTimeWithCron(curTime time.Time, cronBatchTime string) (time.Time, error) {
-
-	if strings.HasPrefix(cronBatchTime, intervalPrefix) {
-		return time.Time{}, errors.Errorf("cannot use interval '%s' in cron batchtime '%s'", intervalPrefix, cronBatchTime)
-	}
-	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.DowOptional | cron.Descriptor)
-	sched, err := parser.Parse(cronBatchTime)
+// GetNextCronTime returns the next valid batch time
+func GetNextCronTime(curTime time.Time, cronBatchTime string) (time.Time, error) {
+	sched, err := getCronParserSchedule(cronBatchTime)
 	if err != nil {
-		return time.Time{}, errors.Wrapf(err, "parsing cron batchtime '%s'", cronBatchTime)
+		return time.Time{}, err
 	}
 	return sched.Next(curTime), nil
+}
+
+func getCronParserSchedule(cronStr string) (cron.Schedule, error) {
+	if strings.HasPrefix(cronStr, intervalPrefix) {
+		return nil, errors.Errorf("cannot use interval '%s' in cron '%s'", intervalPrefix, cronStr)
+	}
+	parser := cron.NewParser(cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.DowOptional | cron.Descriptor)
+	sched, err := parser.Parse(cronStr)
+	if err != nil {
+		return nil, errors.Wrapf(err, "parsing cron '%s'", cronStr)
+	}
+	return sched, nil
 }
 
 func (p *ProjectRef) GetActivationTimeForVariant(variant *BuildVariant) (time.Time, error) {
@@ -1994,7 +2181,7 @@ func (p *ProjectRef) GetActivationTimeForVariant(variant *BuildVariant) (time.Ti
 		return utility.ZeroTime, nil
 	}
 	if variant.CronBatchTime != "" {
-		return GetActivationTimeWithCron(time.Now(), variant.CronBatchTime)
+		return GetNextCronTime(time.Now(), variant.CronBatchTime)
 	}
 	// if activated explicitly set to true and we don't have batchtime, then we want to just activate now
 	if utility.FromBoolPtr(variant.Activate) && variant.BatchTime == nil {
@@ -2025,13 +2212,13 @@ func (p *ProjectRef) GetActivationTimeForVariant(variant *BuildVariant) (time.Ti
 func (p *ProjectRef) GetActivationTimeForTask(t *BuildVariantTaskUnit) (time.Time, error) {
 	defaultRes := time.Now()
 	// if we don't want to activate the task, set batchtime to the zero time
-	if !utility.FromBoolTPtr(t.Activate) {
+	if !utility.FromBoolTPtr(t.Activate) || t.IsDisabled() {
 		return utility.ZeroTime, nil
 	}
 	if t.CronBatchTime != "" {
-		return GetActivationTimeWithCron(time.Now(), t.CronBatchTime)
+		return GetNextCronTime(time.Now(), t.CronBatchTime)
 	}
-	// if activated explicitly set to true and we don't have batchtime, then we want to just activate now
+	// If activated explicitly set to true and we don't have batchtime, then we want to just activate now
 	if utility.FromBoolPtr(t.Activate) && t.BatchTime == nil {
 		return time.Now(), nil
 	}
@@ -2090,13 +2277,73 @@ func (p *ProjectRef) GetGithubProjectConflicts() (GithubProjectConflicts, error)
 	return res, nil
 }
 
+// shouldValidateTotalProjectLimit will return true if:
+// - we are creating a new project
+// - the original project was disabled
+func shouldValidateTotalProjectLimit(isNewProject bool, originalMergedRef *ProjectRef) bool {
+	return isNewProject || !originalMergedRef.Enabled
+}
+
+// shouldValidateOwnerRepoLimit will return true if:
+// - we are creating a new project
+// - the original project was disabled
+// - the owner or repo has changed
+// - the owner/repo is not part of exception
+func shouldValidateOwnerRepoLimit(isNewProject bool, config *evergreen.Settings, originalMergedRef, mergedRefToValidate *ProjectRef) bool {
+	return (shouldValidateTotalProjectLimit(isNewProject, originalMergedRef) ||
+		originalMergedRef.Owner != mergedRefToValidate.Owner || originalMergedRef.Repo != mergedRefToValidate.Repo) &&
+		!config.ProjectCreation.IsExceptionToRepoLimit(mergedRefToValidate.Owner, mergedRefToValidate.Repo)
+}
+
+// ValidateEnabledProjectsLimit takes in a the original and new merged project refs and validates project limits,
+// assuming the given project is going to be enabled.
+// Returns a status code and error if we are already at limit with enabled projects.
+func ValidateEnabledProjectsLimit(projectId string, config *evergreen.Settings, originalMergedRef, mergedRefToValidate *ProjectRef) (int, error) {
+	if config.ProjectCreation.TotalProjectLimit == 0 || config.ProjectCreation.RepoProjectLimit == 0 {
+		return http.StatusOK, nil
+	}
+
+	isNewProject := originalMergedRef == nil
+	catcher := grip.NewBasicCatcher()
+	if shouldValidateTotalProjectLimit(isNewProject, originalMergedRef) {
+		allEnabledProjects, err := GetNumberOfEnabledProjects()
+		if err != nil {
+			return http.StatusInternalServerError, errors.Wrap(err, "getting number of enabled projects")
+		}
+		if allEnabledProjects >= config.ProjectCreation.TotalProjectLimit {
+			catcher.Errorf("total enabled project limit of %d reached", config.ProjectCreation.TotalProjectLimit)
+		}
+	}
+
+	if shouldValidateOwnerRepoLimit(isNewProject, config, originalMergedRef, mergedRefToValidate) {
+		enabledOwnerRepoProjects, err := GetNumberOfEnabledProjectsForOwnerRepo(mergedRefToValidate.Owner, mergedRefToValidate.Repo)
+		if err != nil {
+			return http.StatusInternalServerError, errors.Wrapf(err, "getting number of projects for '%s/%s'", mergedRefToValidate.Owner, mergedRefToValidate.Repo)
+		}
+		if enabledOwnerRepoProjects >= config.ProjectCreation.RepoProjectLimit {
+			catcher.Errorf("enabled project limit of %d reached for '%s/%s'", config.ProjectCreation.RepoProjectLimit, mergedRefToValidate.Owner, mergedRefToValidate.Repo)
+		}
+	}
+
+	if catcher.HasErrors() {
+		return http.StatusBadRequest, catcher.Resolve()
+	}
+	return http.StatusOK, nil
+}
+
+// ValidateProjectRefAndSetDefaults validates the project ref and sets default values.
+// Should only be called on enabled project refs or repo refs.
 func (p *ProjectRef) ValidateOwnerAndRepo(validOrgs []string) error {
 	// verify input and webhooks
 	if p.Owner == "" || p.Repo == "" {
 		return errors.New("no owner/repo specified")
 	}
 
-	if len(validOrgs) > 0 && !utility.StringSliceContains(validOrgs, p.Owner) {
+	return validateOwner(p.Owner, validOrgs)
+}
+
+func validateOwner(owner string, validOrgs []string) error {
+	if len(validOrgs) > 0 && !utility.StringSliceContains(validOrgs, owner) {
 		return errors.New("owner not authorized")
 	}
 	return nil
@@ -2351,47 +2598,67 @@ func (p *ProjectRef) GetProjectSetupCommands(opts apimodels.WorkstationSetupComm
 	return cmds, nil
 }
 
-func (p *ProjectRef) UpdateNextPeriodicBuild(definition string, nextRun time.Time) error {
-	for i, d := range p.PeriodicBuilds {
-		if d.ID == definition {
-			d.NextRunTime = nextRun
-			p.PeriodicBuilds[i] = d
-			break
+// UpdateNextPeriodicBuild updates the periodic build run time for either the project
+// or repo ref depending on where it's defined.
+func UpdateNextPeriodicBuild(projectId string, definition *PeriodicBuildDefinition) error {
+	var nextRunTime time.Time
+	var err error
+	baseTime := definition.NextRunTime
+	if utility.IsZeroTime(baseTime) {
+		baseTime = time.Now()
+	}
+	if definition.IntervalHours > 0 {
+		nextRunTime = baseTime.Add(time.Duration(definition.IntervalHours) * time.Hour)
+	} else {
+		nextRunTime, err = GetNextCronTime(baseTime, definition.Cron)
+		if err != nil {
+			return errors.Wrap(err, "getting next run time with cron")
 		}
 	}
+	// Get the branch project on its own so we can determine where to update the run time.
+	projectRef, err := FindBranchProjectRef(projectId)
+	if err != nil {
+		return errors.Wrap(err, "finding branch project")
+	}
+	if projectRef == nil {
+		return errors.Errorf("project '%s' not found", projectId)
+	}
+
 	collection := ProjectRefCollection
-	idKey := ProjectRefIdKey
 	buildsKey := projectRefPeriodicBuildsKey
-	if p.UseRepoSettings() {
-		// if the periodic build is part of the repo then update there instead
-		repoRef, err := FindOneRepoRef(p.RepoRefId)
+	documentIdKey := ProjectRefIdKey
+	idToUpdate := projectRef.Id
+
+	// If periodic builds aren't defined for the project, see if it's part of the repo and update there instead.
+	if projectRef.PeriodicBuilds == nil && projectRef.UseRepoSettings() {
+		repoRef, err := FindOneRepoRef(projectRef.RepoRefId)
 		if err != nil {
 			return err
 		}
 		if repoRef == nil {
-			return errors.New("couldn't find repo")
+			return errors.Errorf("repo '%s' not found", projectRef.RepoRefId)
 		}
 		for _, d := range repoRef.PeriodicBuilds {
-			if d.ID == definition {
+			if d.ID == definition.ID {
 				collection = RepoRefCollection
-				idKey = RepoRefIdKey
 				buildsKey = RepoRefPeriodicBuildsKey
+				documentIdKey = RepoRefIdKey
+				idToUpdate = projectRef.RepoRefId
 			}
 		}
-
 	}
 
 	filter := bson.M{
-		idKey: p.Id,
+		documentIdKey: idToUpdate,
 		buildsKey: bson.M{
 			"$elemMatch": bson.M{
-				"id": definition,
+				"id": definition.ID,
 			},
 		},
 	}
 	update := bson.M{
 		"$set": bson.M{
-			bsonutil.GetDottedKeyName(buildsKey, "$", "next_run_time"): nextRun,
+			bsonutil.GetDottedKeyName(buildsKey, "$", "next_run_time"): nextRunTime,
 		},
 	}
 
@@ -2400,7 +2667,7 @@ func (p *ProjectRef) UpdateNextPeriodicBuild(definition string, nextRun time.Tim
 
 func (p *ProjectRef) CommitQueueIsOn() error {
 	catcher := grip.NewBasicCatcher()
-	if !p.IsEnabled() {
+	if !p.Enabled {
 		catcher.Add(errors.Errorf("project '%s' is disabled", p.Id))
 	}
 	if p.IsPatchingDisabled() {
@@ -2515,20 +2782,36 @@ func GetMessageForPatch(patchID string) (string, error) {
 // ValidateContainers inspects the list of containers defined in the project YAML and checks that each
 // are properly configured, and that their definitions can coexist with what is defined for container sizes
 // on the project admin page.
-func ValidateContainers(pRef *ProjectRef, containers []Container) error {
+func ValidateContainers(ecsConf evergreen.ECSConfig, pRef *ProjectRef, containers []Container) error {
 	catcher := grip.NewSimpleCatcher()
 	for _, container := range containers {
 		catcher.Add(container.System.Validate())
 		if container.Resources != nil {
-			catcher.Add(container.Resources.Validate())
+			catcher.Add(container.Resources.Validate(ecsConf))
 		}
-		size, ok := pRef.ContainerSizes[container.Size]
-		if ok {
-			catcher.Add(size.Validate())
+		var containerSize *ContainerResources
+		for _, size := range pRef.ContainerSizeDefinitions {
+			if size.Name == container.Size {
+				containerSize = &size
+				break
+			}
 		}
-		catcher.ErrorfWhen(container.Size != "" && !ok, "size '%s' is not defined anywhere", container.Size)
-		_, ok = pRef.ContainerCredentials[container.Credential]
-		catcher.ErrorfWhen(container.Credential != "" && !ok, "credential '%s' is not defined anywhere", container.Credential)
+		if containerSize != nil {
+			catcher.Add(containerSize.Validate(ecsConf))
+		}
+		catcher.ErrorfWhen(container.Size != "" && containerSize == nil, "container size '%s' not found", container.Size)
+
+		if container.Credential != "" {
+			var matchingSecret *ContainerSecret
+			for _, cs := range pRef.ContainerSecrets {
+				if cs.Name == container.Credential {
+					matchingSecret = &cs
+					break
+				}
+			}
+			catcher.ErrorfWhen(matchingSecret == nil, "credential '%s' is not defined in project settings", container.Credential)
+			catcher.ErrorfWhen(matchingSecret != nil && matchingSecret.Type != ContainerSecretRepoCreds, "container credential named '%s' exists but is not valid for use as a repository credential", container.Credential)
+		}
 		catcher.NewWhen(container.Size != "" && container.Resources != nil, "size and resources cannot both be defined")
 		catcher.NewWhen(container.Size == "" && container.Resources == nil, "either size or resources must be defined")
 		catcher.NewWhen(container.Image == "", "image must be defined")
@@ -2554,18 +2837,24 @@ func (c ContainerSystem) Validate() error {
 }
 
 // Validate that essential ContainerResources fields are properly defined.
-func (c ContainerResources) Validate() error {
+func (c ContainerResources) Validate(ecsConf evergreen.ECSConfig) error {
 	catcher := grip.NewSimpleCatcher()
 	catcher.NewWhen(c.CPU <= 0, "container resource CPU must be a positive integer")
 	catcher.NewWhen(c.MemoryMB <= 0, "container resource memory MB must be a positive integer")
+
+	catcher.ErrorfWhen(ecsConf.MaxCPU > 0 && c.CPU > ecsConf.MaxCPU, "CPU cannot exceed maximum global limit of %d CPU units", ecsConf.MaxCPU)
+	catcher.ErrorfWhen(ecsConf.MaxMemoryMB > 0 && c.MemoryMB > ecsConf.MaxMemoryMB, "memory cannot exceed maximum global limit of %d MB", ecsConf.MaxMemoryMB)
+
 	return catcher.Resolve()
 }
 
-// Validate that essential ContainerCredential fields are properly defined.
-func (c ContainerCredential) Validate() error {
+// Validate that essential container secret fields are properly defined for a
+// new secret.
+func (c ContainerSecret) Validate() error {
 	catcher := grip.NewSimpleCatcher()
-	catcher.NewWhen(c.Username == "", "container credential username must be a non empty string")
-	catcher.NewWhen(c.Password == "", "container credential password must be a non empty string")
+	catcher.Add(c.Type.Validate())
+	catcher.ErrorfWhen(c.Name == "", "must specify name for new container secret")
+	catcher.ErrorfWhen(c.Value == "", "must specify value for new container secret")
 	return catcher.Resolve()
 }
 
@@ -2626,13 +2915,17 @@ func ValidateTriggerDefinition(definition patch.PatchTriggerDefinition, parentPr
 
 func (d *PeriodicBuildDefinition) Validate() error {
 	catcher := grip.NewBasicCatcher()
-	catcher.NewWhen(d.IntervalHours <= 0, "interval must be a positive integer")
+	catcher.NewWhen(d.IntervalHours <= 0 && d.Cron == "", "interval must be a positive integer or cron must be defined")
+	catcher.NewWhen(d.IntervalHours > 0 && d.Cron != "", "can't define both cron and interval")
 	catcher.NewWhen(d.ConfigFile == "", "a config file must be specified")
+	if d.Cron != "" {
+		_, err := getCronParserSchedule(d.Cron)
+		catcher.Wrap(err, "parsing cron")
+	}
 
 	if d.ID == "" {
 		d.ID = utility.RandomString()
 	}
-
 	return catcher.Resolve()
 }
 
@@ -2684,8 +2977,9 @@ func GetUpstreamProjectName(triggerID, triggerType string) (string, error) {
 	return upstreamProject.DisplayName, nil
 }
 
-// projectRefPipelineForMatchingTrigger is an aggregation pipeline to find projects that have the projectKey
-// explicitly set to the val, OR that default to the repo, which has the repoKey explicitly set to the val
+// projectRefPipelineForValueIsBool is an aggregation pipeline to find projects that have the projectKey
+// explicitly set to the val, OR that default to the repo, which has the repoKey explicitly set to the val.
+// Should not be used with project enabled field.
 func projectRefPipelineForValueIsBool(projectKey, repoKey string, val bool) []bson.M {
 	return []bson.M{
 		lookupRepoStep,
@@ -2708,7 +3002,6 @@ func projectRefPipelineForMatchingTrigger(project string) []bson.M {
 			"$and": []bson.M{
 				{"$or": []bson.M{
 					{ProjectRefEnabledKey: true},
-					{ProjectRefEnabledKey: bson.M{"$ne": false}, bsonutil.GetDottedKeyName("repo_ref", RepoRefEnabledKey): true},
 				}},
 				{"$or": []bson.M{
 					{
@@ -2734,7 +3027,6 @@ func projectRefPipelineForCommitQueueEnabled() []bson.M {
 			"$and": []bson.M{
 				{"$or": []bson.M{
 					{ProjectRefEnabledKey: true},
-					{ProjectRefEnabledKey: nil, bsonutil.GetDottedKeyName("repo_ref", RepoRefEnabledKey): true},
 				}},
 				{"$or": []bson.M{
 					{
@@ -2747,33 +3039,9 @@ func projectRefPipelineForCommitQueueEnabled() []bson.M {
 				}},
 			}},
 		},
-	}
-}
-
-// projectRefPipelineForPeriodicBuilds is an aggregation pipeline to find projects that are
-// 1) explicitly enabled, or that default to the repo which is enabled, and
-// 2) they have periodic builds defined, or they default to the repo which has periodic builds defined.
-func projectRefPipelineForPeriodicBuilds() []bson.M {
-	nonEmptySize := bson.M{"$gt": bson.M{"$size": 0}}
-	return []bson.M{
-		lookupRepoStep,
-		{"$match": bson.M{
-			"$and": []bson.M{
-				{"$or": []bson.M{
-					{ProjectRefEnabledKey: true},
-					{ProjectRefEnabledKey: nil, bsonutil.GetDottedKeyName("repo_ref", RepoRefEnabledKey): true},
-				}},
-				{"$or": []bson.M{
-					{
-						projectRefPeriodicBuildsKey: nonEmptySize,
-					},
-					{
-						projectRefPeriodicBuildsKey:                                     nil,
-						bsonutil.GetDottedKeyName("repo_ref", RepoRefPeriodicBuildsKey): nonEmptySize,
-					},
-				}},
-			}},
-		},
+		{"$project": bson.M{
+			ProjectRefIdKey: 1,
+		}},
 	}
 }
 
@@ -2783,3 +3051,172 @@ var lookupRepoStep = bson.M{"$lookup": bson.M{
 	"foreignField": RepoRefIdKey,
 	"as":           "repo_ref",
 }}
+
+// ContainerSecretCache implements the cocoa.SecretCache to provide a cache to
+// store secrets in the DB's project ref.
+type ContainerSecretCache struct{}
+
+// Put sets the external ID for a project ref's container secret by its name.
+func (c ContainerSecretCache) Put(_ context.Context, sc cocoa.SecretCacheItem) error {
+	externalNameKey := bsonutil.GetDottedKeyName(projectRefContainerSecretsKey, containerSecretExternalNameKey)
+	externalIDKey := bsonutil.GetDottedKeyName(projectRefContainerSecretsKey, containerSecretExternalIDKey)
+	externalIDUpdateKey := bsonutil.GetDottedKeyName(projectRefContainerSecretsKey, "$", containerSecretExternalIDKey)
+	return db.Update(ProjectRefCollection, bson.M{
+		externalNameKey: sc.Name,
+		externalIDKey: bson.M{
+			"$in": []interface{}{"", sc.ID},
+		},
+	}, bson.M{
+		"$set": bson.M{
+			externalIDUpdateKey: sc.ID,
+		},
+	})
+}
+
+// Delete deletes a container secret from the project ref by its external
+// identifier.
+func (c ContainerSecretCache) Delete(_ context.Context, externalID string) error {
+	externalIDKey := bsonutil.GetDottedKeyName(projectRefContainerSecretsKey, containerSecretExternalIDKey)
+	err := db.Update(ProjectRefCollection, bson.M{
+		externalIDKey: externalID,
+	}, bson.M{
+		"$pull": bson.M{
+			projectRefContainerSecretsKey: bson.M{
+				containerSecretExternalIDKey: externalID,
+			},
+		},
+	})
+	if adb.ResultsNotFound(err) {
+		return nil
+	}
+
+	return err
+}
+
+// ContainerSecretTag is the tag used to track container secrets.
+const ContainerSecretTag = "evergreen-tracked"
+
+// GetTag returns the tag used for tracking cloud container secrets.
+func (c ContainerSecretCache) GetTag() string {
+	return ContainerSecretTag
+}
+
+// Constants related to secrets stored in Secrets Manager.
+const (
+	// internalSecretNamespace is the namespace for secrets that are
+	// Evergreen-internal (such as the pod secret).
+	internalSecretNamespace = "evg-internal"
+	// repoCredsSecretName is the namespace for repository credentials.
+	repoCredsSecretName = "repo-creds"
+)
+
+// makeContainerSecretName creates a Secrets Manager secret name namespaced
+// within the given project ID.
+func makeContainerSecretName(smConf evergreen.SecretsManagerConfig, projectID, name string) string {
+	return strings.Join([]string{strings.TrimRight(smConf.SecretPrefix, "/"), "project", projectID, name}, "/")
+}
+
+// makeInternalContainerSecretName creates a Secrets Manager secret name
+// namespaced by the given project ID for Evergreen-internal purposes.
+func makeInternalContainerSecretName(smConf evergreen.SecretsManagerConfig, projectID, name string) string {
+	return makeContainerSecretName(smConf, projectID, fmt.Sprintf("%s/%s", internalSecretNamespace, name))
+}
+
+// makeRepoCredsSecretName creates a Secrets Manager secret name namespaced by
+// the given project ID for use as a repository credential.
+func makeRepoCredsContainerSecretName(smConf evergreen.SecretsManagerConfig, projectID, name string) string {
+	return makeContainerSecretName(smConf, projectID, fmt.Sprintf("%s/%s", repoCredsSecretName, name))
+}
+
+// ValidateContainerSecrets checks that the project-level container secrets to
+// be added/updated are valid and sets default values where necessary. It
+// returns the validated and merged container secrets, including the unmodified
+// secrets, the modified secrets, and the new secrets to create.
+func ValidateContainerSecrets(settings *evergreen.Settings, projectID string, original, toUpdate []ContainerSecret) ([]ContainerSecret, error) {
+	combined := make([]ContainerSecret, len(original))
+	_ = copy(combined, original)
+
+	var numPodSecrets int
+	catcher := grip.NewBasicCatcher()
+	for _, updatedSecret := range toUpdate {
+		name := updatedSecret.Name
+
+		if updatedSecret.Type == ContainerSecretPodSecret {
+			numPodSecrets++
+		}
+
+		idx := -1
+		for i := 0; i < len(original); i++ {
+			if original[i].Name == name {
+				idx = i
+				break
+			}
+		}
+
+		if idx != -1 {
+			existingSecret := combined[idx]
+			// If updating an existing secret, only allow the value to be
+			// updated.
+			catcher.ErrorfWhen(updatedSecret.Type != "" && updatedSecret.Type != existingSecret.Type, "container secret '%s' type cannot be changed from '%s' to '%s'", name, existingSecret.Type, updatedSecret.Type)
+			catcher.ErrorfWhen(updatedSecret.ExternalID != "" && updatedSecret.ExternalID != existingSecret.ExternalID, "container secret '%s' external ID cannot be changed from '%s' to '%s'", name, existingSecret.ExternalID, existingSecret.ExternalID)
+			catcher.ErrorfWhen(updatedSecret.ExternalName != "" && updatedSecret.ExternalName != existingSecret.ExternalName, "container secret '%s' external name cannot be changed from '%s' to '%s'", name, existingSecret.ExternalName, updatedSecret.ExternalName)
+			existingSecret.Value = updatedSecret.Value
+			combined[idx] = existingSecret
+			continue
+		}
+
+		catcher.Wrapf(updatedSecret.Validate(), "invalid new container secret '%s'", name)
+
+		// New secrets that have to be created should not have their external
+		// name and ID decided by the user. The external name is controlled by
+		// Evergreen (and set here) and the external ID is determined by the
+		// secret storage service (and set when the secret is actually stored).
+		extName, err := newContainerSecretExternalName(settings.Providers.AWS.Pod.SecretsManager, projectID, updatedSecret)
+		catcher.Add(err)
+		updatedSecret.ExternalName = extName
+		updatedSecret.ExternalID = ""
+
+		combined = append(combined, updatedSecret)
+	}
+
+	catcher.ErrorfWhen(numPodSecrets > 1, "a project can have at most one pod secret but tried to create %d pod secrets total", numPodSecrets)
+
+	return combined, catcher.Resolve()
+}
+
+func newContainerSecretExternalName(smConf evergreen.SecretsManagerConfig, projectID string, secret ContainerSecret) (string, error) {
+	switch secret.Type {
+	case ContainerSecretPodSecret:
+		return makeInternalContainerSecretName(smConf, projectID, secret.Name), nil
+	case ContainerSecretRepoCreds:
+		return makeRepoCredsContainerSecretName(smConf, projectID, secret.Name), nil
+	default:
+		return "", errors.Errorf("unrecognized secret type '%s' for container secret '%s'", secret.Type, secret.Name)
+	}
+}
+
+// ProjectCanDispatchTask returns a boolean indicating if the task can be
+// dispatched based on the project ref's settings and optionally includes a
+// particular reason that the task can or cannot be dispatched.
+func ProjectCanDispatchTask(pRef *ProjectRef, t *task.Task) (canDispatch bool, reason string) {
+	// GitHub PR tasks are still allowed to run for disabled hidden projects.
+	if !pRef.Enabled {
+		// GitHub PR tasks are still allowed to run for disabled hidden
+		// projects.
+		if t.Requester == evergreen.GithubPRRequester && pRef.IsHidden() {
+			reason = "GitHub PRs are allowed to run tasks for disabled hidden projects"
+		} else {
+			return false, "project is disabled"
+		}
+	}
+
+	if pRef.IsDispatchingDisabled() {
+		return false, "task dispatching is disabled for its project"
+	}
+
+	if t.IsPatchRequest() && pRef.IsPatchingDisabled() {
+		return false, "patch testing is disabled for its project"
+	}
+
+	return true, reason
+}

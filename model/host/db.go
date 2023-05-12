@@ -4,7 +4,6 @@ import (
 	"context"
 	"time"
 
-	"github.com/evergreen-ci/certdepot"
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model/build"
@@ -45,6 +44,7 @@ var (
 	DisplayNameKey                     = bsonutil.MustHaveTag(Host{}, "DisplayName")
 	RunningTaskFullKey                 = bsonutil.MustHaveTag(Host{}, "RunningTaskFull")
 	RunningTaskKey                     = bsonutil.MustHaveTag(Host{}, "RunningTask")
+	RunningTaskExecutionKey            = bsonutil.MustHaveTag(Host{}, "RunningTaskExecution")
 	RunningTaskGroupKey                = bsonutil.MustHaveTag(Host{}, "RunningTaskGroup")
 	RunningTaskGroupOrderKey           = bsonutil.MustHaveTag(Host{}, "RunningTaskGroupOrder")
 	RunningTaskBuildVariantKey         = bsonutil.MustHaveTag(Host{}, "RunningTaskBuildVariant")
@@ -76,6 +76,7 @@ var (
 	ProvisionOptionsKey                = bsonutil.MustHaveTag(Host{}, "ProvisionOptions")
 	TaskCountKey                       = bsonutil.MustHaveTag(Host{}, "TaskCount")
 	StartTimeKey                       = bsonutil.MustHaveTag(Host{}, "StartTime")
+	BillingStartTimeKey                = bsonutil.MustHaveTag(Host{}, "BillingStartTime")
 	AgentStartTimeKey                  = bsonutil.MustHaveTag(Host{}, "AgentStartTime")
 	TotalIdleTimeKey                   = bsonutil.MustHaveTag(Host{}, "TotalIdleTime")
 	HasContainersKey                   = bsonutil.MustHaveTag(Host{}, "HasContainers")
@@ -104,6 +105,7 @@ var (
 	VolumeExpirationKey                = bsonutil.MustHaveTag(Volume{}, "Expiration")
 	VolumeNoExpirationKey              = bsonutil.MustHaveTag(Volume{}, "NoExpiration")
 	VolumeHostKey                      = bsonutil.MustHaveTag(Volume{}, "Host")
+	VolumeMigratingKey                 = bsonutil.MustHaveTag(Volume{}, "Migrating")
 	VolumeAttachmentIDKey              = bsonutil.MustHaveTag(VolumeAttachment{}, "VolumeID")
 	VolumeDeviceNameKey                = bsonutil.MustHaveTag(VolumeAttachment{}, "DeviceName")
 )
@@ -112,16 +114,6 @@ var (
 	HostsByDistroDistroIDKey          = bsonutil.MustHaveTag(IdleHostsByDistroID{}, "DistroID")
 	HostsByDistroIdleHostsKey         = bsonutil.MustHaveTag(IdleHostsByDistroID{}, "IdleHosts")
 	HostsByDistroRunningHostsCountKey = bsonutil.MustHaveTag(IdleHostsByDistroID{}, "RunningHostsCount")
-)
-
-// Constants for bson struct tags.
-var (
-	CertUserIDKey            = bsonutil.MustHaveTag(certdepot.User{}, "ID")
-	CertUserCertKey          = bsonutil.MustHaveTag(certdepot.User{}, "Cert")
-	CertUserPrivateKeyKey    = bsonutil.MustHaveTag(certdepot.User{}, "PrivateKey")
-	CertUserCertReqKey       = bsonutil.MustHaveTag(certdepot.User{}, "CertReq")
-	CertUserCertRevocListKey = bsonutil.MustHaveTag(certdepot.User{}, "CertRevocList")
-	CertUserTTLKey           = bsonutil.MustHaveTag(certdepot.User{}, "TTL")
 )
 
 // === Queries ===
@@ -228,10 +220,11 @@ func runningHostsQuery(distroID string) bson.M {
 	return query
 }
 
-func startedTaskHostsQuery(distroID string) bson.M {
+func idleStartedTaskHostsQuery(distroID string) bson.M {
 	query := bson.M{
-		StatusKey:    bson.M{"$in": evergreen.StartedHostStatus},
-		StartedByKey: evergreen.User,
+		StatusKey:      bson.M{"$in": evergreen.StartedHostStatus},
+		StartedByKey:   evergreen.User,
+		RunningTaskKey: bson.M{"$exists": false},
 	}
 	if distroID != "" {
 		query[bsonutil.GetDottedKeyName(DistroKey, distro.IdKey)] = distroID
@@ -265,14 +258,11 @@ func CountAllRunningDynamicHosts() (int, error) {
 	return num, errors.Wrap(err, "counting running dynamic hosts")
 }
 
-func CountStartedTaskHosts() (int, error) {
-	num, err := Count(db.Query(startedTaskHostsQuery("")))
+// CountIdleStartedTaskHosts returns the count of task hosts that are starting
+// and not currently running a task.
+func CountIdleStartedTaskHosts() (int, error) {
+	num, err := Count(db.Query(idleStartedTaskHostsQuery("")))
 	return num, errors.Wrap(err, "counting starting hosts")
-}
-
-func CountStartedTaskHostsForDistro(distroID string) (int, error) {
-	num, err := Count(db.Query(startedTaskHostsQuery(distroID)))
-	return num, errors.Wrap(err, "counting started task hosts")
 }
 
 // IdleHostsWithDistroID, given a distroID, returns a slice of all idle hosts in that distro
@@ -404,21 +394,6 @@ func allHostsSpawnedByFinishedBuilds() ([]Host, error) {
 	return hosts, nil
 }
 
-// ByUnprovisionedSince produces a query that returns all hosts
-// Evergreen never finished setting up that were created before
-// the given time.
-func ByUnprovisionedSince(threshold time.Time) db.Q {
-	return db.Query(bson.M{
-		"$or": []bson.M{
-			bson.M{ProvisionedKey: false},
-			bson.M{StatusKey: evergreen.HostProvisioning},
-		},
-		CreateTimeKey: bson.M{"$lte": threshold},
-		StatusKey:     bson.M{"$ne": evergreen.HostTerminated},
-		StartedByKey:  evergreen.User,
-	})
-}
-
 // ByTaskSpec returns a query that finds all running hosts that are running a
 // task with the given group, buildvariant, project, and version.
 func ByTaskSpec(group, buildVariant, project, version string) db.Q {
@@ -487,17 +462,6 @@ var IsUninitialized = db.Query(
 	bson.M{StatusKey: evergreen.HostUninitialized},
 )
 
-// Starting returns a query that finds hosts that we do not yet know to be running.
-func Starting() db.Q {
-	return db.Query(bson.M{StatusKey: evergreen.HostStarting})
-}
-
-// Provisioning returns a query used by the hostinit process to determine hosts that are
-// started according to the cloud provider, but have not yet been provisioned by Evergreen.
-func Provisioning() db.Q {
-	return db.Query(bson.M{StatusKey: evergreen.HostProvisioning})
-}
-
 // FindByProvisioning finds all hosts that are not yet provisioned by the app
 // server.
 func FindByProvisioning() ([]Host, error) {
@@ -545,15 +509,6 @@ func FindByNeedsToRestartJasper() ([]Host, error) {
 		},
 	}))
 }
-
-// IsRunningAndSpawned is a query that returns all running hosts
-// spawned by an Evergreen user.
-var IsRunningAndSpawned = db.Query(
-	bson.M{
-		StartedByKey: bson.M{"$ne": evergreen.User},
-		StatusKey:    bson.M{"$ne": evergreen.HostTerminated},
-	},
-)
 
 // IsRunningTask is a query that returns all running hosts with a running task
 var IsRunningTask = db.Query(
@@ -638,16 +593,6 @@ func FindOneByJasperCredentialsID(id string) (*Host, error) {
 	return h, nil
 }
 
-// ByRunningTaskId returns a host running the task with the given id.
-func ByRunningTaskId(taskId string) db.Q {
-	return db.Query(bson.D{{Key: RunningTaskKey, Value: taskId}})
-}
-
-var AllStatic = db.Query(
-	bson.M{
-		ProviderKey: evergreen.HostTypeStatic,
-	})
-
 // IsIdle is a query that returns all running Evergreen hosts with no task.
 var IsIdle = db.Query(
 	bson.M{
@@ -697,98 +642,6 @@ func ByExpiringBetween(lowerBound time.Time, upperBound time.Time) db.Q {
 		},
 		ExpirationTimeKey: bson.M{"$gte": lowerBound, "$lte": upperBound},
 	})
-}
-
-type StaleTaskReason int
-
-const (
-	TaskHeartbeatPastCutoff StaleTaskReason = iota
-	TaskNoHeartbeatSinceDispatch
-	TaskUndispatchedHasHeartbeat
-)
-
-// StateRunningTasks returns tasks documents that are currently run by a host and stale
-func FindStaleRunningTasks(cutoff time.Duration, reason StaleTaskReason) ([]task.Task, error) {
-	pipeline := []bson.M{}
-	pipeline = append(pipeline, bson.M{
-		"$match": bson.M{
-			RunningTaskKey: bson.M{
-				"$exists": true,
-			},
-			StatusKey: bson.M{
-				"$in": evergreen.UpHostStatus,
-			},
-		},
-	})
-	pipeline = append(pipeline, bson.M{
-		"$lookup": bson.M{
-			"from":         task.Collection,
-			"localField":   RunningTaskKey,
-			"foreignField": task.IdKey,
-			"as":           "_task",
-		},
-	})
-	pipeline = append(pipeline, bson.M{
-		"$project": bson.M{
-			"_task": 1,
-			"_id":   0,
-		},
-	})
-	pipeline = append(pipeline, bson.M{
-		"$replaceRoot": bson.M{
-			"newRoot": bson.M{
-				"$mergeObjects": []interface{}{
-					bson.M{"$arrayElemAt": []interface{}{"$_task", 0}},
-					"$$ROOT",
-				},
-			},
-		},
-	})
-	pipeline = append(pipeline, bson.M{
-		"$project": bson.M{
-			"_task": 0,
-		},
-	})
-	var reasonQuery bson.M
-	switch reason {
-	case TaskHeartbeatPastCutoff:
-		reasonQuery = bson.M{
-			task.StatusKey: evergreen.TaskStarted,
-			"$and": []bson.M{
-				{task.LastHeartbeatKey: bson.M{"$lte": time.Now().Add(-cutoff)}},
-				{task.LastHeartbeatKey: bson.M{"$ne": utility.ZeroTime}},
-			},
-		}
-	case TaskNoHeartbeatSinceDispatch:
-		reasonQuery = bson.M{
-			task.StatusKey:       evergreen.TaskDispatched,
-			task.DispatchTimeKey: bson.M{"$lte": time.Now().Add(-2 * cutoff)},
-		}
-	case TaskUndispatchedHasHeartbeat:
-		reasonQuery = bson.M{
-			task.StatusKey: evergreen.TaskUndispatched,
-			"$and": []bson.M{
-				{task.LastHeartbeatKey: bson.M{"$lte": time.Now().Add(-cutoff)}},
-				{task.LastHeartbeatKey: bson.M{"$ne": utility.ZeroTime}},
-			},
-		}
-	}
-	pipeline = append(pipeline, bson.M{
-		"$match": reasonQuery,
-	})
-	pipeline = append(pipeline, bson.M{
-		"$project": bson.M{
-			task.IdKey:        1,
-			task.ExecutionKey: 1,
-		},
-	})
-
-	tasks := []task.Task{}
-	err := db.Aggregate(Collection, pipeline, &tasks)
-	if err != nil {
-		return nil, errors.Wrap(err, "finding stale running tasks")
-	}
-	return tasks, nil
 }
 
 // NeedsAgentDeploy finds hosts which need the agent to be deployed because
@@ -963,7 +816,7 @@ func MarkStaleBuildingAsFailed(distroID string) error {
 	}
 
 	for _, id := range ids {
-		event.LogHostStartError(id, "stale building host took too long to start")
+		event.LogHostCreationFailed(id, "stale building host took too long to start")
 		grip.Info(message.Fields{
 			"message": "stale building host took too long to start",
 			"host_id": id,
@@ -988,6 +841,20 @@ func FindOne(query db.Q) (*Host, error) {
 
 func FindOneId(id string) (*Host, error) {
 	return FindOne(ById(id))
+}
+
+// FindOneByTaskIdAndExecution returns a single host with the given running task ID and execution.
+func FindOneByTaskIdAndExecution(id string, execution int) (*Host, error) {
+	h := &Host{}
+	query := db.Query(bson.M{
+		RunningTaskKey:          id,
+		RunningTaskExecutionKey: execution,
+	})
+	err := db.FindOneQ(Collection, query, h)
+	if adb.ResultsNotFound(err) {
+		return nil, nil
+	}
+	return h, err
 }
 
 // FindOneByIdOrTag finds a host where the given id is stored in either the _id or tag field.
@@ -1257,7 +1124,7 @@ func (h *Host) AddVolumeToHost(newVolume *VolumeAttachment) error {
 		message.Fields{
 			"host_id":   h.Id,
 			"volume_id": newVolume.VolumeID,
-			"op":        "host volume acocunting",
+			"op":        "host volume accounting",
 			"message":   "problem setting host info on volume records",
 		}))
 
@@ -1402,8 +1269,6 @@ func StartingHostsByClient(limit int) (map[ClientOptions][]Host, error) {
 // new one. While the atomic swap is safer than doing it non-atomically, it is
 // not sufficient to guarantee application correctness, because other threads
 // may still be using the old host document.
-// TODO (EVG-15875): set a field containing the external identifier on the host
-// document rather than do this host document swap logic.
 func UnsafeReplace(ctx context.Context, env evergreen.Environment, idToRemove string, toInsert *Host) error {
 	if idToRemove == toInsert.Id {
 		return nil
@@ -1416,32 +1281,23 @@ func UnsafeReplace(ctx context.Context, env evergreen.Environment, idToRemove st
 	defer sess.EndSession(ctx)
 
 	replaceHost := func(sessCtx mongo.SessionContext) (interface{}, error) {
-		if err := RemoveStrict(idToRemove); err != nil {
+		if err := RemoveStrict(sessCtx, env, idToRemove); err != nil {
 			return nil, errors.Wrapf(err, "removing old host '%s'", idToRemove)
 		}
 
-		if err := toInsert.Insert(); err != nil {
+		if err := toInsert.InsertWithContext(sessCtx, env); err != nil {
 			return nil, errors.Wrapf(err, "inserting new host '%s'", toInsert.Id)
 		}
 		return nil, nil
 	}
 
 	txnStart := time.Now()
-	_, err = sess.WithTransaction(ctx, replaceHost)
-	if err != nil {
-		grip.Error(message.WrapError(err, message.Fields{
-			"message":     "replacing old host with new host in a transaction",
-			"jira_ticket": "EVG-15022",
-			"old_host_id": idToRemove,
-			"new_host_id": toInsert.Id,
-			"distro_id":   toInsert.Distro.Id,
-			"duration":    time.Since(txnStart),
-		}))
+	if _, err = sess.WithTransaction(ctx, replaceHost); err != nil {
 		return errors.Wrap(err, "atomic removal of old host and insertion of new host")
 	}
 
 	grip.Info(message.Fields{
-		"message":              "replaced host document",
+		"message":              "successfully replaced host document",
 		"host_id":              toInsert.Id,
 		"host_tag":             toInsert.Tag,
 		"distro":               toInsert.Distro.Id,

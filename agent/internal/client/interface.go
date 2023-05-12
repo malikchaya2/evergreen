@@ -13,7 +13,6 @@ import (
 	patchmodel "github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
 	restmodel "github.com/evergreen-ci/evergreen/rest/model"
-	"github.com/evergreen-ci/evergreen/util"
 	"github.com/mongodb/grip"
 	"google.golang.org/grpc"
 )
@@ -56,26 +55,31 @@ type SharedCommunicator interface {
 	GetDistroView(context.Context, TaskData) (*apimodels.DistroView, error)
 	// GetDistroAMI gets the AMI for the given distro/region
 	GetDistroAMI(context.Context, string, string, TaskData) (string, error)
-	// GetProject loads the project using the task's version ID
+	// GetProject loads the project using the task's version ID.
 	GetProject(context.Context, TaskData) (*model.Project, error)
-	// GetExpansions returns all expansions for the task known by the app server
-	GetExpansions(context.Context, TaskData) (util.Expansions, error)
 	// Heartbeat will return a non-empty task status if the agent should stop running the task.
 	// Returning evergreen.TaskConflict means the agent is no longer authorized to run this task and
 	// should move on to the next available one. Returning evergreen.TaskFailed means that the task
 	// has been aborted. An empty string indicates the heartbeat has succeeded.
 	Heartbeat(context.Context, TaskData) (string, error)
-	// FetchExpansionVars loads expansions for a communicator's task from the API server.
-	FetchExpansionVars(context.Context, TaskData) (*apimodels.ExpansionVars, error)
-	// GetCedarConfig returns the cedar service information including the
-	// base URL, RPC port, and credentials.
+	// GetExpansionsAndVars returns the expansions, project variables, and
+	// version parameters. For expansions, all expansions are loaded except for
+	// the expansions defined for this task's build variant. For variables,
+	// project variables, project private variables, and version parameters are
+	// included, but not project parameters.
+	GetExpansionsAndVars(context.Context, TaskData) (*apimodels.ExpansionsAndVars, error)
+	// GetCedarConfig returns the Cedar service configuration.
 	GetCedarConfig(context.Context) (*apimodels.CedarConfig, error)
 	// GetCedarGRPCConn returns the client connection to cedar if it exists, or
 	// creates it if it doesn't exist.
 	GetCedarGRPCConn(context.Context) (*grpc.ClientConn, error)
-	// SetHasCedarResults sets the HasCedarResults flag to true in the
-	// task and sets CedarResultsFailed if there are failed results.
-	SetHasCedarResults(context.Context, TaskData, bool) error
+	// SetResultsInfo sets the test results information in the task.
+	SetResultsInfo(context.Context, TaskData, string, bool) error
+	// GetDataPipesConfig returns the Data-Pipes service configuration.
+	GetDataPipesConfig(context.Context) (*apimodels.DataPipesConfig, error)
+
+	// GetPullRequestInfo takes in a PR number, owner, and repo and returns information from the corresponding pull request.
+	GetPullRequestInfo(context.Context, TaskData, int, string, string, bool) (*apimodels.PullRequestInfo, error)
 
 	// DisableHost signals to the app server that the host should be disabled.
 	DisableHost(context.Context, string, apimodels.DisableInfo) error
@@ -87,24 +91,16 @@ type SharedCommunicator interface {
 	// SendLogMessages sends a group of log messages to the API Server
 	SendLogMessages(context.Context, TaskData, []apimodels.LogMessage) error
 
-	// The following operations use the legacy API server and are
-	// used by task commands.
-	SendTestResults(context.Context, TaskData, *task.LocalTestResults) error
+	// The following operations are used by task commands.
 	SendTestLog(context.Context, TaskData, *model.TestLog) (string, error)
 	GetTaskPatch(context.Context, TaskData, string) (*patchmodel.Patch, error)
 	GetPatchFile(context.Context, TaskData, string) (string, error)
 
-	// The following operations are used by
 	NewPush(context.Context, TaskData, *apimodels.S3CopyRequest) (*model.PushLog, error)
 	UpdatePushStatus(context.Context, TaskData, *model.PushLog) error
 	AttachFiles(context.Context, TaskData, []*artifact.File) error
 	GetManifest(context.Context, TaskData) (*manifest.Manifest, error)
 	KeyValInc(context.Context, TaskData, *model.KeyVal) error
-
-	// These are for the taskdata/json plugin that saves perf data
-	PostJSONData(context.Context, TaskData, string, interface{}) error
-	GetJSONData(context.Context, TaskData, string, string, string) ([]byte, error)
-	GetJSONHistory(context.Context, TaskData, bool, string, string) ([]byte, error)
 
 	// GenerateTasks posts new tasks for the `generate.tasks` command.
 	GenerateTasks(context.Context, TaskData, []json.RawMessage) error

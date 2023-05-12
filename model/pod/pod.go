@@ -2,11 +2,15 @@ package pod
 
 import (
 	"context"
+	"fmt"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/db/mgo/bson"
+	"github.com/evergreen-ci/evergreen/model/event"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
@@ -26,15 +30,19 @@ type Pod struct {
 	// TaskCreationOpts are options to configure how a task should be
 	// containerized and run in a pod.
 	TaskContainerCreationOpts TaskContainerCreationOptions `bson:"task_creation_opts,omitempty" json:"task_creation_opts,omitempty"`
+	// Family is the family name of the pod definition stored in the cloud
+	// provider.
+	Family string `bson:"family,omitempty" json:"family,omitempty"`
 	// TimeInfo contains timing information for the pod's lifecycle.
 	TimeInfo TimeInfo `bson:"time_info,omitempty" json:"time_info,omitempty"`
 	// Resources are external resources that are owned and managed by this pod.
 	Resources ResourceInfo `bson:"resource_info,omitempty" json:"resource_info,omitempty"`
+	// TaskRuntimeInfo contains information about the tasks that a pod is
+	// assigned.
+	TaskRuntimeInfo TaskRuntimeInfo `bson:"task_runtime_info,omitempty" json:"task_runtime_info,omitempty"`
 	// AgentVersion is the version of the agent running on this pod if it's a
 	// pod that runs tasks.
 	AgentVersion string `bson:"agent_version,omitempty" json:"agent_version,omitempty"`
-	// RunningTask is the ID of the task currently running on the pod.
-	RunningTask string `bson:"running_task,omitempty" json:"running_task,omitempty"`
 }
 
 // TaskIntentPodOptions represents options to create an intent pod that runs
@@ -43,31 +51,30 @@ type TaskIntentPodOptions struct {
 	// ID is the pod identifier. If unspecified, it defaults to a new BSON
 	// object ID.
 	ID string
-	// Secret is the shared secret value between the server and the pod for
-	// authentication when the host is provisioned. If unspecified, it defaults
-	// to a random string.
-	Secret string
 
 	// The remaining fields correspond to the ones in
 	// TaskContainerCreationOptions.
 
-	CPU            int
-	MemoryMB       int
-	OS             OS
-	Arch           Arch
-	WindowsVersion WindowsVersion
-	Image          string
-	WorkingDir     string
-	RepoUsername   string
-	RepoPassword   string
+	CPU                 int
+	MemoryMB            int
+	OS                  OS
+	Arch                Arch
+	WindowsVersion      WindowsVersion
+	Image               string
+	RepoCredsExternalID string
+	WorkingDir          string
+	PodSecretExternalID string
+	PodSecretValue      string
 }
 
 // Validate checks that the options to create a task intent pod are valid and
 // sets defaults if possible.
-func (o *TaskIntentPodOptions) Validate() error {
+func (o *TaskIntentPodOptions) Validate(ecsConf evergreen.ECSConfig) error {
 	catcher := grip.NewBasicCatcher()
 	catcher.NewWhen(o.CPU <= 0, "CPU must be a positive non-zero value")
+	catcher.ErrorfWhen(ecsConf.MaxCPU > 0 && o.CPU > ecsConf.MaxCPU, "CPU cannot exceed maximum global CPU limit of %d CPU units", ecsConf.MaxCPU)
 	catcher.NewWhen(o.MemoryMB <= 0, "memory must be a positive non-zero value")
+	catcher.ErrorfWhen(ecsConf.MaxMemoryMB > 0 && o.MemoryMB > ecsConf.MaxMemoryMB, "memory cannot exceed maximum global memory limit of %d MB", ecsConf.MaxCPU)
 	catcher.Wrap(o.OS.Validate(), "invalid OS")
 	catcher.Wrap(o.Arch.Validate(), "invalid CPU architecture")
 	if o.OS == OSWindows {
@@ -75,6 +82,8 @@ func (o *TaskIntentPodOptions) Validate() error {
 	}
 	catcher.NewWhen(o.Image == "", "missing image")
 	catcher.NewWhen(o.WorkingDir == "", "missing working directory")
+	catcher.NewWhen(o.PodSecretExternalID == "", "missing pod secret external ID")
+	catcher.NewWhen(o.PodSecretValue == "", "missing pod secret value")
 
 	if catcher.HasErrors() {
 		return catcher.Resolve()
@@ -82,9 +91,6 @@ func (o *TaskIntentPodOptions) Validate() error {
 
 	if o.ID == "" {
 		o.ID = primitive.NewObjectID().Hex()
-	}
-	if o.Secret == "" {
-		o.Secret = utility.RandomString()
 	}
 
 	return nil
@@ -101,39 +107,40 @@ const (
 
 // NewTaskIntentPod creates a new intent pod to run container tasks from the
 // given initialization options.
-func NewTaskIntentPod(opts TaskIntentPodOptions) (*Pod, error) {
-	if err := opts.Validate(); err != nil {
+func NewTaskIntentPod(ecsConf evergreen.ECSConfig, opts TaskIntentPodOptions) (*Pod, error) {
+	if err := opts.Validate(ecsConf); err != nil {
 		return nil, errors.Wrap(err, "invalid options")
 	}
 
-	p := Pod{
-		ID:     opts.ID,
-		Status: StatusInitializing,
-		Type:   TypeAgent,
-		TaskContainerCreationOpts: TaskContainerCreationOptions{
-			CPU:            opts.CPU,
-			MemoryMB:       opts.MemoryMB,
-			OS:             opts.OS,
-			Arch:           opts.Arch,
-			WindowsVersion: opts.WindowsVersion,
-			Image:          opts.Image,
-			WorkingDir:     opts.WorkingDir,
-			RepoUsername:   opts.RepoUsername,
-			RepoPassword:   opts.RepoPassword,
+	containerOpts := TaskContainerCreationOptions{
+		CPU:                 opts.CPU,
+		MemoryMB:            opts.MemoryMB,
+		OS:                  opts.OS,
+		Arch:                opts.Arch,
+		WindowsVersion:      opts.WindowsVersion,
+		Image:               opts.Image,
+		RepoCredsExternalID: opts.RepoCredsExternalID,
+		WorkingDir:          opts.WorkingDir,
+		EnvVars: map[string]string{
+			PodIDEnvVar: opts.ID,
 		},
+		EnvSecrets: map[string]Secret{
+			PodSecretEnvVar: {
+				ExternalID: opts.PodSecretExternalID,
+				Value:      opts.PodSecretValue,
+			},
+		},
+	}
+
+	p := Pod{
+		ID:                        opts.ID,
+		Status:                    StatusInitializing,
+		Type:                      TypeAgent,
+		TaskContainerCreationOpts: containerOpts,
 		TimeInfo: TimeInfo{
 			Initializing: time.Now(),
 		},
-	}
-	p.TaskContainerCreationOpts.EnvVars = map[string]string{
-		PodIDEnvVar: opts.ID,
-	}
-	p.TaskContainerCreationOpts.EnvSecrets = map[string]Secret{
-		PodSecretEnvVar: {
-			Value:  opts.Secret,
-			Exists: utility.FalsePtr(),
-			Owned:  utility.TruePtr(),
-		},
+		Family: containerOpts.GetFamily(ecsConf),
 	}
 
 	return &p, nil
@@ -246,12 +253,9 @@ func (i ContainerResourceInfo) IsZero() bool {
 type TaskContainerCreationOptions struct {
 	// Image is the image that the task's container will run.
 	Image string `bson:"image" json:"image"`
-	// RepoUsername is the username of the repository containing the image. This
-	// is only necessary if it is a private repository.
-	RepoUsername string `bson:"repo_username,omitempty" json:"repo_username,omitempty"`
-	// RepoPassword is the password of the repository containing the image. This
-	// is only necessary if it is a private repository.
-	RepoPassword string `bson:"repo_password,omitempty" json:"repo_password,omitempty"`
+	// RepoCredsExternalID is the external identifier for the repository
+	// credentials.
+	RepoCredsExternalID string `bson:"repo_creds_external_id,omitempty" json:"repo_creds_external_id,omitempty"`
 	// MemoryMB is the memory (in MB) that the task's container will be
 	// allocated.
 	MemoryMB int `bson:"memory_mb" json:"memory_mb"`
@@ -402,6 +406,21 @@ func (v WindowsVersion) Validate() error {
 	}
 }
 
+// Matches returns whether or not the pod Windows Version matches the given
+// Evergreen ECS config Windows version.
+func (v WindowsVersion) Matches(other evergreen.ECSWindowsVersion) bool {
+	switch v {
+	case WindowsVersionServer2016:
+		return other == evergreen.ECSWindowsServer2016
+	case WindowsVersionServer2019:
+		return other == evergreen.ECSWindowsServer2019
+	case WindowsVersionServer2022:
+		return other == evergreen.ECSWindowsServer2022
+	default:
+		return false
+	}
+}
+
 // ImportWindowsVersion converts the container Windows version into its
 // equivalent pod Windows version.
 func ImportWindowsVersion(winVer evergreen.WindowsVersion) (WindowsVersion, error) {
@@ -417,37 +436,132 @@ func ImportWindowsVersion(winVer evergreen.WindowsVersion) (WindowsVersion, erro
 	}
 }
 
+type hashableEnvSecret struct {
+	name   string
+	secret Secret
+}
+
+func (hev hashableEnvSecret) hash() string {
+	h := utility.NewSHA1Hash()
+	h.Add(hev.name)
+	h.Add(hev.secret.hash())
+	return h.Sum()
+}
+
+type hashableEnvSecrets []hashableEnvSecret
+
+func newHashableEnvSecrets(envSecrets map[string]Secret) hashableEnvSecrets {
+	var hes hashableEnvSecrets
+	for k, s := range envSecrets {
+		hes = append(hes, hashableEnvSecret{
+			name:   k,
+			secret: s,
+		})
+	}
+	sort.Sort(hes)
+	return hes
+}
+
+func (hev hashableEnvSecrets) hash() string {
+	if !sort.IsSorted(hev) {
+		sort.Sort(hev)
+	}
+
+	h := utility.NewSHA1Hash()
+	for _, ev := range hev {
+		h.Add(ev.hash())
+	}
+	return h.Sum()
+}
+
+func (hes hashableEnvSecrets) Len() int {
+	return len(hes)
+}
+
+func (hes hashableEnvSecrets) Less(i, j int) bool {
+	return hes[i].name < hes[j].name
+}
+
+func (hes hashableEnvSecrets) Swap(i, j int) {
+	hes[i], hes[j] = hes[j], hes[i]
+}
+
+// Hash returns the hash digest of the creation options for the container. This
+// is used to create a pod definition, which acts as a template for the actual
+// pod that will run the container.
+func (o *TaskContainerCreationOptions) Hash() string {
+	h := utility.NewSHA1Hash()
+	h.Add(o.Image)
+	h.Add(o.RepoCredsExternalID)
+	h.Add(fmt.Sprint(o.MemoryMB))
+	h.Add(fmt.Sprint(o.CPU))
+	h.Add(string(o.OS))
+	h.Add(string(o.Arch))
+	h.Add(string(o.WindowsVersion))
+	h.Add(o.WorkingDir)
+	// This intentionally does not hash the plaintext environment variables
+	// because some of them (such as the pod ID) vary between each pod. If they
+	// were included in the pod definition, it would reduce the reusability of
+	// pod definitions across different pods.
+	// Instead of setting these per-pod values during pod definition creation,
+	// the environment variables are injected via overriding options when the
+	// pod is started, so they are not relevant to the creation options hash.
+	h.Add(newHashableEnvSecrets(o.EnvSecrets).hash())
+	return h.Sum()
+}
+
+// GetFamily returns the family name for the cloud pod definition to be used
+// for these container creation options.
+func (o *TaskContainerCreationOptions) GetFamily(ecsConf evergreen.ECSConfig) string {
+	return strings.Join([]string{strings.TrimRight(ecsConf.TaskDefinitionPrefix, "-"), "task", o.Hash()}, "-")
+}
+
 // IsZero implements the bsoncodec.Zeroer interface for the sake of defining the
 // zero value for BSON marshalling.
 func (o TaskContainerCreationOptions) IsZero() bool {
-	return o.MemoryMB == 0 && o.CPU == 0 && o.OS == "" && o.Arch == "" && o.WindowsVersion == "" && o.Image == "" && o.RepoUsername == "" && o.RepoPassword == "" && o.WorkingDir == "" && len(o.EnvVars) == 0 && len(o.EnvSecrets) == 0
+	return o.MemoryMB == 0 && o.CPU == 0 && o.OS == "" && o.Arch == "" && o.WindowsVersion == "" && o.Image == "" && o.RepoCredsExternalID == "" && o.WorkingDir == "" && len(o.EnvVars) == 0 && len(o.EnvSecrets) == 0
 }
 
 // Secret is a sensitive secret that a pod can access. The secret is managed
 // in an integrated secrets storage service.
 type Secret struct {
-	// Name is the friendly name of the secret.
-	Name string `bson:"name,omitempty" json:"name,omitempty" yaml:"name,omitempty"`
 	// ExternalID is the unique external resource identifier for a secret that
 	// already exists in the secrets storage service.
-	ExternalID string `bson:"external_id,omitempty" json:"external_id,omitempty" yaml:"external_id,omitempty"`
-	// Value is the value of the secret. If the secret does not yet exist, it
-	// will be created; otherwise, this is just a cached copy of the actual
-	// value stored in the secrets storage service.
-	Value string `bson:"value,omitempty" json:"value,omitempty" yaml:"value,omitempty"`
-	// Exists determines whether or not the secret already exists in the secrets
-	// storage service. If this is false, then a new secret will be stored.
-	Exists *bool `bson:"exists,omitempty" json:"exists,omitempty" yaml:"exists,omitempty"`
-	// Owned determines whether or not the secret is owned by its pod. If this
-	// is true, then its lifetime is tied to the pod's lifetime, implying that
-	// when the pod is cleaned up, this secret is also cleaned up.
-	Owned *bool `bson:"owned,omitempty" json:"owned,omitempty" yaml:"owned,omitempty"`
+	ExternalID string `bson:"external_id,omitempty" json:"external_id,omitempty"`
+	// Value is the value of the secret. This is a cached copy of the actual
+	// secret value stored in the secrets storage service.
+	Value string `bson:"value,omitempty" json:"value,omitempty"`
+}
+
+func (s Secret) hash() string {
+	h := utility.NewSHA1Hash()
+	h.Add(s.ExternalID)
+	// Intentionally do not add the value, because the value is a cached copy
+	// from the external secrets storage. The pod definition does not depend on
+	// the particular value of the secret, just its external ID.
+	return h.Sum()
 }
 
 // IsZero implements the bsoncodec.Zeroer interface for the sake of defining the
 // zero value for BSON marshalling.
 func (s Secret) IsZero() bool {
 	return s == Secret{}
+}
+
+// TaskRuntimeInfo contains information for pods running tasks about the tasks
+// that it is running or has run previously.
+type TaskRuntimeInfo struct {
+	// RunningTaskID is the ID of the task currently running on the pod.
+	RunningTaskID string `bson:"running_task_id,omitempty" json:"running_task_id,omitempty"`
+	// RunningTaskExecution is the execution number of the task currently
+	// running on the pod.
+	RunningTaskExecution int `bson:"running_task_execution,omitempty" json:"running_task_execution,omitempty"`
+}
+
+// IsZero implements the bsoncodec.Zeroer interface for the sake of defining the
+// zero value for BSON marshalling.
+func (i TaskRuntimeInfo) IsZero() bool {
+	return i == TaskRuntimeInfo{}
 }
 
 // Insert inserts a new pod into the collection. This relies on the global Anser
@@ -476,9 +590,9 @@ func (p *Pod) Remove() error {
 }
 
 // UpdateStatus updates the pod status.
-func (p *Pod) UpdateStatus(s Status) error {
+func (p *Pod) UpdateStatus(s Status, reason string) error {
 	ts := utility.BSONTime(time.Now())
-	if err := UpdateOneStatus(p.ID, p.Status, s, ts); err != nil {
+	if err := UpdateOneStatus(p.ID, p.Status, s, ts, reason); err != nil {
 		return errors.Wrap(err, "updating status")
 	}
 
@@ -521,15 +635,30 @@ func (p *Pod) GetSecret() (*Secret, error) {
 }
 
 // SetRunningTask sets the task to dispatch to the pod.
-func (p *Pod) SetRunningTask(ctx context.Context, env evergreen.Environment, taskID string) error {
+func (p *Pod) SetRunningTask(ctx context.Context, env evergreen.Environment, taskID string, taskExecution int) error {
+	if p.TaskRuntimeInfo.RunningTaskID == taskID && p.TaskRuntimeInfo.RunningTaskExecution == taskExecution {
+		return nil
+	}
+	if p.TaskRuntimeInfo.RunningTaskID != "" {
+		return errors.Errorf("cannot set running task to '%s' execution %d when it is already set to '%s' execution %d", taskID, taskExecution, p.TaskRuntimeInfo.RunningTaskID, p.TaskRuntimeInfo.RunningTaskExecution)
+	}
+
+	runningTaskIDKey := bsonutil.GetDottedKeyName(TaskRuntimeInfoKey, TaskRuntimeInfoRunningTaskIDKey)
+	runningTaskExecutionKey := bsonutil.GetDottedKeyName(TaskRuntimeInfoKey, TaskRuntimeInfoRunningTaskExecutionKey)
 	query := bson.M{
-		IDKey:          p.ID,
-		StatusKey:      StatusRunning,
-		RunningTaskKey: nil,
+		IDKey:                   p.ID,
+		StatusKey:               StatusRunning,
+		runningTaskIDKey:        nil,
+		runningTaskExecutionKey: nil,
 	}
 	update := bson.M{
 		"$set": bson.M{
-			RunningTaskKey: taskID,
+			runningTaskIDKey:        taskID,
+			runningTaskExecutionKey: taskExecution,
+			// Decommissioning ensures that the pod cannot run another task.
+			// TODO (PM-2618): adjust this to handle cases such as
+			// single-container task groups, where the pod may be reused.
+			StatusKey: StatusDecommissioned,
 		},
 	}
 
@@ -541,35 +670,55 @@ func (p *Pod) SetRunningTask(ctx context.Context, env evergreen.Environment, tas
 		return errors.New("pod was not updated")
 	}
 
-	p.RunningTask = taskID
+	p.TaskRuntimeInfo.RunningTaskID = taskID
+	p.TaskRuntimeInfo.RunningTaskExecution = taskExecution
+	p.Status = StatusDecommissioned
+
+	event.LogPodStatusChanged(p.ID, string(StatusRunning), string(StatusDecommissioned), "pod has been assigned a task and will not be reused")
 
 	return nil
 }
 
 // ClearRunningTask clears the current task dispatched to the pod.
 func (p *Pod) ClearRunningTask() error {
-	if p.RunningTask == "" {
+	if p.TaskRuntimeInfo.RunningTaskID == "" {
 		return nil
 	}
 
-	if err := UpdateOne(bson.M{
-		IDKey:          p.ID,
-		RunningTaskKey: p.RunningTask,
-	}, bson.M{
+	runningTaskIDKey := bsonutil.GetDottedKeyName(TaskRuntimeInfoKey, TaskRuntimeInfoRunningTaskIDKey)
+	runningTaskExecutionKey := bsonutil.GetDottedKeyName(TaskRuntimeInfoKey, TaskRuntimeInfoRunningTaskExecutionKey)
+	query := bson.M{
+		IDKey:            p.ID,
+		runningTaskIDKey: p.TaskRuntimeInfo.RunningTaskID,
+	}
+	if p.TaskRuntimeInfo.RunningTaskExecution == 0 {
+		query["$or"] = []bson.M{
+			{runningTaskExecutionKey: p.TaskRuntimeInfo.RunningTaskExecution},
+			{runningTaskExecutionKey: bson.M{"$exists": false}},
+		}
+	} else {
+		query[runningTaskExecutionKey] = p.TaskRuntimeInfo.RunningTaskExecution
+	}
+
+	if err := UpdateOne(query, bson.M{
 		"$unset": bson.M{
-			RunningTaskKey: 1,
+			runningTaskIDKey:        1,
+			runningTaskExecutionKey: 1,
 		},
 	}); err != nil {
 		return errors.Wrap(err, "clearing running task")
 	}
 
-	p.RunningTask = ""
+	event.LogPodRunningTaskCleared(p.ID, p.TaskRuntimeInfo.RunningTaskID, p.TaskRuntimeInfo.RunningTaskExecution)
+
+	p.TaskRuntimeInfo.RunningTaskID = ""
+	p.TaskRuntimeInfo.RunningTaskExecution = 0
 
 	return nil
 }
 
-// SetAgentStartTime sets the time when the pod's agent started.
-func (p *Pod) SetAgentStartTime() error {
+// UpdateAgentStartTime updates the time when the pod's agent started to now.
+func (p *Pod) UpdateAgentStartTime() error {
 	ts := utility.BSONTime(time.Now())
 	if err := UpdateOne(ByID(p.ID), bson.M{
 		"$set": bson.M{
@@ -580,6 +729,23 @@ func (p *Pod) SetAgentStartTime() error {
 	}
 
 	p.TimeInfo.AgentStarted = ts
+
+	return nil
+}
+
+// UpdateLastCommunicated updates the last time that the pod and app server
+// successfully communicated to now, indicating that the pod is currently alive.
+func (p *Pod) UpdateLastCommunicated() error {
+	ts := utility.BSONTime(time.Now())
+	if err := UpdateOne(ByID(p.ID), bson.M{
+		"$set": bson.M{
+			bsonutil.GetDottedKeyName(TimeInfoKey, TimeInfoLastCommunicatedKey): ts,
+		},
+	}); err != nil {
+		return err
+	}
+
+	p.TimeInfo.LastCommunicated = ts
 
 	return nil
 }

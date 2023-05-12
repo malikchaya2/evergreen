@@ -29,18 +29,18 @@ const largePatchThreshold = 1024 * 1024 * 16
 
 // This is the template used to render a patch's summary in a human-readable output format.
 var patchDisplayTemplate = template.Must(template.New("patch").Parse(`
-	     ID : {{.Patch.Id.Hex}}
-	Created : {{.Patch.CreateTime}}
+         ID : {{.Patch.Id.Hex}}
+    Created : {{.Patch.CreateTime}}
     Description : {{if .Patch.Description}}{{.Patch.Description}}{{else}}<none>{{end}}
-	  Build : {{.Link}}
-	 Status : {{.Patch.Status}}
+      Build : {{.Link}}
+     Status : {{.Patch.Status}}
 {{if .ShowFinalized}}      Finalized : {{if .Patch.Activated}}Yes{{else}}No{{end}}{{end}}
 {{if .ShowSummary}}
-	Summary :
+    Summary :
 {{range .Patch.Patches}}{{if not (eq .ModuleName "") }}Module:{{.ModuleName}}{{end}}
-	Base Commit : {{.Githash}}
-	{{range .PatchSet.Summary}}+{{.Additions}} -{{.Deletions}} {{.Name}}
-	{{end}}
+Base Commit : {{.Githash}}
+    {{range .PatchSet.Summary}}+{{.Additions}} -{{.Deletions}} {{.Name}}
+    {{end}}
 {{end}}
 {{end}}
 `))
@@ -54,9 +54,12 @@ type localDiff struct {
 }
 
 type patchParams struct {
-	Project           string
-	Path              string
-	Alias             string
+	Project string
+	Path    string
+	Alias   string
+	// isUsingLocalAlias indicates that the user-specified alias matches a local
+	// alias.
+	isUsingLocalAlias bool
 	Variants          []string
 	Tasks             []string
 	RegexVariants     []string
@@ -71,6 +74,7 @@ type patchParams struct {
 	Browse            bool
 	Large             bool
 	ShowSummary       bool
+	AutoDescription   bool
 	Uncommitted       bool
 	PreserveCommits   bool
 	Ref               string
@@ -79,7 +83,9 @@ type patchParams struct {
 	Parameters        []patch.Parameter
 	RepeatDefinition  bool
 	RepeatFailed      bool
+	RepeatPatchId     string
 	GithubAuthor      string
+	PatchAuthor       string
 }
 
 type patchSubmission struct {
@@ -104,7 +110,9 @@ type patchSubmission struct {
 	gitMetadata       patch.GitMetadata
 	repeatDefinition  bool
 	repeatFailed      bool
+	repeatPatchId     string
 	githubAuthor      string
+	patchAuthor       string
 }
 
 func (p *patchParams) createPatch(ac *legacyClient, diffData *localDiff) (*patch.Patch, error) {
@@ -129,8 +137,10 @@ func (p *patchParams) createPatch(ac *legacyClient, diffData *localDiff) (*patch
 		gitMetadata:       diffData.gitMetadata,
 		repeatDefinition:  p.RepeatDefinition,
 		repeatFailed:      p.RepeatFailed,
+		repeatPatchId:     p.RepeatPatchId,
 		path:              p.Path,
 		githubAuthor:      p.GithubAuthor,
+		patchAuthor:       p.PatchAuthor,
 	}
 
 	newPatch, err := ac.PutPatch(patchSub)
@@ -146,7 +156,7 @@ func (p *patchParams) validateSubmission(diffData *localDiff) error {
 		return err
 	}
 	if !p.SkipConfirm && len(diffData.fullPatch) == 0 {
-		if !confirm("Patch submission is empty. Continue? (Y/n)", true) {
+		if !confirm("Patch submission is empty. Continue?", true) {
 			return errors.New("patch aborted")
 		}
 	} else if !p.SkipConfirm && diffData.patchSummary != "" {
@@ -155,7 +165,7 @@ func (p *patchParams) validateSubmission(diffData *localDiff) error {
 			grip.Info(diffData.log)
 		}
 
-		if !confirm("This is a summary of the patch to be submitted. Continue? (Y/n):", true) {
+		if !confirm("This is a summary of the patch to be submitted. Continue?", true) {
 			return errors.New("patch aborted")
 		}
 	}
@@ -174,8 +184,8 @@ func (p *patchParams) displayPatch(newPatch *patch.Patch, uiHost string, isCommi
 
 	if p.Browse {
 		browserCmd, err := findBrowserCommand()
-		if err != nil || len(browserCmd) == 0 {
-			grip.Warningf("cannot find browser command: %s", err)
+		if err != nil {
+			grip.Warning(errors.Wrap(err, "finding browser command"))
 			return nil
 		}
 		url := newPatch.GetURL(uiHost)
@@ -221,28 +231,13 @@ func (p *patchParams) validatePatchCommand(ctx context.Context, conf *ClientSett
 		grip.Warningf("warning - failed to set default project: %v\n", err)
 	}
 
-	if err := p.setLocalAliases(conf); err != nil {
-		grip.Warningf("warning - setting local aliases")
-	}
-
-	if err := p.loadAlias(conf); err != nil {
-		grip.Warningf("warning - failed to set default alias: %v\n", err)
-	}
-
-	if err := p.loadVariants(conf); err != nil {
-		grip.Warningf("warning - failed to set default variants: %v\n", err)
-	}
-
-	if err := p.loadTasks(conf); err != nil {
-		grip.Warningf("warning - failed to set default tasks: %v\n", err)
+	// If reusing a previous definition, ignore defaults.
+	if !p.RepeatFailed && !p.RepeatDefinition {
+		p.setNonRepeatedDefaults(conf)
 	}
 
 	if err := p.loadParameters(conf); err != nil {
 		grip.Warningf("warning - failed to set default parameters: %v\n", err)
-	}
-
-	if err := p.loadTriggerAliases(conf); err != nil {
-		grip.Warningf("warning - failed to set default trigger aliases: %v\n", err)
 	}
 
 	if p.Uncommitted || conf.UncommittedChanges {
@@ -262,7 +257,7 @@ func (p *patchParams) validatePatchCommand(ctx context.Context, conf *ClientSett
 	if len(p.TriggerAliases) > 0 {
 		validTriggerAliases, err := comm.ListPatchTriggerAliases(ctx, p.Project)
 		if err != nil {
-			return nil, errors.Wrap(err, "error fetching trigger aliases")
+			return nil, errors.Wrap(err, "fetching trigger aliases")
 		}
 		for _, alias := range p.TriggerAliases {
 			if !utility.StringSliceContains(validTriggerAliases, alias) {
@@ -271,19 +266,43 @@ func (p *patchParams) validatePatchCommand(ctx context.Context, conf *ClientSett
 		}
 	}
 
-	if (len(p.Tasks) == 0 || len(p.Variants) == 0) && p.Alias == "" && p.Finalize {
-		return ref, errors.Errorf("Need to specify at least one task/variant or alias when finalizing.")
+	if p.Finalize && p.Alias == "" && !p.RepeatFailed && !p.RepeatDefinition {
+		if len(p.Variants)+len(p.RegexVariants) == 0 || len(p.Tasks)+len(p.RegexTasks) == 0 {
+			return ref, errors.Errorf("Need to specify at least one task/variant or alias when finalizing")
+		}
 	}
 
 	return ref, nil
 }
 
+func (p *patchParams) setNonRepeatedDefaults(conf *ClientSettings) {
+	if err := p.setLocalAliases(conf); err != nil {
+		grip.Warningf("warning - setting local aliases: %s\n", err)
+	}
+
+	if err := p.loadAlias(conf); err != nil {
+		grip.Warningf("warning - failed to set default alias: %s\n", err)
+	}
+
+	if err := p.loadVariants(conf); err != nil {
+		grip.Warningf("warning - failed to set default variants: %s\n", err)
+	}
+
+	if err := p.loadTasks(conf); err != nil {
+		grip.Warningf("warning - failed to set default tasks: %s\n", err)
+	}
+
+	if err := p.loadTriggerAliases(conf); err != nil {
+		grip.Warningf("warning - failed to set default trigger aliases: %s\n", err)
+	}
+}
+
 func (p *patchParams) loadProject(conf *ClientSettings) error {
 	if p.Project == "" {
 		cwd, err := os.Getwd()
-		grip.Error(errors.Wrap(err, "unable to get current working directory"))
+		grip.Error(errors.Wrap(err, "getting current working directory"))
 		cwd, err = filepath.EvalSymlinks(cwd)
-		grip.Error(errors.Wrap(err, "unable to resolve symlinks"))
+		grip.Error(errors.Wrap(err, "resolving current working directory symlinks"))
 		p.Project = conf.FindDefaultProject(cwd, true)
 	}
 	if p.Project == "" {
@@ -334,13 +353,14 @@ func (p *patchParams) addAliasToPatchParams(alias model.ProjectAlias) {
 		p.Tasks = append(p.Tasks, formattedTags...)
 	}
 	p.Alias = ""
+	p.isUsingLocalAlias = true
 }
 
 func (p *patchParams) setDefaultProject(conf *ClientSettings) {
 	cwd, err := os.Getwd()
-	grip.Error(errors.Wrap(err, "unable to get current working directory"))
+	grip.Error(errors.Wrap(err, "getting current working directory"))
 	cwd, err = filepath.EvalSymlinks(cwd)
-	grip.Error(errors.Wrap(err, "unable to resolve symlinks"))
+	grip.Error(errors.Wrapf(err, "resolving symlinks for the current working directory '%s'", cwd))
 
 	if conf.FindDefaultProject(cwd, false) == "" {
 		conf.SetDefaultProject(cwd, p.Project)
@@ -360,11 +380,11 @@ func (p *patchParams) loadAlias(conf *ClientSettings) error {
 		// Check if there's an alias as the default, and if not, ask to save the cl one
 		defaultAlias := conf.FindDefaultAlias(p.Project)
 		if defaultAlias == "" && !p.SkipConfirm &&
-			confirm(fmt.Sprintf("Set %v as the default alias for project '%v'?",
+			confirm(fmt.Sprintf("Set %s as the default alias for project '%s'?",
 				p.Alias, p.Project), false) {
 			conf.SetDefaultAlias(p.Project, p.Alias)
 			if err := conf.Write(""); err != nil {
-				return errors.Wrap(err, "error setting default alias")
+				return errors.Wrap(err, "setting default alias")
 			}
 		}
 	} else if len(p.Variants) == 0 || len(p.Tasks) == 0 {
@@ -379,21 +399,21 @@ func (p *patchParams) loadVariants(conf *ClientSettings) error {
 	if len(p.Variants) != 0 {
 		defaultVariants := conf.FindDefaultVariants(p.Project)
 		if len(defaultVariants) == 0 && !p.SkipConfirm &&
-			confirm(fmt.Sprintf("Set %v as the default variants for project '%v'?",
+			confirm(fmt.Sprintf("Set %s as the default variants for project '%s'?",
 				p.Variants, p.Project), false) {
 			conf.SetDefaultVariants(p.Project, p.Variants...)
 			if err := conf.Write(""); err != nil {
-				return errors.Wrap(err, "error setting default variants")
+				return errors.Wrap(err, "setting default variants")
 			}
 		}
-	} else if p.Alias == "" {
+	} else if p.Alias == "" && !p.isUsingLocalAlias {
 		p.Variants = conf.FindDefaultVariants(p.Project)
 	}
 
 	return nil
 }
 
-//Option to set default parameters no longer supported to prevent unwanted parameters from persisting within future patches
+// Option to set default parameters no longer supported to prevent unwanted parameters from persisting within future patches
 func (p *patchParams) loadParameters(conf *ClientSettings) error {
 	if len(p.Parameters) == 0 {
 		p.Parameters = conf.FindDefaultParameters(p.Project)
@@ -405,11 +425,11 @@ func (p *patchParams) loadTriggerAliases(conf *ClientSettings) error {
 	defaultAliases := conf.FindDefaultTriggerAliases(p.Project)
 	if len(p.TriggerAliases) != 0 {
 		if len(defaultAliases) == 0 && !p.SkipConfirm &&
-			confirm(fmt.Sprintf("Set %v as the default trigger aliases for project '%v'?",
+			confirm(fmt.Sprintf("Set %s as the default trigger aliases for project '%s'?",
 				p.TriggerAliases, p.Project), false) {
 			conf.SetDefaultTriggerAliases(p.Project, p.TriggerAliases)
 			if err := conf.Write(""); err != nil {
-				return errors.Wrap(err, "error setting default trigger aliases")
+				return errors.Wrap(err, "setting default trigger aliases")
 			}
 		}
 	} else {
@@ -422,14 +442,14 @@ func (p *patchParams) loadTasks(conf *ClientSettings) error {
 	if len(p.Tasks) != 0 {
 		defaultTasks := conf.FindDefaultTasks(p.Project)
 		if len(defaultTasks) == 0 && !p.SkipConfirm &&
-			confirm(fmt.Sprintf("Set %v as the default tasks for project '%v'?",
+			confirm(fmt.Sprintf("Set %s as the default tasks for project '%v'?",
 				p.Tasks, p.Project), false) {
 			conf.SetDefaultTasks(p.Project, p.Tasks...)
 			if err := conf.Write(""); err != nil {
 				return errors.Wrap(err, "setting default tasks")
 			}
 		}
-	} else if p.Alias == "" {
+	} else if p.Alias == "" && !p.isUsingLocalAlias {
 		p.Tasks = conf.FindDefaultTasks(p.Project)
 	}
 
@@ -439,6 +459,12 @@ func (p *patchParams) loadTasks(conf *ClientSettings) error {
 func (p *patchParams) getDescription() string {
 	if p.Description != "" {
 		return p.Description
+	} else if p.AutoDescription {
+		description, err := getDefaultDescription()
+		if err != nil {
+			grip.Error(err)
+		}
+		return description
 	}
 
 	description := ""
@@ -455,6 +481,31 @@ func (p *patchParams) getDescription() string {
 	}
 
 	return description
+}
+
+func (p *patchParams) getModulePath(conf *ClientSettings, module string) (string, error) {
+	modulePath := conf.getModulePath(p.Project, module)
+	if modulePath != "" || p.SkipConfirm {
+		return modulePath, nil
+	}
+
+	modulePath = prompt(fmt.Sprintf("Enter absolute path to module '%s' to include changes (optional):", module))
+	if modulePath == "" {
+		return "", errors.Errorf("no module path given")
+	}
+
+	if !conf.DisableAutoDefaulting {
+		// Verify that the path is correct before auto defaulting
+		if _, err := gitUncommittedChanges(modulePath); err != nil {
+			return "", errors.Wrapf(err, "verifying module '%s''", module)
+		}
+		conf.setModulePath(p.Project, module, modulePath)
+		if err := conf.Write(""); err != nil {
+			grip.Errorf("problem setting module '%s' path in config: %s", module, err.Error())
+		}
+	}
+
+	return modulePath, nil
 }
 
 // Returns an error if the diff is greater than the system limit, or if it's above the large
@@ -544,39 +595,40 @@ func isValidCommitsFormat(commits string) error {
 	return nil
 }
 
-func confirmUncommittedChanges(preserveCommits, includeUncommitedChanges bool) (bool, error) {
-	uncommittedChanges, err := gitUncommittedChanges()
+func confirmUncommittedChanges(dir string, preserveCommits, includeUncommitedChanges bool) (bool, error) {
+	uncommittedChanges, err := gitUncommittedChanges(dir)
 	if err != nil {
-		return false, errors.Wrap(err, "can't test for uncommitted changes")
+		return false, errors.Wrap(err, "getting uncommitted changes")
 	}
 	if !uncommittedChanges {
 		return true, nil
 	}
 
 	if preserveCommits {
-		return confirm("Uncommitted changes are omitted from patches when commits are preserved. Continue? (y/N)", false), nil
+		return confirm("Uncommitted changes are omitted from patches when commits are preserved. Continue?", false), nil
 	}
 
 	if !includeUncommitedChanges {
 		return confirm(fmt.Sprintf(`Uncommitted changes are omitted from patches by default.
 Use the '--%s, -u' flag or set 'patch_uncommitted_changes: true' in your ~/.evergreen.yml file to include uncommitted changes.
-Continue? (Y/n)`, uncommittedChangesFlag), true), nil
+Continue?`, uncommittedChangesFlag), true), nil
 	}
 
 	return true, nil
 }
 
-// loadGitData inspects the current git working directory and returns a patch and its summary.
+// loadGitData inspects the given git working directory and returns a patch and its summary.
+// If no dir is provided, we use the current working directory.
 // The branch argument is used to determine where to generate the merge base from, and any extra
 // arguments supplied are passed directly in as additional args to git diff.
-func loadGitData(branch, ref, commits string, format bool, extraArgs ...string) (*localDiff, error) {
+func loadGitData(dir, branch, ref, commits string, format bool, extraArgs ...string) (*localDiff, error) {
 	// branch@{upstream} refers to the branch that the branch specified by branchname is set to
 	// build on top of. This allows automatically detecting a branch based on the correct remote,
 	// if the user's repo is a fork, for example. This also works with a commit hash, if given.
 	// In the case a range is passed, we only need one commit to determine the base, so we use the first commit.
 	// For details see: https://git-scm.com/docs/gitrevisions
 
-	mergeBase, err := gitMergeBase(branch+"@{upstream}", ref, commits)
+	mergeBase, err := gitMergeBase(dir, branch+"@{upstream}", ref, commits)
 	if err != nil {
 		return nil, errors.Wrapf(err, "Error getting merge base, "+
 			"may need to create local branch '%s' and have it track upstream", branch)
@@ -585,34 +637,34 @@ func loadGitData(branch, ref, commits string, format bool, extraArgs ...string) 
 	if len(extraArgs) > 0 {
 		statArgs = append(statArgs, extraArgs...)
 	}
-	stat, err := gitDiff(mergeBase, ref, commits, statArgs...)
+	stat, err := gitDiff(dir, mergeBase, ref, commits, statArgs...)
 	if err != nil {
-		return nil, errors.Wrap(err, "Error getting diff summary")
+		return nil, errors.Wrap(err, "getting diff summary")
 	}
-	log, err := gitLog(mergeBase, ref, commits)
+	log, err := gitLog(dir, mergeBase, ref, commits)
 	if err != nil {
 		return nil, errors.Wrap(err, "git log")
 	}
 
 	var fullPatch string
 	if format {
-		fullPatch, err = gitFormatPatch(mergeBase, ref, commits)
+		fullPatch, err = gitFormatPatch(dir, mergeBase, ref, commits)
 		if err != nil {
-			return nil, errors.Wrap(err, "Error getting formatted patch")
+			return nil, errors.Wrap(err, "getting git formatted patch")
 		}
 	} else {
 		if !utility.StringSliceContains(extraArgs, "--binary") {
 			extraArgs = append(extraArgs, "--binary")
 		}
-		fullPatch, err = gitDiff(mergeBase, ref, commits, extraArgs...)
+		fullPatch, err = gitDiff(dir, mergeBase, ref, commits, extraArgs...)
 		if err != nil {
-			return nil, errors.Wrap(err, "Error getting patch")
+			return nil, errors.Wrap(err, "getting git diff")
 		}
 	}
 
 	gitMetadata, err := getGitConfigMetadata()
 	if err != nil {
-		return nil, errors.Wrap(err, "Error getting git metadata")
+		return nil, errors.Wrap(err, "getting git metadata")
 	}
 
 	return &localDiff{
@@ -626,14 +678,11 @@ func loadGitData(branch, ref, commits string, format bool, extraArgs ...string) 
 
 // gitMergeBase runs "git merge-base <branch1> <branch2>" (where branch2 can optionally be a githash)
 // and returns the resulting githash as string
-func gitMergeBase(branch1, ref, commits string) (string, error) {
+func gitMergeBase(dir, branch1, ref, commits string) (string, error) {
 	branch2 := getFeatureBranch(ref, commits)
-	cmd := exec.Command("git", "merge-base", branch1, branch2)
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", errors.Wrapf(err, "'git merge-base %s %s' failed: %s (%s)", branch1, branch2, out, err)
-	}
-	return strings.TrimSpace(string(out)), err
+	out, err := gitCmdWithDir("merge-base", dir, branch1, branch2)
+
+	return strings.TrimSpace(out), err
 }
 
 func gitIsAncestor(commit1, commit2 string) (string, error) {
@@ -642,8 +691,9 @@ func gitIsAncestor(commit1, commit2 string) (string, error) {
 }
 
 // gitDiff runs "git diff <base> <ref> <commits> <diffargs ...>" and returns the output of the command as a string,
-// where ref and commits are mutually exclusive (and not required)
-func gitDiff(base, ref, commits string, diffArgs ...string) (string, error) {
+// where ref and commits are mutually exclusive (and not required). If dir is specified, runs the command
+// in the specified directory.
+func gitDiff(dir, base, ref, commits string, diffArgs ...string) (string, error) {
 	args := []string{base}
 	if commits != "" {
 		args = []string{formatCommitRange(commits)}
@@ -653,24 +703,24 @@ func gitDiff(base, ref, commits string, diffArgs ...string) (string, error) {
 	}
 	args = append(args, "--no-ext-diff")
 	args = append(args, diffArgs...)
-	return gitCmd("diff", args...)
+	return gitCmdWithDir("diff", dir, args...)
 }
 
-func gitFormatPatch(base string, ref, commits string) (string, error) {
+func gitFormatPatch(dir, base string, ref, commits string) (string, error) {
 	revisionRange := fmt.Sprintf("%s..%s", base, ref)
 	if commits != "" {
 		revisionRange = formatCommitRange(commits)
 	}
-	return gitCmd("format-patch", "--keep-subject", "--no-signature", "--stdout", "--no-ext-diff", "--binary", revisionRange)
+	return gitCmdWithDir("format-patch", dir, "--keep-subject", "--no-signature", "--stdout", "--no-ext-diff", "--binary", revisionRange)
 }
 
 // getLog runs "git log <base>...<ref> or uses the commit range given
-func gitLog(base, ref, commits string) (string, error) {
+func gitLog(dir, base, ref, commits string) (string, error) {
 	revisionRange := fmt.Sprintf("%s...%s", base, ref)
 	if commits != "" {
 		revisionRange = formatCommitRange(commits)
 	}
-	return gitCmd("log", revisionRange, "--oneline")
+	return gitCmdWithDir("log", dir, revisionRange, "--oneline")
 }
 
 func gitCommitMessages(base, ref, commits string) (string, error) {
@@ -681,7 +731,7 @@ func gitCommitMessages(base, ref, commits string) (string, error) {
 	args := []string{"--no-show-signature", "--pretty=format:%s", "--reverse", input}
 	msg, err := gitCmd("log", args...)
 	if err != nil {
-		return "", errors.Wrap(err, "can't get messages")
+		return "", errors.Wrap(err, "getting git log messages")
 	}
 	// separate multiple commits with <-
 	msg = strings.TrimSpace(msg)
@@ -704,11 +754,11 @@ func gitBranch() (string, error) {
 func getDefaultDescription() (string, error) {
 	desc, err := gitLastCommitMessage()
 	if err != nil {
-		return "", errors.Wrap(err, "Couldn't get last commit message")
+		return "", errors.Wrap(err, "getting last git commit message")
 	}
 	branch, err := gitBranch()
 	if err != nil {
-		return "", errors.Wrap(err, "Couldn't get branch name")
+		return "", errors.Wrap(err, "getting git branch name")
 	}
 
 	branch = strings.TrimSpace(branch)
@@ -725,22 +775,22 @@ func gitCommitCount(base, ref, commits string) (int, error) {
 	}
 	out, err := gitCmd("rev-list", input, "--count")
 	if err != nil {
-		return 0, errors.Wrap(err, "can't get commit count")
+		return 0, errors.Wrap(err, "getting git commit count")
 	}
 
 	count, err := strconv.Atoi(strings.TrimSpace(out))
 	if err != nil {
-		return 0, errors.Wrapf(err, "'%s' is not an integer", out)
+		return 0, errors.Wrapf(err, "parsing git commit count from git command output '%s'", out)
 	}
 
 	return count, nil
 }
 
-func gitUncommittedChanges() (bool, error) {
+func gitUncommittedChanges(dir string) (bool, error) {
 	args := "--porcelain"
-	out, err := gitCmd("status", args)
+	out, err := gitCmdWithDir("status", dir, args)
 	if err != nil {
-		return false, errors.Wrap(err, "can't run git status")
+		return false, errors.Wrap(err, "running git status")
 	}
 	return len(out) != 0, nil
 }
@@ -750,13 +800,13 @@ func getGitConfigMetadata() (patch.GitMetadata, error) {
 	metadata := patch.GitMetadata{}
 	username, err := gitCmd("config", "user.name")
 	if err != nil {
-		return metadata, errors.Wrap(err, "can't get git user.name")
+		return metadata, errors.Wrap(err, "getting git user.name")
 	}
 	metadata.Username = strings.TrimSpace(username)
 
 	email, err := gitCmd("config", "user.email")
 	if err != nil {
-		return metadata, errors.Wrap(err, "can't get git user.email")
+		return metadata, errors.Wrap(err, "getting git user.email")
 	}
 	metadata.Email = strings.TrimSpace(email)
 
@@ -773,7 +823,7 @@ func getGitVersion() (string, error) {
 	// Parse the version number out of the version string.
 	versionString, err := gitCmd("version")
 	if err != nil {
-		return "", errors.Wrap(err, "can't run git version")
+		return "", errors.Wrap(err, "getting git version")
 	}
 
 	return parseGitVersion(strings.TrimSpace(versionString))
@@ -787,7 +837,7 @@ func parseGitVersion(version string) (string, error) {
 		`(?: \(Apple Git-[\w\.]+\))?$`,
 	).FindStringSubmatch(version)
 	if len(matches) != 2 {
-		return "", errors.Errorf("can't parse git version number from version string '%s'", version)
+		return "", errors.Errorf("could not parse git version number from version string '%s'", version)
 	}
 
 	return matches[1], nil
@@ -797,10 +847,32 @@ func gitCmd(cmdName string, gitArgs ...string) (string, error) {
 	args := make([]string, 0, 1+len(gitArgs))
 	args = append(args, cmdName)
 	args = append(args, gitArgs...)
+	return gitExecCmd(args)
+}
+
+func gitCmdWithDir(cmdName, dir string, gitArgs ...string) (string, error) {
+	args := []string{}
+	if dir != "" {
+		args = append(args, moduleDirArgs(dir)...)
+	}
+	args = append(args, cmdName)
+	args = append(args, gitArgs...)
+
+	return gitExecCmd(args)
+}
+
+// gitExecCmd assumes that the command name has already been added to args, and executes the command.
+func gitExecCmd(args []string) (string, error) {
 	cmd := exec.Command("git", args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return "", errors.Errorf("'git %s' failed with err %s", strings.Join(args, " "), err)
+		return "", errors.Wrapf(err, "command 'git %s' failed", strings.Join(args, " "))
 	}
 	return string(out), nil
+}
+
+func moduleDirArgs(path string) []string {
+	str1 := fmt.Sprintf("--git-dir=%s/.git", path)
+	str2 := fmt.Sprintf("--work-tree=%s", path)
+	return []string{str1, str2}
 }

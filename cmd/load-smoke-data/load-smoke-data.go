@@ -11,9 +11,9 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/host"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
-	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/amboy"
 	"github.com/mongodb/amboy/queue"
@@ -42,7 +42,7 @@ func getFiles(root string) ([]string, error) {
 	})
 
 	if err != nil {
-		return nil, errors.Wrapf(err, "problem finding import files in %s", root)
+		return nil, errors.Wrapf(err, "finding import files in path '%s'", root)
 	}
 
 	return out, nil
@@ -62,21 +62,28 @@ func insertFileDocsToDB(ctx context.Context, fn string, db *mongo.Database, logs
 	if collName == model.TaskLogCollection {
 		collection = logsDb.Collection(collName)
 	}
-	if collName == testresult.Collection { // add the necessary test results index
-		if _, err = collection.Indexes().CreateOne(ctx, mongo.IndexModel{
-			Keys: testresult.TestResultsIndex,
+	switch collName {
+	case task.Collection:
+		if _, err = collection.Indexes().CreateMany(ctx, []mongo.IndexModel{
+			{
+				Keys: task.ActivatedTasksByDistroIndex,
+			},
+			{
+				Keys: task.DurationIndex,
+			},
 		}); err != nil {
-			return errors.Wrap(err, "creating test results index")
+			return errors.Wrap(err, "creating task indexes")
 		}
-	}
-	if collName == task.Collection { // add the necessary tasks index
+	case host.Collection:
 		if _, err = collection.Indexes().CreateOne(ctx, mongo.IndexModel{
-			Keys: task.ActivatedTasksByDistroIndex,
+			Keys: host.StatusIndex,
 		}); err != nil {
-			return errors.Wrap(err, "creating activated tasks by distro index")
+			return errors.Wrap(err, "creating host index")
 		}
 	}
 	scanner := bufio.NewScanner(file)
+	// Set the max buffer size to the max size of a Mongo document (16MB).
+	scanner.Buffer(make([]byte, 4096), 16*1024*1024)
 	count := 0
 	for scanner.Scan() {
 		count++

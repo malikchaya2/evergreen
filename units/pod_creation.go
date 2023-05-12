@@ -9,6 +9,7 @@ import (
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/cloud"
 	"github.com/evergreen-ci/evergreen/model/pod"
+	"github.com/evergreen-ci/evergreen/model/pod/definition"
 	"github.com/evergreen-ci/evergreen/model/pod/dispatcher"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/utility"
@@ -36,8 +37,6 @@ type podCreationJob struct {
 	PodID    string `bson:"pod_id" json:"pod_id" yaml:"pod_id"`
 
 	pod           *pod.Pod
-	smClient      cocoa.SecretsManagerClient
-	vault         cocoa.Vault
 	ecsClient     cocoa.ECSClient
 	ecsPod        cocoa.ECSPod
 	ecsPodCreator cocoa.ECSPodCreator
@@ -73,21 +72,29 @@ func NewPodCreationJob(podID, id string) amboy.Job {
 }
 
 func (j *podCreationJob) Run(ctx context.Context) {
-	defer j.MarkComplete()
-
 	defer func() {
-		if j.smClient != nil {
-			j.AddError(j.smClient.Close(ctx))
-		}
+		j.MarkComplete()
+
 		if j.ecsClient != nil {
-			j.AddError(j.ecsClient.Close(ctx))
+			j.AddError(errors.Wrap(j.ecsClient.Close(ctx), "closing ECS client"))
 		}
 
 		if j.pod != nil && j.pod.Status == pod.StatusInitializing && (j.RetryInfo().GetRemainingAttempts() == 0 || !j.RetryInfo().ShouldRetry()) {
-			j.AddError(errors.Wrap(j.pod.UpdateStatus(pod.StatusDecommissioned), "updating pod status to decommissioned after pod failed to start"))
+			j.AddError(errors.Wrap(j.pod.UpdateStatus(pod.StatusDecommissioned, "pod failed to start and will not retry"), "updating pod status to decommissioned after pod failed to start"))
+
+			terminationJob := NewPodTerminationJob(j.PodID, fmt.Sprintf("pod creation job hit max attempts %d", j.RetryInfo().MaxAttempts), time.Now())
+			if err := amboy.EnqueueUniqueJob(ctx, j.env.RemoteQueue(), terminationJob); err != nil {
+				j.AddError(errors.Wrap(err, "enqueueing job to terminate pod"))
+			}
+
+			grip.Info(message.Fields{
+				"message": "decommissioned pod after it failed to be created",
+				"pod":     j.pod.ID,
+				"job":     j.ID(),
+			})
 		}
 	}()
-	if err := j.populateIfUnset(ctx); err != nil {
+	if err := j.populateIfUnset(); err != nil {
 		j.AddRetryableError(err)
 		return
 	}
@@ -103,13 +110,21 @@ func (j *podCreationJob) Run(ctx context.Context) {
 
 	switch j.pod.Status {
 	case pod.StatusInitializing:
-		opts, err := cloud.ExportECSPodCreationOptions(&settings, j.pod)
+		execOpts, err := cloud.ExportECSPodExecutionOptions(settings.Providers.AWS.Pod.ECS, j.pod.TaskContainerCreationOpts)
 		if err != nil {
-			j.AddError(errors.Wrap(err, "exporting pod creation options"))
+			j.AddError(errors.Wrap(err, "getting pod execution options"))
 			return
 		}
 
-		p, err := j.ecsPodCreator.CreatePod(ctx, *opts)
+		// Wait for the pod definition to be asynchronously created. If the pod
+		// definition is not ready yet, retry again later.
+		podDef, err := j.checkForPodDefinition(j.pod.Family)
+		if err != nil {
+			j.AddRetryableError(errors.Wrap(err, "waiting for pod definition to be created"))
+			return
+		}
+
+		p, err := j.ecsPodCreator.CreatePodFromExistingDefinition(ctx, cloud.ExportECSPodDefinition(*podDef), *execOpts)
 		if err != nil {
 			j.AddRetryableError(errors.Wrap(err, "starting pod"))
 			return
@@ -122,7 +137,13 @@ func (j *podCreationJob) Run(ctx context.Context) {
 			j.AddError(errors.Wrap(err, "updating pod resources"))
 		}
 
-		if err := j.pod.UpdateStatus(pod.StatusStarting); err != nil {
+		// Bump the last communication time to ensure that the pod has a
+		// sufficient grace period to start up.
+		if err := j.pod.UpdateLastCommunicated(); err != nil {
+			j.AddError(errors.Wrap(err, "updating pod last communication time"))
+		}
+
+		if err := j.pod.UpdateStatus(pod.StatusStarting, "pod successfully started"); err != nil {
 			j.AddError(errors.Wrap(err, "marking pod as starting"))
 		}
 
@@ -134,7 +155,7 @@ func (j *podCreationJob) Run(ctx context.Context) {
 	}
 }
 
-func (j *podCreationJob) populateIfUnset(ctx context.Context) error {
+func (j *podCreationJob) populateIfUnset() error {
 	if j.env == nil {
 		j.env = evergreen.GetEnvironment()
 	}
@@ -156,17 +177,6 @@ func (j *podCreationJob) populateIfUnset(ctx context.Context) error {
 
 	settings := j.env.Settings()
 
-	if j.vault == nil {
-		if j.smClient == nil {
-			client, err := cloud.MakeSecretsManagerClient(settings)
-			if err != nil {
-				return errors.Wrap(err, "initializing Secrets Manager client")
-			}
-			j.smClient = client
-		}
-		j.vault = cloud.MakeSecretsManagerVault(j.smClient)
-	}
-
 	if j.ecsClient == nil {
 		client, err := cloud.MakeECSClient(settings)
 		if err != nil {
@@ -176,7 +186,7 @@ func (j *podCreationJob) populateIfUnset(ctx context.Context) error {
 	}
 
 	if j.ecsPodCreator == nil {
-		creator, err := cloud.MakeECSPodCreator(j.ecsClient, j.vault)
+		creator, err := cloud.MakeECSPodCreator(j.ecsClient, nil)
 		if err != nil {
 			return errors.Wrap(err, "initializing ECS pod creator")
 		}
@@ -184,6 +194,29 @@ func (j *podCreationJob) populateIfUnset(ctx context.Context) error {
 	}
 
 	return nil
+}
+
+func (j *podCreationJob) checkForPodDefinition(family string) (*definition.PodDefinition, error) {
+	podDef, err := definition.FindOneByFamily(family)
+	if err != nil {
+		return nil, errors.Wrapf(err, "finding pod definition with family '%s'", family)
+	}
+	if podDef == nil {
+		return nil, errors.Errorf("pod definition with family '%s' not found", family)
+	}
+
+	grip.WarningWhen(podDef.LastAccessed.Add(podDefinitionTTL).Before(time.Now()), message.Fields{
+		"message":        "Using a pod definition whose TTL has already elapsed, so it's at risk of being cleaned up. Starting this pod may fail if the pod definition gets cleaned up.",
+		"pod":            j.pod.ID,
+		"pod_definition": podDef.ID,
+		"job":            j.ID(),
+	})
+
+	if err := podDef.UpdateLastAccessed(); err != nil {
+		return nil, errors.Wrapf(err, "updating last access time for pod definition '%s'", podDef.ID)
+	}
+
+	return podDef, nil
 }
 
 func (j *podCreationJob) logTaskTimingStats() error {
@@ -201,6 +234,7 @@ func (j *podCreationJob) logTaskTimingStats() error {
 
 	msg := message.Fields{
 		"message":          "created pod to run container tasks",
+		"usage":            "container task health dashboard",
 		"pod":              j.pod.ID,
 		"dispatcher_group": disp.GroupID,
 	}

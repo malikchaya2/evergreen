@@ -2,7 +2,6 @@ package agent
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 	"strings"
 	"testing"
@@ -14,6 +13,7 @@ import (
 	"github.com/mongodb/jasper"
 	"github.com/mongodb/jasper/mock"
 	"github.com/stretchr/testify/suite"
+	"go.opentelemetry.io/otel"
 )
 
 type TimeoutSuite struct {
@@ -37,14 +37,14 @@ func (s *TimeoutSuite) SetupTest() {
 			StatusPort: 2286,
 			LogPrefix:  evergreen.LocalLoggingOverride,
 		},
-		comm: client.NewMock("url"),
+		comm:   client.NewMock("url"),
+		tracer: otel.GetTracerProvider().Tracer("noop_tracer"),
 	}
 	s.mockCommunicator = s.a.comm.(*client.Mock)
 	var err error
 
-	s.tmpDirName, err = ioutil.TempDir("", "agent-timeout-suite-")
-	s.Require().NoError(err)
-	s.tmpFile, err = ioutil.TempFile(s.tmpDirName, "timeout")
+	s.tmpDirName = s.T().TempDir()
+	s.tmpFile, err = os.CreateTemp(s.tmpDirName, "timeout")
 	s.Require().NoError(err)
 
 	s.tmpFileName = s.tmpFile.Name()
@@ -56,7 +56,6 @@ func (s *TimeoutSuite) SetupTest() {
 
 func (s *TimeoutSuite) TearDownTest() {
 	s.Require().NoError(os.Remove(s.tmpFileName))
-	s.Require().NoError(os.RemoveAll(s.tmpDirName))
 }
 
 // TestExecTimeoutProject tests exec_timeout_secs set on a project.
@@ -95,13 +94,13 @@ func (s *TimeoutSuite) TestExecTimeoutProject() {
 		if msg.Message == "Task completed - FAILURE." {
 			foundSuccessLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Hit exec timeout (1s)") {
+		if strings.HasPrefix(msg.Message, "Hit exec timeout (1s).") {
 			foundTimeoutMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Running task-timeout commands") {
+		if strings.HasPrefix(msg.Message, "Running task-timeout commands.") {
 			foundShellLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\"") {
+		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\".") {
 			foundShellLogMessage = true
 		}
 	}
@@ -117,7 +116,7 @@ func (s *TimeoutSuite) TestExecTimeoutProject() {
 	s.Equal(1*time.Second, detail.TimeoutDuration)
 	s.EqualValues(execTimeout, detail.TimeoutType)
 
-	data, err := ioutil.ReadFile(s.tmpFileName)
+	data, err := os.ReadFile(s.tmpFileName)
 	s.Require().NoError(err)
 	s.Equal("timeout test message", strings.Trim(string(data), "\r\n"))
 
@@ -163,13 +162,13 @@ func (s *TimeoutSuite) TestExecTimeoutTask() {
 		if msg.Message == "Task completed - FAILURE." {
 			foundSuccessLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Hit exec timeout (1s)") {
+		if strings.HasPrefix(msg.Message, "Hit exec timeout (1s).") {
 			foundTimeoutMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Running task-timeout commands") {
+		if strings.HasPrefix(msg.Message, "Running task-timeout commands.") {
 			foundShellLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\"") {
+		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\".") {
 			foundShellLogMessage = true
 		}
 	}
@@ -185,7 +184,7 @@ func (s *TimeoutSuite) TestExecTimeoutTask() {
 	s.Equal(1*time.Second, detail.TimeoutDuration)
 	s.EqualValues(execTimeout, detail.TimeoutType)
 
-	data, err := ioutil.ReadFile(s.tmpFileName)
+	data, err := os.ReadFile(s.tmpFileName)
 	s.Require().NoError(err)
 	s.Equal("timeout test message", strings.Trim(string(data), "\r\n"))
 
@@ -230,13 +229,13 @@ func (s *TimeoutSuite) TestIdleTimeoutFunc() {
 		if msg.Message == "Task completed - FAILURE." {
 			foundSuccessLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Hit idle timeout (no message on stdout for more than 1s)") {
+		if strings.HasPrefix(msg.Message, "Hit idle timeout (no message on stdout for more than 1s).") {
 			foundTimeoutMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Running task-timeout commands") {
+		if strings.HasPrefix(msg.Message, "Running task-timeout commands.") {
 			foundShellLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\"") {
+		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\".") {
 			foundShellLogMessage = true
 		}
 	}
@@ -252,7 +251,7 @@ func (s *TimeoutSuite) TestIdleTimeoutFunc() {
 	s.Equal(1*time.Second, detail.TimeoutDuration)
 	s.EqualValues(idleTimeout, detail.TimeoutType)
 
-	data, err := ioutil.ReadFile(s.tmpFileName)
+	data, err := os.ReadFile(s.tmpFileName)
 	s.Require().NoError(err)
 	s.Equal("timeout test message", strings.Trim(string(data), "\r\n"))
 
@@ -297,13 +296,13 @@ func (s *TimeoutSuite) TestIdleTimeoutCommand() {
 		if msg.Message == "Task completed - FAILURE." {
 			foundSuccessLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Hit idle timeout (no message on stdout for more than 1s)") {
+		if strings.HasPrefix(msg.Message, "Hit idle timeout (no message on stdout for more than 1s).") {
 			foundTimeoutMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Running task-timeout commands") {
+		if strings.HasPrefix(msg.Message, "Running task-timeout commands.") {
 			foundShellLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\"") {
+		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\".") {
 			foundShellLogMessage = true
 		}
 	}
@@ -319,7 +318,7 @@ func (s *TimeoutSuite) TestIdleTimeoutCommand() {
 	s.Equal(1*time.Second, detail.TimeoutDuration)
 	s.EqualValues(idleTimeout, detail.TimeoutType)
 
-	data, err := ioutil.ReadFile(s.tmpFileName)
+	data, err := os.ReadFile(s.tmpFileName)
 	s.Require().NoError(err)
 	s.Equal("timeout test message", strings.Trim(string(data), "\r\n"))
 
@@ -364,13 +363,13 @@ func (s *TimeoutSuite) TestDynamicIdleTimeout() {
 		if msg.Message == "Task completed - FAILURE." {
 			foundSuccessLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Hit idle timeout (no message on stdout for more than 2s)") {
+		if strings.HasPrefix(msg.Message, "Hit idle timeout (no message on stdout for more than 2s).") {
 			foundTimeoutMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Running task-timeout commands") {
+		if strings.HasPrefix(msg.Message, "Running task-timeout commands.") {
 			foundShellLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\"") {
+		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\".") {
 			foundShellLogMessage = true
 		}
 	}
@@ -386,7 +385,7 @@ func (s *TimeoutSuite) TestDynamicIdleTimeout() {
 	s.Equal(2*time.Second, detail.TimeoutDuration)
 	s.EqualValues(idleTimeout, detail.TimeoutType)
 
-	data, err := ioutil.ReadFile(s.tmpFileName)
+	data, err := os.ReadFile(s.tmpFileName)
 	s.Require().NoError(err)
 	s.Equal("timeout test message", strings.Trim(string(data), "\r\n"))
 
@@ -431,13 +430,13 @@ func (s *TimeoutSuite) TestDynamicExecTimeoutTask() {
 		if msg.Message == "Task completed - FAILURE." {
 			foundSuccessLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Hit exec timeout (2s)") {
+		if strings.HasPrefix(msg.Message, "Hit exec timeout (2s).") {
 			foundTimeoutMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Running task-timeout commands") {
+		if strings.HasPrefix(msg.Message, "Running task-timeout commands.") {
 			foundShellLogMessage = true
 		}
-		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\"") {
+		if strings.HasPrefix(msg.Message, "Finished 'shell.exec' in \"timeout\".") {
 			foundShellLogMessage = true
 		}
 	}
@@ -453,7 +452,7 @@ func (s *TimeoutSuite) TestDynamicExecTimeoutTask() {
 	s.Equal(2*time.Second, detail.TimeoutDuration)
 	s.EqualValues(execTimeout, detail.TimeoutType)
 
-	data, err := ioutil.ReadFile(s.tmpFileName)
+	data, err := os.ReadFile(s.tmpFileName)
 	s.Require().NoError(err)
 	s.Equal("timeout test message", strings.Trim(string(data), "\r\n"))
 

@@ -175,7 +175,7 @@ func (uis *UIServer) getAllowedInstanceTypes(w http.ResponseWriter, r *http.Requ
 			errors.Errorf("Host '%s' not found", hostId))
 		return
 	}
-	if cloud.IsEc2Provider(h.Provider) {
+	if evergreen.IsEc2Provider(h.Provider) {
 		allowedTypes := uis.Settings.Providers.AWS.AllowedInstanceTypes
 		// add the original instance type to the list if applicable
 		if len(h.Distro.ProviderSettingsList) > 0 {
@@ -222,10 +222,7 @@ func (uis *UIServer) getVolumes(w http.ResponseWriter, r *http.Request) {
 	apiVolumes := make([]restModel.APIVolume, 0, len(volumes))
 	for _, vol := range volumes {
 		apiVolume := restModel.APIVolume{}
-		if err := apiVolume.BuildFromService(vol); err != nil {
-			uis.LoggedError(w, r, http.StatusInternalServerError, errors.Wrapf(err, "error building volume '%s'", vol.ID))
-			return
-		}
+		apiVolume.BuildFromService(vol)
 		apiVolumes = append(apiVolumes, apiVolume)
 	}
 	gimlet.WriteJSON(w, apiVolumes)
@@ -313,7 +310,7 @@ func (uis *UIServer) requestNewHost(w http.ResponseWriter, r *http.Request) {
 			uis.LoggedError(w, r, http.StatusBadRequest, errors.New("task not found"))
 			return
 		}
-		err = data.CreateHostsFromTask(t, *authedUser, putParams.PublicKey)
+		err = data.CreateHostsFromTask(ctx, uis.env.Settings(), t, *authedUser, putParams.PublicKey)
 		if err != nil {
 			grip.Error(message.WrapError(err, message.Fields{
 				"message": "error creating hosts from task",
@@ -524,6 +521,8 @@ func (uis *UIServer) requestNewVolume(w http.ResponseWriter, r *http.Request) {
 	}
 	if volume.Type == "" {
 		volume.Type = evergreen.DefaultEBSType
+		volume.IOPS = cloud.Gp2EquivalentIOPSForGp3(volume.Size)
+		volume.Throughput = cloud.Gp2EquivalentThroughputForGp3(volume.Size)
 	}
 	volume.CreatedBy = MustHaveUser(r).Id
 	_, httpStatusCode, err := cloud.RequestNewVolume(r.Context(), *volume)

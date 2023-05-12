@@ -1,6 +1,7 @@
 package evergreen
 
 import (
+	"regexp"
 	"time"
 
 	"github.com/mongodb/amboy"
@@ -16,7 +17,7 @@ import (
 type AmboyConfig struct {
 	Name                                  string                  `bson:"name" json:"name" yaml:"name"`
 	SingleName                            string                  `bson:"single_name" json:"single_name" yaml:"single_name"`
-	DB                                    string                  `bson:"database" json:"database" yaml:"database"`
+	DBConnection                          AmboyDBConfig           `bson:"db_connection" json:"db_connection" yaml:"db_connection"`
 	PoolSizeLocal                         int                     `bson:"pool_size_local" json:"pool_size_local" yaml:"pool_size_local"`
 	PoolSizeRemote                        int                     `bson:"pool_size_remote" json:"pool_size_remote" yaml:"pool_size_remote"`
 	LocalStorage                          int                     `bson:"local_storage_size" json:"local_storage_size" yaml:"local_storage_size"`
@@ -29,6 +30,19 @@ type AmboyConfig struct {
 	SampleSize                            int                     `bson:"sample_size" json:"sample_size" yaml:"sample_size"`
 	Retry                                 AmboyRetryConfig        `bson:"retry" json:"retry" yaml:"retry"`
 	NamedQueues                           []AmboyNamedQueueConfig `bson:"named_queues" json:"named_queues" yaml:"named_queues"`
+	// SkipPreferredIndexes indicates whether or not to use the preferred
+	// indexes for the remote queues. This is not a value that can or should be
+	// configured in production, but is useful to explicitly set for testing
+	// environments, where the required indexes may not be set up.
+	SkipPreferredIndexes bool `bson:"skip_preferred_indexes" json:"skip_preferred_indexes" yaml:"skip_preferred_indexes"`
+}
+
+// AmboyDBConfig configures Amboy's database connection.
+type AmboyDBConfig struct {
+	URL      string `bson:"url" json:"url" yaml:"url"`
+	Database string `bson:"database" json:"database" yaml:"database"`
+	Username string `bson:"username" json:"username" yaml:"username"`
+	Password string `bson:"password" json:"password" yaml:"password"`
 }
 
 // AmboyRetryConfig represents configuration settings for Amboy's retryability
@@ -46,6 +60,7 @@ type AmboyRetryConfig struct {
 // queues in the Amboy queue group.
 type AmboyNamedQueueConfig struct {
 	Name               string `bson:"name" json:"name" yaml:"name"`
+	Regexp             string `bson:"regexp" json:"regexp" yaml:"regexp"`
 	NumWorkers         int    `bson:"num_workers" json:"num_workers" yaml:"num_workers"`
 	SampleSize         int    `bson:"sample_size" json:"sample_size" yaml:"sample_size"`
 	LockTimeoutSeconds int    `bson:"lock_timeout_seconds" json:"lock_timeout_seconds" yaml:"lock_timeout_seconds"`
@@ -54,7 +69,7 @@ type AmboyNamedQueueConfig struct {
 var (
 	amboyNameKey                                  = bsonutil.MustHaveTag(AmboyConfig{}, "Name")
 	amboySingleNameKey                            = bsonutil.MustHaveTag(AmboyConfig{}, "SingleName")
-	amboyDBKey                                    = bsonutil.MustHaveTag(AmboyConfig{}, "DB")
+	amboyDBConnectionKey                          = bsonutil.MustHaveTag(AmboyConfig{}, "DBConnection")
 	amboyPoolSizeLocalKey                         = bsonutil.MustHaveTag(AmboyConfig{}, "PoolSizeLocal")
 	amboyPoolSizeRemoteKey                        = bsonutil.MustHaveTag(AmboyConfig{}, "PoolSizeRemote")
 	amboyLocalStorageKey                          = bsonutil.MustHaveTag(AmboyConfig{}, "LocalStorage")
@@ -83,11 +98,11 @@ func (c *AmboyConfig) Get(env Environment) error {
 			*c = AmboyConfig{}
 			return nil
 		}
-		return errors.Wrapf(err, "error retrieving section %s", c.SectionId())
+		return errors.Wrapf(err, "getting config section '%s'", c.SectionId())
 	}
 
 	if err := res.Decode(c); err != nil {
-		return errors.Wrap(err, "problem decoding result")
+		return errors.Wrapf(err, "decoding config section '%s'", c.SectionId())
 	}
 	return nil
 }
@@ -100,13 +115,13 @@ func (c *AmboyConfig) Set() error {
 
 	_, err := coll.UpdateOne(ctx, byId(c.SectionId()), bson.M{
 		"$set": bson.M{
-			amboyNameKey:                c.Name,
-			amboySingleNameKey:          c.SingleName,
-			amboyDBKey:                  c.DB,
-			amboyPoolSizeLocalKey:       c.PoolSizeLocal,
-			amboyPoolSizeRemoteKey:      c.PoolSizeRemote,
-			amboyLocalStorageKey:        c.LocalStorage,
-			amboyGroupDefaultWorkersKey: c.GroupDefaultWorkers,
+			amboyNameKey:                                  c.Name,
+			amboySingleNameKey:                            c.SingleName,
+			amboyDBConnectionKey:                          c.DBConnection,
+			amboyPoolSizeLocalKey:                         c.PoolSizeLocal,
+			amboyPoolSizeRemoteKey:                        c.PoolSizeRemote,
+			amboyLocalStorageKey:                          c.LocalStorage,
+			amboyGroupDefaultWorkersKey:                   c.GroupDefaultWorkers,
 			amboyGroupBackgroundCreateFrequencyMinutesKey: c.GroupBackgroundCreateFrequencyMinutes,
 			amboyGroupPruneFrequencyMinutesKey:            c.GroupPruneFrequencyMinutes,
 			amboyGroupTTLMinutesKey:                       c.GroupTTLMinutes,
@@ -118,7 +133,7 @@ func (c *AmboyConfig) Set() error {
 		},
 	}, options.Update().SetUpsert(true))
 
-	return errors.Wrapf(err, "error updating section %s", c.SectionId())
+	return errors.Wrapf(err, "updating config section '%s'", c.SectionId())
 }
 
 const (
@@ -141,6 +156,17 @@ const (
 )
 
 func (c *AmboyConfig) ValidateAndDefault() error {
+	catcher := grip.NewBasicCatcher()
+	for _, namedQueue := range c.NamedQueues {
+		if namedQueue.Regexp != "" {
+			_, err := regexp.Compile(namedQueue.Regexp)
+			catcher.Wrapf(err, "invalid regexp '%s'", namedQueue.Regexp)
+		}
+	}
+	if catcher.HasErrors() {
+		return errors.Wrap(catcher.Resolve(), "invalid regexp for named queues")
+	}
+
 	if c.Name == "" {
 		c.Name = DefaultAmboyQueueName
 	}
@@ -149,8 +175,8 @@ func (c *AmboyConfig) ValidateAndDefault() error {
 		c.SingleName = defaultSingleAmboyQueueName
 	}
 
-	if c.DB == "" {
-		c.DB = defaultAmboyDBName
+	if c.DBConnection.Database == "" {
+		c.DBConnection.Database = defaultAmboyDBName
 	}
 
 	if c.PoolSizeLocal == 0 {

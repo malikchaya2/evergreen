@@ -25,18 +25,17 @@ type ProjectConfigFields struct {
 	// These fields can be set for the ProjectRef struct on the project page, or in the project config yaml.
 	// Values for the below fields set on the project page will take precedence over this struct and will
 	// be the configs used for a given project during runtime.
-	TaskAnnotationSettings *evergreen.AnnotationsSettings `yaml:"task_annotation_settings,omitempty" bson:"task_annotation_settings,omitempty"`
-	BuildBaronSettings     *evergreen.BuildBaronSettings  `yaml:"build_baron_settings,omitempty" bson:"build_baron_settings,omitempty"`
-	CommitQueueAliases     []ProjectAlias                 `yaml:"commit_queue_aliases,omitempty" bson:"commit_queue_aliases,omitempty"`
-	GitHubPRAliases        []ProjectAlias                 `yaml:"github_pr_aliases,omitempty" bson:"github_pr_aliases,omitempty"`
-	GitTagAliases          []ProjectAlias                 `yaml:"git_tag_aliases,omitempty" bson:"git_tag_aliases,omitempty"`
-	GitHubChecksAliases    []ProjectAlias                 `yaml:"github_checks_aliases,omitempty" bson:"github_checks_aliases,omitempty"`
-	PatchAliases           []ProjectAlias                 `yaml:"patch_aliases,omitempty" bson:"patch_aliases,omitempty"`
-	WorkstationConfig      *WorkstationConfig             `yaml:"workstation_config,omitempty" bson:"workstation_config,omitempty"`
-	TaskSync               *TaskSyncOptions               `yaml:"task_sync,omitempty" bson:"task_sync,omitempty"`
-	GithubTriggerAliases   []string                       `yaml:"github_trigger_aliases,omitempty" bson:"github_trigger_aliases,omitempty"`
-	PeriodicBuilds         []PeriodicBuildDefinition      `yaml:"periodic_builds,omitempty" bson:"periodic_builds,omitempty"`
-	ContainerSizes         map[string]ContainerResources  `yaml:"container_sizes,omitempty" bson:"container_sizes,omitempty"`
+	TaskAnnotationSettings   *evergreen.AnnotationsSettings `yaml:"task_annotation_settings,omitempty" bson:"task_annotation_settings,omitempty"`
+	BuildBaronSettings       *evergreen.BuildBaronSettings  `yaml:"build_baron_settings,omitempty" bson:"build_baron_settings,omitempty"`
+	CommitQueueAliases       []ProjectAlias                 `yaml:"commit_queue_aliases,omitempty" bson:"commit_queue_aliases,omitempty"`
+	GitHubPRAliases          []ProjectAlias                 `yaml:"github_pr_aliases,omitempty" bson:"github_pr_aliases,omitempty"`
+	GitTagAliases            []ProjectAlias                 `yaml:"git_tag_aliases,omitempty" bson:"git_tag_aliases,omitempty"`
+	GitHubChecksAliases      []ProjectAlias                 `yaml:"github_checks_aliases,omitempty" bson:"github_checks_aliases,omitempty"`
+	PatchAliases             []ProjectAlias                 `yaml:"patch_aliases,omitempty" bson:"patch_aliases,omitempty"`
+	WorkstationConfig        *WorkstationConfig             `yaml:"workstation_config,omitempty" bson:"workstation_config,omitempty"`
+	TaskSync                 *TaskSyncOptions               `yaml:"task_sync,omitempty" bson:"task_sync,omitempty"`
+	GithubTriggerAliases     []string                       `yaml:"github_trigger_aliases,omitempty" bson:"github_trigger_aliases,omitempty"`
+	ContainerSizeDefinitions []ContainerResources           `yaml:"container_size_definitions,omitempty" bson:"container_size_definitions,omitempty"`
 }
 
 // Comment above is used by the linter to detect the end of the struct.
@@ -50,19 +49,39 @@ func (pc *ProjectConfig) MarshalBSON() ([]byte, error) {
 }
 
 func (pc *ProjectConfig) isEmpty() bool {
-	reflectedConfig := reflect.ValueOf(pc).Elem()
-	types := reflect.TypeOf(pc).Elem()
+	// ProjectConfig values outside of ProjectConfigFields are metadata, so we don't want to check those.
+	reflectedConfig := reflect.ValueOf(pc.ProjectConfigFields)
 
 	for i := 0; i < reflectedConfig.NumField(); i++ {
 		field := reflectedConfig.Field(i)
-		name := types.Field(i).Name
-		if name != "Id" && name != "Identifier" {
-			if !util.IsFieldUndefined(field) {
-				return false
-			}
+		if !util.IsFieldUndefined(field) {
+			return false
 		}
 	}
 	return true
+}
+
+func (pc *ProjectConfig) SetInternalAliases() {
+	for i := range pc.GitTagAliases {
+		pc.GitTagAliases[i].Alias = evergreen.GitTagAlias
+	}
+	for i := range pc.GitHubChecksAliases {
+		pc.GitHubChecksAliases[i].Alias = evergreen.GithubChecksAlias
+	}
+	for i := range pc.CommitQueueAliases {
+		pc.CommitQueueAliases[i].Alias = evergreen.CommitQueueAlias
+	}
+	for i := range pc.GitHubPRAliases {
+		pc.GitHubPRAliases[i].Alias = evergreen.GithubPRAlias
+	}
+}
+
+func (pc *ProjectConfig) AllAliases() ProjectAliases {
+	pc.SetInternalAliases()
+	res := append(pc.PatchAliases, pc.GitTagAliases...)
+	res = append(res, pc.GitHubPRAliases...)
+	res = append(res, pc.CommitQueueAliases...)
+	return append(res, pc.GitHubChecksAliases...)
 }
 
 // CreateProjectConfig marshals the supplied YAML into our

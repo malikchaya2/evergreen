@@ -289,7 +289,7 @@ func TestUpdatingHostStatus(t *testing.T) {
 
 func TestSetStatusAndFields(t *testing.T) {
 	defer func() {
-		assert.NoError(t, db.ClearCollections(Collection, event.AllLogCollection))
+		assert.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 	}()
 	for tName, tCase := range map[string]func(t *testing.T, h *Host){
 		"FailsIfHostDoesNotExist": func(t *testing.T, h *Host) {
@@ -376,7 +376,7 @@ func TestSetStatusAndFields(t *testing.T) {
 		},
 	} {
 		t.Run(tName, func(t *testing.T) {
-			require.NoError(t, db.ClearCollections(Collection, event.AllLogCollection))
+			require.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 			h := Host{
 				Id:     "host",
 				Status: evergreen.HostRunning,
@@ -682,6 +682,26 @@ func TestHostCreateSecret(t *testing.T) {
 	})
 }
 
+func TestHostSetBillingStartTime(t *testing.T) {
+	require.NoError(t, db.Clear(Collection))
+	defer func() {
+		assert.NoError(t, db.Clear(Collection))
+	}()
+
+	h := &Host{
+		Id: "id",
+	}
+	require.NoError(t, h.Insert())
+
+	now := time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC)
+	require.NoError(t, h.SetBillingStartTime(now))
+	assert.True(t, now.Equal(h.BillingStartTime))
+
+	dbHost, err := FindOneId(h.Id)
+	require.NoError(t, err)
+	assert.True(t, now.Equal(dbHost.BillingStartTime))
+}
+
 func TestHostSetAgentStartTime(t *testing.T) {
 	require.NoError(t, db.Clear(Collection))
 	defer func() {
@@ -809,9 +829,12 @@ func TestHostClearRunningAndSetLastTask(t *testing.T) {
 }
 
 func TestUpdateHostRunningTask(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	env := &mock.Environment{}
+	require.NoError(t, env.Configure(ctx))
 	Convey("With a host", t, func() {
 		require.NoError(t, db.Clear(Collection))
-		oldTaskId := "oldId"
 		newTaskId := "newId"
 		h := Host{
 			Id:     "test1",
@@ -829,8 +852,7 @@ func TestUpdateHostRunningTask(t *testing.T) {
 		So(h.Insert(), ShouldBeNil)
 		So(h2.Insert(), ShouldBeNil)
 		Convey("updating the running task id should set proper fields", func() {
-			_, err := h.UpdateRunningTask(&task.Task{Id: newTaskId})
-			So(err, ShouldBeNil)
+			So(h.UpdateRunningTaskWithContext(ctx, env, &task.Task{Id: newTaskId}), ShouldBeNil)
 			found, err := FindOne(ById(h.Id))
 			So(err, ShouldBeNil)
 			So(found.RunningTask, ShouldEqual, newTaskId)
@@ -839,18 +861,10 @@ func TestUpdateHostRunningTask(t *testing.T) {
 			So(len(runningTaskHosts), ShouldEqual, 1)
 		})
 		Convey("updating the running task to an empty string should error out", func() {
-			_, err := h.UpdateRunningTask(&task.Task{})
-			So(err, ShouldNotBeNil)
-		})
-		Convey("updating the running task when a task is already running should error", func() {
-			_, err := h.UpdateRunningTask(&task.Task{Id: oldTaskId})
-			So(err, ShouldBeNil)
-			_, err = h.UpdateRunningTask(&task.Task{Id: newTaskId})
-			So(err, ShouldNotBeNil)
+			So(h.UpdateRunningTaskWithContext(ctx, env, &task.Task{}), ShouldNotBeNil)
 		})
 		Convey("updating the running task on a starting user data host should succeed", func() {
-			_, err := h2.UpdateRunningTask(&task.Task{Id: newTaskId})
-			So(err, ShouldBeNil)
+			So(h2.UpdateRunningTaskWithContext(ctx, env, &task.Task{Id: newTaskId}), ShouldBeNil)
 			found, err := FindOne(ById(h2.Id))
 			So(err, ShouldBeNil)
 			So(found.RunningTask, ShouldEqual, newTaskId)
@@ -2513,31 +2527,31 @@ func TestIsIdleParent(t *testing.T) {
 	assert := assert.New(t)
 	assert.NoError(db.ClearCollections(Collection))
 
-	provisionTimeRecent := time.Now().Add(-5 * time.Minute)
-	provisionTimeOld := time.Now().Add(-1 * time.Hour)
+	billingTimeRecent := time.Now().Add(-5 * time.Minute)
+	billingTimeOld := time.Now().Add(-1 * time.Hour)
 
 	host1 := &Host{
-		Id:            "host1",
-		Status:        evergreen.HostRunning,
-		ProvisionTime: provisionTimeOld,
+		Id:               "host1",
+		Status:           evergreen.HostRunning,
+		BillingStartTime: billingTimeOld,
 	}
 	host2 := &Host{
-		Id:            "host2",
-		Status:        evergreen.HostRunning,
-		HasContainers: true,
-		ProvisionTime: provisionTimeRecent,
+		Id:               "host2",
+		Status:           evergreen.HostRunning,
+		HasContainers:    true,
+		BillingStartTime: billingTimeRecent,
 	}
 	host3 := &Host{
-		Id:            "host3",
-		Status:        evergreen.HostRunning,
-		HasContainers: true,
-		ProvisionTime: provisionTimeOld,
+		Id:               "host3",
+		Status:           evergreen.HostRunning,
+		HasContainers:    true,
+		BillingStartTime: billingTimeOld,
 	}
 	host4 := &Host{
-		Id:            "host4",
-		Status:        evergreen.HostRunning,
-		HasContainers: true,
-		ProvisionTime: provisionTimeOld,
+		Id:               "host4",
+		Status:           evergreen.HostRunning,
+		HasContainers:    true,
+		BillingStartTime: billingTimeOld,
 	}
 	host5 := &Host{
 		Id:       "host5",
@@ -2576,7 +2590,7 @@ func TestIsIdleParent(t *testing.T) {
 	assert.True(idle)
 	assert.NoError(err)
 
-	// ios a container --> false
+	// is a container --> false
 	idle, err = host5.IsIdleParent()
 	assert.False(idle)
 	assert.NoError(err)
@@ -3520,7 +3534,7 @@ func TestRemoveStaleInitializing(t *testing.T) {
 			Status:       evergreen.HostUninitialized,
 			CreationTime: now.Add(-1 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host2",
@@ -3528,7 +3542,7 @@ func TestRemoveStaleInitializing(t *testing.T) {
 			Status:       evergreen.HostUninitialized,
 			CreationTime: now.Add(-5 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host3",
@@ -3544,7 +3558,7 @@ func TestRemoveStaleInitializing(t *testing.T) {
 			Status:       evergreen.HostUninitialized,
 			CreationTime: now.Add(-5 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host5",
@@ -3552,7 +3566,7 @@ func TestRemoveStaleInitializing(t *testing.T) {
 			Status:       evergreen.HostBuilding,
 			CreationTime: now.Add(-5 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host6",
@@ -3560,7 +3574,7 @@ func TestRemoveStaleInitializing(t *testing.T) {
 			Status:       evergreen.HostBuilding,
 			CreationTime: now.Add(-30 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host7",
@@ -3568,7 +3582,7 @@ func TestRemoveStaleInitializing(t *testing.T) {
 			Status:       evergreen.HostRunning,
 			CreationTime: now.Add(-30 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host8",
@@ -3577,7 +3591,7 @@ func TestRemoveStaleInitializing(t *testing.T) {
 			CreationTime: now.Add(-30 * time.Minute),
 			UserHost:     false,
 			SpawnOptions: SpawnOptions{SpawnedByTask: true},
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 	}
 
@@ -3640,7 +3654,7 @@ func TestMarkStaleBuildingAsFailed(t *testing.T) {
 			Status:       evergreen.HostUninitialized,
 			CreationTime: now.Add(-time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host2",
@@ -3648,7 +3662,7 @@ func TestMarkStaleBuildingAsFailed(t *testing.T) {
 			Status:       evergreen.HostBuilding,
 			CreationTime: now.Add(-30 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host3",
@@ -3664,7 +3678,7 @@ func TestMarkStaleBuildingAsFailed(t *testing.T) {
 			Status:       evergreen.HostBuildingFailed,
 			CreationTime: now.Add(-5 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host5",
@@ -3672,7 +3686,7 @@ func TestMarkStaleBuildingAsFailed(t *testing.T) {
 			Status:       evergreen.HostBuilding,
 			CreationTime: now.Add(-time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host6",
@@ -3680,7 +3694,7 @@ func TestMarkStaleBuildingAsFailed(t *testing.T) {
 			Status:       evergreen.HostBuilding,
 			CreationTime: now.Add(-30 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 			SpawnOptions: SpawnOptions{SpawnedByTask: true},
 		},
 		{
@@ -3689,7 +3703,7 @@ func TestMarkStaleBuildingAsFailed(t *testing.T) {
 			Status:       evergreen.HostRunning,
 			CreationTime: now.Add(-30 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 		{
 			Id:           "host8",
@@ -3697,7 +3711,7 @@ func TestMarkStaleBuildingAsFailed(t *testing.T) {
 			Status:       evergreen.HostBuilding,
 			CreationTime: now.Add(-30 * time.Minute),
 			UserHost:     false,
-			Provider:     evergreen.ProviderNameEc2Auto,
+			Provider:     evergreen.ProviderNameEc2Fleet,
 		},
 	}
 
@@ -3723,55 +3737,6 @@ func TestMarkStaleBuildingAsFailed(t *testing.T) {
 
 	checkStatus(t, hosts[6], hosts[6].Status)
 	checkStatus(t, hosts[7], evergreen.HostBuildingFailed)
-}
-
-func TestStaleRunningTasks(t *testing.T) {
-	assert := assert.New(t)
-	require.NoError(t, db.ClearCollections(Collection, task.Collection))
-	h1 := Host{
-		Id:          "h1",
-		RunningTask: "t1",
-		Status:      evergreen.HostRunning,
-	}
-	assert.NoError(h1.Insert())
-	h2 := Host{
-		Id:          "h2",
-		RunningTask: "t2",
-		Status:      evergreen.HostRunning,
-	}
-	assert.NoError(h2.Insert())
-	h3 := Host{
-		Id:          "h3",
-		RunningTask: "t3",
-		Status:      evergreen.HostRunning,
-	}
-	assert.NoError(h3.Insert())
-	t1 := task.Task{
-		Id:            "t1",
-		Status:        evergreen.TaskStarted,
-		LastHeartbeat: time.Now().Add(-15 * time.Minute),
-	}
-	assert.NoError(t1.Insert())
-	t2 := task.Task{
-		Id:            "t2",
-		Status:        evergreen.TaskDispatched,
-		LastHeartbeat: time.Now().Add(-25 * time.Minute),
-	}
-	assert.NoError(t2.Insert())
-	t3 := task.Task{
-		Id:            "t3",
-		Status:        evergreen.TaskStarted,
-		LastHeartbeat: time.Now().Add(-1 * time.Minute),
-	}
-	assert.NoError(t3.Insert())
-
-	tasks, err := FindStaleRunningTasks(10*time.Minute, TaskHeartbeatPastCutoff)
-	assert.NoError(err)
-	assert.Len(tasks, 1)
-
-	tasks, err = FindStaleRunningTasks(10*time.Minute, TaskNoHeartbeatSinceDispatch)
-	assert.NoError(err)
-	assert.Len(tasks, 1)
 }
 
 func TestNumNewParentsNeeded(t *testing.T) {
@@ -4516,6 +4481,38 @@ func TestAddVolumeToHost(t *testing.T) {
 	}, foundHost.Volumes)
 }
 
+func TestUnsetHomeVolume(t *testing.T) {
+	require.NoError(t, db.ClearCollections(Collection))
+	h := &Host{
+		Id:           "host-1",
+		HomeVolumeID: "volume-1",
+		Volumes: []VolumeAttachment{
+			{
+				VolumeID:   "volume-1",
+				DeviceName: "device-1",
+			},
+		},
+	}
+	assert.NoError(t, h.Insert())
+	assert.NoError(t, h.UnsetHomeVolume())
+	assert.Equal(t, "", h.HomeVolumeID)
+	assert.Equal(t, []VolumeAttachment{
+		{
+			VolumeID:   "volume-1",
+			DeviceName: "device-1",
+		},
+	}, h.Volumes)
+	foundHost, err := FindOneId("host-1")
+	assert.NoError(t, err)
+	assert.Equal(t, "", foundHost.HomeVolumeID)
+	assert.Equal(t, []VolumeAttachment{
+		{
+			VolumeID:   "volume-1",
+			DeviceName: "device-1",
+		},
+	}, foundHost.Volumes)
+}
+
 func TestRemoveVolumeFromHost(t *testing.T) {
 	require.NoError(t, db.ClearCollections(Collection))
 	h := &Host{
@@ -4753,10 +4750,16 @@ func TestFindHostsInRange(t *testing.T) {
 }
 
 func TestRemoveAndReplace(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	env := &mock.Environment{}
+	require.NoError(t, env.Configure(ctx))
+
 	require.NoError(t, db.Clear(Collection))
 
 	// removing a nonexistent host errors
-	assert.Error(t, RemoveStrict("asdf"))
+	assert.Error(t, RemoveStrict(ctx, env, "asdf"))
 
 	// replacing an existing host works
 	h := Host{

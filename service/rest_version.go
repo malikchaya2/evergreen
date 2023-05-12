@@ -1,7 +1,6 @@
 package service
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -9,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
@@ -17,6 +17,7 @@ import (
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"gopkg.in/yaml.v3"
@@ -62,8 +63,6 @@ type restVersion struct {
 	Remote              bool      `json:"remote"`
 	RemotePath          string    `json:"remote_path"`
 	Requester           string    `json:"requester"`
-	Config              string    `json:"config,omitempty"`
-	ConfigUpdateNumber  int       `json:"config_number"`
 }
 
 type versionLessInfo struct {
@@ -115,8 +114,6 @@ func copyVersion(srcVersion *model.Version, destVersion *restVersion) {
 	destVersion.Remote = srcVersion.Remote
 	destVersion.RemotePath = srcVersion.RemotePath
 	destVersion.Requester = srcVersion.Requester
-	destVersion.Config = srcVersion.Config
-	destVersion.ConfigUpdateNumber = srcVersion.ConfigUpdateNumber
 }
 
 // Returns a JSON response of an array with the NumRecentVersions
@@ -154,7 +151,7 @@ func (restapi restAPI) getRecentVersions(w http.ResponseWriter, r *http.Request)
 	if err == nil {
 		// add one to limit to determine if a new page is necessary
 		versions, err = model.VersionFind(model.VersionBySystemRequesterOrdered(projectId, start).
-			Limit(l + 1).WithoutFields(model.VersionConfigKey))
+			Limit(l + 1))
 		if err != nil {
 			msg := fmt.Sprintf("Error finding recent versions of project '%v'", projectIdentifier)
 			grip.Error(errors.Wrap(err, msg))
@@ -293,53 +290,50 @@ func (restapi restAPI) getVersionConfig(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "application/x-yaml; charset=utf-8")
 	w.WriteHeader(http.StatusOK)
 
-	var config []byte
-	pp, err := model.ParserProjectFindOneById(projCtx.Version.Id)
+	settings := restapi.GetSettings()
+	pp, err := model.ParserProjectFindOneByID(r.Context(), &settings, projCtx.Version.ProjectStorageMethod, projCtx.Version.Id)
 	if err != nil {
 		gimlet.WriteJSONResponse(w, http.StatusInternalServerError, responseError{Message: "problem finding parser project"})
 		return
 	}
-	if pp != nil && pp.ConfigUpdateNumber >= srcVersion.ConfigUpdateNumber {
-		config, err = yaml.Marshal(pp)
-		if err != nil {
-			gimlet.WriteJSONResponse(w, http.StatusInternalServerError, responseError{Message: "problem marshalling project"})
-			return
-		}
-	} else {
-		config = []byte(projCtx.Version.Config)
+	var config []byte
+	config, err = yaml.Marshal(pp)
+	if err != nil {
+		gimlet.WriteJSONResponse(w, http.StatusInternalServerError, responseError{Message: "problem marshalling project"})
+		return
 	}
-
 	_, err = w.Write(config)
-	grip.Warning(errors.Wrap(err, "problem writing response"))
+	grip.Warning(message.WrapError(err, message.Fields{
+		"message":    "could not write parser project to response",
+		"version_id": projCtx.Version.Id,
+		"route":      "/versions/{version_id}/config",
+	}))
 }
 
 // Returns a JSON response with the marshaled output of the version
 // specified in the request.
 func (restapi restAPI) getVersionProject(w http.ResponseWriter, r *http.Request) {
 	projCtx := MustHaveRESTContext(r)
-	srcVersion := projCtx.Version
-	if srcVersion == nil {
+	if projCtx.Version == nil {
 		gimlet.WriteJSONResponse(w, http.StatusNotFound, responseError{Message: "version not found"})
 		return
 	}
 
-	pp, err := model.ParserProjectFindOneById(projCtx.Version.Id)
+	env := evergreen.GetEnvironment()
+	pp, err := model.ParserProjectFindOneByID(r.Context(), env.Settings(), projCtx.Version.ProjectStorageMethod, projCtx.Version.Id)
 	if err != nil {
 		gimlet.WriteJSONResponse(w, http.StatusInternalServerError, responseError{Message: "problem finding parser project"})
 		return
 	}
-	if pp == nil || pp.ConfigUpdateNumber < srcVersion.ConfigUpdateNumber {
-		p := &model.Project{}
-		ctx := context.Background()
-		pp, err = model.LoadProjectInto(ctx, []byte(srcVersion.Config), nil, srcVersion.Identifier, p)
-		if err != nil {
-			gimlet.WriteJSONResponse(w, http.StatusInternalServerError, responseError{Message: "problem reading project from version"})
-			return
-		}
+	if pp == nil {
+		gimlet.WriteJSONResponse(w, http.StatusNotFound, responseError{Message: fmt.Sprintf("parser project '%s' not found", projCtx.Version.Id)})
+		return
 	}
+
 	bytes, err := bson.Marshal(pp)
 	if err != nil {
 		gimlet.WriteJSONResponse(w, http.StatusInternalServerError, responseError{Message: "problem reading to bson"})
+		return
 	}
 	gimlet.WriteBinary(w, bytes)
 }

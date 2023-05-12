@@ -5,7 +5,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"strings"
 	"text/template"
@@ -17,7 +17,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/utility"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/anser/bsonutil"
 	adb "github.com/mongodb/anser/db"
 	"github.com/mongodb/grip"
@@ -30,11 +30,11 @@ import (
 const SizeLimit = 1024 * 1024 * 100
 const backportFmtString = "Backport: %s"
 
-// VariantTasks contains the variant ID and  the set of tasks to be scheduled for that variant
+// VariantTasks contains the variant name and the set of tasks to be scheduled for that variant
 type VariantTasks struct {
-	Variant      string
-	Tasks        []string
-	DisplayTasks []DisplayTask
+	Variant      string        `bson:"variant"`
+	Tasks        []string      `bson:"tasks"`
+	DisplayTasks []DisplayTask `bson:"displaytasks"`
 }
 
 // MergeVariantsTasks merges two slices of VariantsTasks into a single set.
@@ -158,10 +158,27 @@ type Patch struct {
 	SyncAtEndOpts      SyncAtEndOptions `bson:"sync_at_end_opts,omitempty"`
 	Patches            []ModulePatch    `bson:"patches"`
 	Parameters         []Parameter      `bson:"parameters,omitempty"`
-	Activated          bool             `bson:"activated"`
-	// PatchedParserProject is mismatched with its BSON tag since the tag already exists in the DB.
-	// Struct property has been renamed to convey that only parser project configs are stored in it.
-	PatchedParserProject string                 `bson:"patched_config"`
+	// Activated indicates whether or not the patch is finalized (i.e.
+	// tasks/variants are now scheduled to run). If true, the patch has been
+	// finalized.
+	Activated bool `bson:"activated"`
+	// ProjectStorageMethod describes how the parser project is stored for this
+	// patch before it's finalized. This field is only set while the patch is
+	// unfinalized and is cleared once the patch has been finalized. It may also
+	// be empty for old, unfinalized patch documents before this field was
+	// introduced (see PatchedParserProject).
+	ProjectStorageMethod evergreen.ParserProjectStorageMethod `bson:"project_storage_method,omitempty"`
+	// PatchedParserProject is a deprecated field to temporarily store the
+	// project configuration before the patch is finalized. It is either 1. the
+	// patch's ParserProject or 2. another version's finalized Project. The
+	// string stores the BSON representation of one of these two for the patch
+	// until the patch is finalized. Once the patch is finalized, this field is
+	// cleared.
+	// Newly-created patches do not use this field at all and instead use the
+	// ProjectStorageMethod to decide where the parser project is persistently
+	// stored. This field is kept solely for backward compatibility with
+	// existing, unfinalized patches.
+	PatchedParserProject string                 `bson:"patched_config,omitempty"`
 	PatchedProjectConfig string                 `bson:"patched_project_config"`
 	Alias                string                 `bson:"alias"`
 	Triggers             TriggerInfo            `bson:"triggers"`
@@ -220,6 +237,12 @@ type TaskSpecifier struct {
 	VariantRegex string `bson:"variant_regex,omitempty" json:"variant_regex,omitempty"`
 }
 
+// IsFinished returns whether or not the patch has finished based on its
+// status.
+func (p *Patch) IsFinished() bool {
+	return evergreen.IsFinishedPatchStatus(p.Status)
+}
+
 // SetDescription sets a patch's description in the database
 func (p *Patch) SetDescription(desc string) error {
 	p.Description = desc
@@ -253,9 +276,13 @@ func (p *Patch) GetURL(uiHost string) string {
 	var url string
 	if p.Activated {
 		url = uiHost + "/version/" + p.Id.Hex()
+		if p.IsChild() {
+			url += "/downstream-projects"
+		}
 	} else {
 		url = uiHost + "/patch/" + p.Id.Hex()
 	}
+
 	if p.DisplayNewUI {
 		url = url + "?redirect_spruce_users=true"
 	}
@@ -307,7 +334,7 @@ func FetchPatchContents(patchfileID string) (string, error) {
 		return "", errors.Wrap(err, "getting grid file")
 	}
 	defer fileReader.Close()
-	patchContents, err := ioutil.ReadAll(fileReader)
+	patchContents, err := io.ReadAll(fileReader)
 	if err != nil {
 		return "", errors.Wrap(err, "reading patch contents")
 	}
@@ -351,7 +378,8 @@ func (p *Patch) SetDownstreamParameters(parameters []Parameter) error {
 }
 
 // ResolveVariantTasks returns a set of all build variants and a set of all
-// tasks that will run based on the given VariantTasks.
+// tasks that will run based on the given VariantTasks, filtering out any
+// duplicates.
 func ResolveVariantTasks(vts []VariantTasks) (bvs []string, tasks []string) {
 	taskSet := map[string]bool{}
 	bvSet := map[string]bool{}
@@ -582,20 +610,32 @@ func (p *Patch) FilesChanged() []string {
 	return filenames
 }
 
-// SetActivated sets the patch to activated in the db
-func (p *Patch) SetActivated(ctx context.Context, versionId string) error {
-	p.Version = versionId
-	p.Activated = true
-	_, err := evergreen.GetEnvironment().DB().Collection(Collection).UpdateOne(ctx,
+// SetFinalized marks the patch as finalized.
+func (p *Patch) SetFinalized(ctx context.Context, versionId string) error {
+	if _, err := evergreen.GetEnvironment().DB().Collection(Collection).UpdateOne(ctx,
 		bson.M{IdKey: p.Id},
 		bson.M{
 			"$set": bson.M{
 				ActivatedKey: true,
 				VersionKey:   versionId,
 			},
+			"$unset": bson.M{
+				ProjectStorageMethodKey: 1,
+				PatchedParserProjectKey: 1,
+				PatchedProjectConfigKey: 1,
+			},
 		},
-	)
-	return err
+	); err != nil {
+		return err
+	}
+
+	p.Version = versionId
+	p.Activated = true
+	p.ProjectStorageMethod = ""
+	p.PatchedParserProject = ""
+	p.PatchedProjectConfig = ""
+
+	return nil
 }
 
 // SetTriggerAliases appends the names of invoked trigger aliases to the DB
@@ -694,7 +734,7 @@ func (p *Patch) UpdateGithashProjectAndTasks() error {
 		"$set": bson.M{
 			GithashKey:              p.Githash,
 			PatchesKey:              p.Patches,
-			PatchedParserProjectKey: p.PatchedParserProject,
+			ProjectStorageMethodKey: p.ProjectStorageMethod,
 			PatchedProjectConfigKey: p.PatchedProjectConfig,
 			VariantsTasksKey:        p.VariantsTasks,
 			BuildVariantsKey:        p.BuildVariants,
@@ -725,6 +765,34 @@ func (p *Patch) IsChild() bool {
 	return p.Triggers.ParentPatch != ""
 }
 
+// CollectiveStatus returns the aggregate status of all tasks and child patches.
+func (p *Patch) CollectiveStatus() (string, error) {
+	parentPatch := p
+	if p.IsChild() {
+		var err error
+		parentPatch, err = FindOneId(p.Triggers.ParentPatch)
+		if err != nil {
+			return "", errors.Wrap(err, "getting parent patch")
+		}
+		if parentPatch == nil {
+			return "", errors.Errorf(fmt.Sprintf("parent patch '%s' does not exist", p.Triggers.ParentPatch))
+		}
+	}
+	allStatuses := []string{parentPatch.Status}
+	for _, childPatchId := range parentPatch.Triggers.ChildPatches {
+		cp, err := FindOneId(childPatchId)
+		if err != nil {
+			return "", errors.Wrapf(err, "getting child patch '%s' ", childPatchId)
+		}
+		if cp == nil {
+			return "", errors.Wrapf(err, "child patch '%s' not found", childPatchId)
+		}
+		allStatuses = append(allStatuses, cp.Status)
+	}
+
+	return GetCollectiveStatus(allStatuses), nil
+}
+
 func (p *Patch) IsParent() bool {
 	return len(p.Triggers.ChildPatches) > 0
 }
@@ -752,6 +820,74 @@ func (p *Patch) GetPatchIndex(parentPatch *Patch) (int, error) {
 	return -1, nil
 }
 
+// GetGithubContextForChildPatch returns the github context for the given child patch, to be used in github statuses.
+func GetGithubContextForChildPatch(projectIdentifier string, parentPatch, childPatch *Patch) (string, error) {
+	patchIndex, err := childPatch.GetPatchIndex(parentPatch)
+	if err != nil {
+		return "", errors.Wrap(err, "getting child patch index")
+	}
+	githubContext := fmt.Sprintf("evergreen/%s", projectIdentifier)
+	// If there are multiple child patches, add the index to ensure these don't overlap,
+	// since there can be multiple for the same child project.
+	if patchIndex > 0 {
+		githubContext = fmt.Sprintf("evergreen/%s/%d", projectIdentifier, patchIndex)
+	}
+	return githubContext, nil
+}
+
+func (p *Patch) GetFamilyInformation() (bool, *Patch, error) {
+	if !p.IsChild() && !p.IsParent() {
+		return evergreen.IsFinishedPatchStatus(p.Status), nil, nil
+	}
+
+	isDone := false
+	childrenOrSiblings, parentPatch, err := p.GetPatchFamily()
+	if err != nil {
+		return isDone, parentPatch, errors.Wrap(err, "getting child or sibling patches")
+	}
+
+	// make sure the parent is done, if not, wait for the parent
+	if p.IsChild() && !evergreen.IsFinishedPatchStatus(parentPatch.Status) {
+		return isDone, parentPatch, nil
+	}
+	childrenStatus, err := GetChildrenOrSiblingsReadiness(childrenOrSiblings)
+	if err != nil {
+		return isDone, parentPatch, errors.Wrap(err, "getting child or sibling information")
+	}
+	if !evergreen.IsFinishedPatchStatus(childrenStatus) {
+		return isDone, parentPatch, nil
+	} else {
+		isDone = true
+	}
+
+	return isDone, parentPatch, err
+}
+
+func GetChildrenOrSiblingsReadiness(childrenOrSiblings []string) (string, error) {
+	if len(childrenOrSiblings) == 0 {
+		return "", nil
+	}
+	childrenStatus := evergreen.PatchSucceeded
+	for _, childPatch := range childrenOrSiblings {
+		childPatchDoc, err := FindOneId(childPatch)
+		if err != nil {
+			return "", errors.Wrapf(err, "getting tasks for child patch '%s'", childPatch)
+		}
+
+		if childPatchDoc == nil {
+			return "", errors.Errorf("child patch '%s' not found", childPatch)
+		}
+		if childPatchDoc.Status == evergreen.PatchFailed {
+			childrenStatus = evergreen.PatchFailed
+		}
+		if !evergreen.IsFinishedPatchStatus(childPatchDoc.Status) {
+			return childPatchDoc.Status, nil
+		}
+	}
+
+	return childrenStatus, nil
+
+}
 func (p *Patch) GetPatchFamily() ([]string, *Patch, error) {
 	var childrenOrSiblings []string
 	var parentPatch *Patch
@@ -770,6 +906,7 @@ func (p *Patch) GetPatchFamily() ([]string, *Patch, error) {
 		}
 		childrenOrSiblings = parentPatch.Triggers.ChildPatches
 	}
+
 	return childrenOrSiblings, parentPatch, nil
 }
 
@@ -1041,8 +1178,20 @@ func (p PatchesByCreateTime) Swap(i, j int) {
 	p[i], p[j] = p[j], p[i]
 }
 
+// CollectiveStatus gets the collective status for a patch given by its ID.
+func CollectiveStatus(patchId string) (string, error) {
+	p, err := FindOneId(patchId)
+	if err != nil {
+		return "", errors.Wrapf(err, "getting patch for version '%s'", patchId)
+	}
+	if p == nil {
+		return "", errors.Errorf("no patch found for version '%s'", patchId)
+	}
+	return p.CollectiveStatus()
+}
+
 // GetCollectiveStatus answers the question of what the patch status should be
-// when the patch status and the status of it's children are different
+// when the patch status and the status of its children are different
 func GetCollectiveStatus(statuses []string) string {
 	hasCreated := false
 	hasFailure := false

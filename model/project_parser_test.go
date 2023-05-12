@@ -4,23 +4,28 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strconv"
 	"strings"
 	"testing"
 
+	"github.com/aws/aws-sdk-go/aws/endpoints"
+	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
+	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
+	"github.com/evergreen-ci/evergreen/mock"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/evergreen/thirdparty"
+	"github.com/evergreen-ci/pail"
 	"github.com/evergreen-ci/utility"
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"go.mongodb.org/mongo-driver/bson"
-	"gopkg.in/yaml.v3"
+	yaml "gopkg.in/yaml.v3"
 )
 
 // ShouldContainResembling tests whether a slice contains an element that DeepEquals
@@ -287,28 +292,103 @@ buildvariants:
 
 func TestTranslateTasks(t *testing.T) {
 	parserProject := &ParserProject{
-		BuildVariants: []parserBV{{
-			Name: "bv",
-			Tasks: parserBVTaskUnits{
-				{
-					Name:            "my_task",
-					ExecTimeoutSecs: 30,
+		BuildVariants: []parserBV{
+			{
+				Name: "bv0",
+				Tasks: parserBVTaskUnits{
+					{
+						Name:            "my_task",
+						ExecTimeoutSecs: 30,
+					},
+					{
+						Name:       "your_task",
+						GitTagOnly: utility.TruePtr(),
+					},
+					{
+						Name:            "my_tg",
+						RunOn:           []string{"my_distro"},
+						ExecTimeoutSecs: 20,
+					},
 				},
-				{
-					Name:       "your_task",
-					GitTagOnly: utility.TruePtr(),
+			},
+			{
+				Name:      "patch_only_bv",
+				PatchOnly: utility.FalsePtr(),
+				Tasks: parserBVTaskUnits{
+					{
+						Name: "your_task",
+					},
+					{
+						Name: "my_task",
+					},
+					{
+						Name: "a_task_with_no_special_configuration",
+					},
+					{
+						Name:      "a_task_with_build_variant_task_configuration",
+						PatchOnly: utility.TruePtr(),
+					},
 				},
-				{
-					Name:            "my_tg",
-					RunOn:           []string{"my_distro"},
-					ExecTimeoutSecs: 20,
+			},
+			{
+				Name:      "unpatchable_bv",
+				Patchable: utility.FalsePtr(),
+				Tasks: parserBVTaskUnits{
+					{
+						Name: "a_task_with_no_special_configuration",
+					},
+					{
+						Name:      "a_task_with_build_variant_task_configuration",
+						Patchable: utility.TruePtr(),
+					},
 				},
-			}},
+			},
+			{
+				Name:           "allow_for_git_tag_bv",
+				AllowForGitTag: utility.FalsePtr(),
+				Tasks: parserBVTaskUnits{
+					{
+						Name: "a_task_with_no_special_configuration",
+					},
+					{
+						Name:           "a_task_with_build_variant_task_configuration",
+						AllowForGitTag: utility.TruePtr(),
+					},
+				},
+			},
+			{
+				Name:       "git_tag_only_bv",
+				GitTagOnly: utility.TruePtr(),
+				Tasks: parserBVTaskUnits{
+					{
+						Name: "a_task_with_no_special_configuration",
+					},
+					{
+						Name:       "a_task_with_build_variant_task_configuration",
+						GitTagOnly: utility.FalsePtr(),
+					},
+				},
+			},
+			{
+				Name:    "disabled_bv",
+				Disable: utility.TruePtr(),
+				Tasks: parserBVTaskUnits{
+					{
+						Name: "your_task",
+					},
+					{
+						Name:    "my_task",
+						Disable: utility.FalsePtr(),
+					},
+				},
+			},
 		},
 		Tasks: []parserTask{
 			{Name: "my_task", PatchOnly: utility.TruePtr(), ExecTimeoutSecs: 15},
 			{Name: "your_task", GitTagOnly: utility.FalsePtr(), Stepback: utility.TruePtr(), RunOn: []string{"a different distro"}},
 			{Name: "tg_task", PatchOnly: utility.TruePtr(), RunOn: []string{"a different distro"}},
+			{Name: "a_task_with_no_special_configuration"},
+			{Name: "a_task_with_build_variant_task_configuration"},
 		},
 		TaskGroups: []parserTaskGroup{{
 			Name:  "my_tg",
@@ -318,8 +398,16 @@ func TestTranslateTasks(t *testing.T) {
 	out, err := TranslateProject(parserProject)
 	assert.NoError(t, err)
 	assert.NotNil(t, out)
-	require.Len(t, out.Tasks, 3)
-	require.Len(t, out.BuildVariants, 1)
+	require.Len(t, out.Tasks, 5)
+	require.Len(t, out.BuildVariants, 6)
+
+	for _, bv := range out.BuildVariants {
+		for _, bvtu := range bv.Tasks {
+			assert.Equal(t, bv.Name, bvtu.Variant, "build variant task unit's variant should be properly linked")
+		}
+	}
+
+	assert.Equal(t, "bv0", out.BuildVariants[0].Name)
 	require.Len(t, out.BuildVariants[0].Tasks, 3)
 	assert.Equal(t, "my_task", out.BuildVariants[0].Tasks[0].Name)
 	assert.Equal(t, 30, out.BuildVariants[0].Tasks[0].ExecTimeoutSecs)
@@ -327,19 +415,68 @@ func TestTranslateTasks(t *testing.T) {
 	assert.Equal(t, "your_task", out.BuildVariants[0].Tasks[1].Name)
 	assert.True(t, utility.FromBoolPtr(out.BuildVariants[0].Tasks[1].GitTagOnly))
 	assert.True(t, utility.FromBoolPtr(out.BuildVariants[0].Tasks[1].Stepback))
+
 	assert.Contains(t, out.BuildVariants[0].Tasks[1].RunOn, "a different distro")
 
 	assert.Equal(t, "my_tg", out.BuildVariants[0].Tasks[2].Name)
-	bvt := out.FindTaskForVariant("my_tg", "bv")
-	assert.NotNil(t, bvt)
+	bvt := out.FindTaskForVariant("my_tg", "bv0")
+	require.NotNil(t, bvt)
+	assert.Equal(t, "my_tg", bvt.Name)
 	assert.Nil(t, bvt.PatchOnly)
 	assert.Contains(t, bvt.RunOn, "my_distro")
 	assert.Equal(t, 20, bvt.ExecTimeoutSecs)
+	assert.True(t, bvt.IsGroup)
 
-	bvt = out.FindTaskForVariant("tg_task", "bv")
+	bvt = out.FindTaskForVariant("tg_task", "bv0")
+	assert.Equal(t, "my_tg", bvt.Name, "task within a task group retains its task group name in resulting build variant task unit")
 	assert.NotNil(t, bvt)
 	assert.True(t, utility.FromBoolPtr(bvt.PatchOnly))
 	assert.Contains(t, bvt.RunOn, "my_distro")
+	assert.True(t, bvt.IsGroup)
+
+	assert.Equal(t, "patch_only_bv", out.BuildVariants[1].Name)
+	require.Len(t, out.BuildVariants[1].Tasks, 4)
+	assert.Equal(t, "your_task", out.BuildVariants[1].Tasks[0].Name)
+	assert.True(t, utility.FromBoolPtr(out.BuildVariants[1].Tasks[0].Stepback))
+	assert.False(t, utility.FromBoolPtr(out.BuildVariants[1].Tasks[0].PatchOnly))
+	assert.False(t, utility.FromBoolPtr(out.BuildVariants[1].Tasks[0].GitTagOnly))
+	assert.Equal(t, "my_task", out.BuildVariants[1].Tasks[1].Name)
+	assert.True(t, utility.FromBoolPtr(out.BuildVariants[1].Tasks[1].PatchOnly))
+	assert.Equal(t, "a_task_with_no_special_configuration", out.BuildVariants[1].Tasks[2].Name)
+	assert.False(t, utility.FromBoolPtr(out.BuildVariants[1].Tasks[2].PatchOnly))
+	assert.Equal(t, "a_task_with_build_variant_task_configuration", out.BuildVariants[1].Tasks[3].Name)
+	assert.True(t, utility.FromBoolPtr(out.BuildVariants[1].Tasks[3].PatchOnly))
+
+	assert.Equal(t, "unpatchable_bv", out.BuildVariants[2].Name)
+	require.Len(t, out.BuildVariants[2].Tasks, 2)
+	assert.Equal(t, "a_task_with_no_special_configuration", out.BuildVariants[2].Tasks[0].Name)
+	assert.False(t, utility.FromBoolPtr(out.BuildVariants[2].Tasks[0].Patchable))
+	assert.Equal(t, "a_task_with_build_variant_task_configuration", out.BuildVariants[2].Tasks[1].Name)
+	assert.True(t, utility.FromBoolPtr(out.BuildVariants[2].Tasks[1].Patchable))
+
+	assert.Equal(t, "allow_for_git_tag_bv", out.BuildVariants[3].Name)
+	require.Len(t, out.BuildVariants[3].Tasks, 2)
+	assert.Equal(t, "a_task_with_no_special_configuration", out.BuildVariants[3].Tasks[0].Name)
+	assert.False(t, utility.FromBoolTPtr(out.BuildVariants[3].Tasks[0].AllowForGitTag))
+	assert.Equal(t, "a_task_with_build_variant_task_configuration", out.BuildVariants[3].Tasks[1].Name)
+	assert.True(t, utility.FromBoolTPtr(out.BuildVariants[3].Tasks[1].AllowForGitTag))
+
+	assert.Equal(t, "git_tag_only_bv", out.BuildVariants[4].Name)
+	require.Len(t, out.BuildVariants[4].Tasks, 2)
+	assert.Equal(t, "a_task_with_no_special_configuration", out.BuildVariants[4].Tasks[0].Name)
+	assert.True(t, utility.FromBoolPtr(out.BuildVariants[4].Tasks[0].GitTagOnly))
+	assert.Equal(t, "a_task_with_build_variant_task_configuration", out.BuildVariants[4].Tasks[1].Name)
+	assert.False(t, utility.FromBoolPtr(out.BuildVariants[4].Tasks[1].GitTagOnly))
+
+	assert.Equal(t, "disabled_bv", out.BuildVariants[5].Name)
+	require.Len(t, out.BuildVariants[5].Tasks, 2)
+	assert.Equal(t, "your_task", out.BuildVariants[5].Tasks[0].Name)
+	assert.False(t, utility.FromBoolPtr(out.BuildVariants[5].Tasks[0].GitTagOnly))
+	assert.True(t, utility.FromBoolPtr(out.BuildVariants[5].Tasks[0].Stepback))
+	assert.True(t, utility.FromBoolPtr(out.BuildVariants[5].Tasks[0].Disable))
+	assert.Equal(t, "my_task", out.BuildVariants[5].Tasks[1].Name)
+	assert.True(t, utility.FromBoolPtr(out.BuildVariants[5].Tasks[1].PatchOnly))
+	assert.False(t, utility.FromBoolPtr(out.BuildVariants[5].Tasks[1].Disable))
 }
 
 func TestTranslateDependsOn(t *testing.T) {
@@ -463,7 +600,7 @@ func parserTaskSelectorTaskEval(tse *taskSelectorEvaluator, tasks parserBVTaskUn
 	vse := NewVariantSelectorEvaluator([]parserBV{}, nil)
 	Convey(fmt.Sprintf("tasks [%v] should evaluate to [%v]",
 		strings.Join(names, ", "), strings.Join(exp, ", ")), func() {
-		pbv := parserBV{Tasks: tasks}
+		pbv := parserBV{Name: "build-variant-wow", Tasks: tasks}
 		ts, errs := evaluateBVTasks(tse, nil, vse, pbv, taskDefs)
 		if expected != nil {
 			So(errs, ShouldBeNil)
@@ -477,6 +614,7 @@ func parserTaskSelectorTaskEval(tse *taskSelectorEvaluator, tasks parserBVTaskUn
 				if t.Name == e.Name && t.Priority == e.Priority && len(t.DependsOn) == len(e.DependsOn) {
 					exists = true
 				}
+				So(t.Variant, ShouldEqual, pbv.Name)
 			}
 			So(exists, ShouldBeTrue)
 		}
@@ -893,7 +1031,6 @@ buildvariants:
 	_, err = LoadProjectInto(ctx, []byte(yamlWithVariables), opts, "example_project", &proj)
 	require.NoError(t, err)
 
-	fmt.Println("MY TESTS ARE STARTING")
 	// duplicates should error
 	yamlWithDup := `
 tasks:
@@ -1036,6 +1173,53 @@ buildvariants:
 	assert.Len(tg.TeardownTask.List(), 1)
 	assert.Len(tg.TeardownGroup.List(), 1)
 	assert.True(tg.ShareProcs)
+
+	// check that yml with inline task groups within its buildvariants correctly parses the group
+	inlineYml := `
+tasks:
+- name: example_task_1
+- name: example_task_2
+task_groups:
+- &example_task_group
+  name: example_task_group
+  share_processes: true
+  max_hosts: 2
+  setup_group_can_fail_task: true
+  setup_group_timeout_secs: 10
+  setup_group:
+  - command: shell.exec
+    params:
+      script: "echo setup_group"
+  teardown_group:
+  - command: shell.exec
+    params:
+      script: "echo teardown_group"
+  setup_task:
+  - command: shell.exec
+    params:
+      script: "echo setup_group"
+  teardown_task:
+  - command: shell.exec
+    params:
+      script: "echo setup_group"
+  tasks:
+  - example_task_1
+  - example_task_2
+buildvariants:
+- name: "bv"
+  tasks:
+  - name: inline_task_group
+    task_group:
+      <<: *example_task_group
+      tasks:
+      - example_task_1
+`
+	proj = &Project{}
+	_, err = LoadProjectInto(ctx, []byte(inlineYml), nil, "id", proj)
+	assert.Nil(err)
+	assert.NotNil(proj)
+	assert.Len(proj.BuildVariants[0].Tasks, 1)
+	assert.NotNil(proj.BuildVariants[0].Tasks[0].TaskGroup)
 
 	// check that yml with a task group that contains a nonexistent task errors
 	wrongTaskYml := `
@@ -1518,86 +1702,89 @@ func TestAddBuildVariant(t *testing.T) {
 	assert.Len(t, pp.BuildVariants[0].Tasks, 1)
 }
 
-func TestTryUpsert(t *testing.T) {
-	for testName, testCase := range map[string]func(t *testing.T){
-		"configNumberMatches": func(t *testing.T) {
-			pp := &ParserProject{
-				Id:                 "my-project",
-				ConfigUpdateNumber: 4,
-				Owner:              utility.ToStringPtr("me"),
-			}
-			assert.NoError(t, pp.TryUpsert()) // new project should work
-			pp.Owner = utility.ToStringPtr("you")
-			assert.NoError(t, pp.TryUpsert())
-			pp, err := ParserProjectFindOneById(pp.Id)
-			assert.NoError(t, err)
-			require.NotNil(t, pp)
-			assert.Equal(t, "you", utility.FromStringPtr(pp.Owner))
-		},
-		"noConfigNumber": func(t *testing.T) {
-			pp := &ParserProject{
-				Id:    "my-project",
-				Owner: utility.ToStringPtr("me"),
-			}
-			assert.NoError(t, pp.TryUpsert()) // new project should work
-			pp.Owner = utility.ToStringPtr("you")
-			assert.NoError(t, pp.TryUpsert())
-			pp, err := ParserProjectFindOneById(pp.Id)
-			assert.NoError(t, err)
-			require.NotNil(t, pp)
-			assert.Equal(t, "you", utility.FromStringPtr(pp.Owner))
-		},
-		"configNumberDoesNotMatch": func(t *testing.T) {
-			pp := &ParserProject{
-				Id:                 "my-project",
-				ConfigUpdateNumber: 4,
-				Owner:              utility.ToStringPtr("me"),
-			}
-			assert.NoError(t, pp.TryUpsert()) // new project should work
-			pp.ConfigUpdateNumber = 5
-			pp.Owner = utility.ToStringPtr("you")
-			assert.NoError(t, pp.TryUpsert()) // should not update and should not error
-			pp, err := ParserProjectFindOneById(pp.Id)
-			assert.NoError(t, err)
-			require.NotNil(t, pp)
-			assert.Equal(t, "me", utility.FromStringPtr(pp.Owner))
-		},
+func TestParserProjectStorage(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	env := &mock.Environment{}
+	require.NoError(t, env.Configure(ctx))
+
+	testutil.ConfigureIntegrationTest(t, env.Settings(), t.Name())
+
+	c := utility.GetHTTPClient()
+	defer utility.PutHTTPClient(c)
+
+	ppConf := env.Settings().Providers.AWS.ParserProject
+	bucket, err := pail.NewS3BucketWithHTTPClient(c, pail.S3Options{
+		Name:        ppConf.Bucket,
+		Region:      endpoints.UsEast1RegionID,
+		Credentials: pail.CreateAWSCredentials(ppConf.Key, ppConf.Secret, ""),
+	})
+	require.NoError(t, err)
+	defer func() {
+		assert.NoError(t, bucket.RemovePrefix(ctx, ppConf.Prefix))
+	}()
+
+	for methodName, ppStorageMethod := range map[string]evergreen.ParserProjectStorageMethod{
+		"DB": evergreen.ProjectStorageMethodDB,
+		"S3": evergreen.ProjectStorageMethodS3,
 	} {
-		t.Run(testName, func(t *testing.T) {
-			require.NoError(t, db.ClearCollections(ParserProjectCollection))
-			testCase(t)
-		})
-	}
-}
+		t.Run("StorageMethod"+methodName, func(t *testing.T) {
+			for testName, testCase := range map[string]func(ctx context.Context, t *testing.T, env *mock.Environment){
+				"FindOneByIDReturnsNilErrorAndResultForNonexistentParserProject": func(ctx context.Context, t *testing.T, env *mock.Environment) {
+					ppStorage, err := GetParserProjectStorage(env.Settings(), ppStorageMethod)
+					require.NoError(t, err)
+					defer ppStorage.Close(ctx)
 
-func TestParserProjectRoundtrip(t *testing.T) {
-	filepath := filepath.Join(testutil.GetDirectoryOfFile(), "..", "self-tests.yml")
-	yml, err := ioutil.ReadFile(filepath)
-	assert.NoError(t, err)
+					pp, err := ppStorage.FindOneByID(ctx, "nonexistent")
+					assert.NoError(t, err)
+					assert.Zero(t, pp)
+				},
+				"FindOneByIDWithFieldsReturnsNilErrorAndResultForNonexistentParserProject": func(ctx context.Context, t *testing.T, env *mock.Environment) {
+					ppStorage, err := GetParserProjectStorage(env.Settings(), ppStorageMethod)
+					require.NoError(t, err)
+					defer ppStorage.Close(ctx)
 
-	original, err := createIntermediateProject(yml, false)
-	assert.NoError(t, err)
+					pp, err := ppStorage.FindOneByIDWithFields(ctx, "nonexistent", ParserProjectBuildVariantsKey)
+					assert.NoError(t, err)
+					assert.Zero(t, pp)
+				},
+				"UpsertCreatesNewParserProject": func(ctx context.Context, t *testing.T, env *mock.Environment) {
+					pp := &ParserProject{
+						Id:    "my-project",
+						Owner: utility.ToStringPtr("me"),
+					}
+					ppStorage, err := GetParserProjectStorage(env.Settings(), ppStorageMethod)
+					require.NoError(t, err)
+					defer ppStorage.Close(ctx)
 
-	// to and from yaml
-	yamlBytes, err := yaml.Marshal(original)
-	assert.NoError(t, err)
-	pp := &ParserProject{}
-	assert.NoError(t, yaml.Unmarshal(yamlBytes, pp))
+					assert.NoError(t, ppStorage.UpsertOne(ctx, pp))
 
-	// to and from BSON
-	bsonBytes, err := bson.Marshal(original)
-	assert.NoError(t, err)
-	bsonPP := &ParserProject{}
-	assert.NoError(t, bson.Unmarshal(bsonBytes, bsonPP))
+					pp, err = ppStorage.FindOneByID(ctx, pp.Id)
+					assert.NoError(t, err)
+					require.NotNil(t, pp)
+					assert.Equal(t, "me", utility.FromStringPtr(pp.Owner))
+				},
+				"UpsertUpdatesExistingParserProject": func(ctx context.Context, t *testing.T, env *mock.Environment) {
+					pp := &ParserProject{
+						Id:    "my-project",
+						Owner: utility.ToStringPtr("me"),
+					}
+					ppStorage, err := GetParserProjectStorage(env.Settings(), ppStorageMethod)
+					require.NoError(t, err)
+					defer ppStorage.Close(ctx)
 
-	// ensure bson actually worked
-	newBytes, err := yaml.Marshal(bsonPP)
-	assert.NoError(t, err)
-	assert.True(t, bytes.Equal(yamlBytes, newBytes))
-}
+					assert.NoError(t, ppStorage.UpsertOne(ctx, pp))
+					pp.Owner = utility.ToStringPtr("you")
+					assert.NoError(t, ppStorage.UpsertOne(ctx, pp))
 
-func TestParserProjectPersists(t *testing.T) {
-	simpleYaml := `
+					pp, err = ppStorage.FindOneByID(ctx, pp.Id)
+					assert.NoError(t, err)
+					require.NotNil(t, pp)
+					assert.Equal(t, "you", utility.FromStringPtr(pp.Owner))
+				},
+				"PersistsSimpleYAML": func(ctx context.Context, t *testing.T, env *mock.Environment) {
+					simpleYAML := `
 loggers:
   agent:
     - type: something
@@ -1643,39 +1830,44 @@ buildvariants:
     - name: "task_1"
       batchtime: 60
 `
+					checkProjectPersists(ctx, t, env, []byte(simpleYAML), ppStorageMethod)
+				},
+				"PersistsEvergreenSelfTestsYAML": func(ctx context.Context, t *testing.T, env *mock.Environment) {
+					filepath := filepath.Join(testutil.GetDirectoryOfFile(), "..", "self-tests.yml")
+					yml, err := os.ReadFile(filepath)
+					assert.NoError(t, err)
+					checkProjectPersists(ctx, t, env, yml, ppStorageMethod)
+				},
+			} {
+				t.Run(testName, func(t *testing.T) {
+					require.NoError(t, db.ClearCollections(ParserProjectCollection))
+					require.NoError(t, bucket.RemovePrefix(ctx, ppConf.Prefix))
 
-	for name, test := range map[string]func(t *testing.T){
-		"simpleYaml": func(t *testing.T) {
-			checkProjectPersists(t, []byte(simpleYaml))
-		},
-		"self-tests.yml": func(t *testing.T) {
-			filepath := filepath.Join(testutil.GetDirectoryOfFile(), "..", "self-tests.yml")
-
-			yml, err := ioutil.ReadFile(filepath)
-			assert.NoError(t, err)
-			checkProjectPersists(t, yml)
-		},
-	} {
-		t.Run(name, func(t *testing.T) {
-			assert.NoError(t, db.ClearCollections(ParserProjectCollection))
-			test(t)
+					testCase(ctx, t, env)
+				})
+			}
 		})
 	}
 }
 
-func checkProjectPersists(t *testing.T, yml []byte) {
+func checkProjectPersists(ctx context.Context, t *testing.T, env evergreen.Environment, yml []byte, ppStorageMethod evergreen.ParserProjectStorageMethod) {
 	pp, err := createIntermediateProject(yml, false)
 	assert.NoError(t, err)
 	pp.Id = "my-project"
 	pp.Identifier = utility.ToStringPtr("old-project-identifier")
-	pp.ConfigUpdateNumber = 1
+
+	ppStorage, err := GetParserProjectStorage(env.Settings(), ppStorageMethod)
+	require.NoError(t, err)
+	defer ppStorage.Close(ctx)
 
 	yamlToCompare, err := yaml.Marshal(pp)
 	assert.NoError(t, err)
-	assert.NoError(t, pp.TryUpsert())
 
-	newPP, err := ParserProjectFindOneById(pp.Id)
+	assert.NoError(t, ppStorage.UpsertOne(ctx, pp))
+
+	newPP, err := ppStorage.FindOneByID(ctx, pp.Id)
 	assert.NoError(t, err)
+	require.NotZero(t, newPP)
 
 	newYaml, err := yaml.Marshal(newPP)
 	assert.NoError(t, err)
@@ -1688,10 +1880,11 @@ func checkProjectPersists(t *testing.T, yml []byte) {
 	pp.Id = "my-project"
 	pp.Identifier = utility.ToStringPtr("new-project-identifier")
 
-	assert.NoError(t, pp.TryUpsert())
+	assert.NoError(t, ppStorage.UpsertOne(ctx, pp))
 
-	newPP, err = ParserProjectFindOneById(pp.Id)
+	newPP, err = ppStorage.FindOneByID(ctx, pp.Id)
 	assert.NoError(t, err)
+	require.NotZero(t, newPP)
 
 	assert.Equal(t, newPP.Identifier, pp.Identifier)
 
@@ -1702,6 +1895,32 @@ func checkProjectPersists(t *testing.T, yml []byte) {
 			assert.EqualValues(t, list[j].Params, newPP.Functions[i].List()[j].Params)
 		}
 	}
+}
+
+func TestParserProjectRoundtrip(t *testing.T) {
+	filepath := filepath.Join(testutil.GetDirectoryOfFile(), "..", "self-tests.yml")
+	yml, err := os.ReadFile(filepath)
+	assert.NoError(t, err)
+
+	original, err := createIntermediateProject(yml, false)
+	assert.NoError(t, err)
+
+	// to and from yaml
+	yamlBytes, err := yaml.Marshal(original)
+	assert.NoError(t, err)
+	pp := &ParserProject{}
+	assert.NoError(t, yaml.Unmarshal(yamlBytes, pp))
+
+	// to and from BSON
+	bsonBytes, err := bson.Marshal(original)
+	assert.NoError(t, err)
+	bsonPP := &ParserProject{}
+	assert.NoError(t, bson.Unmarshal(bsonBytes, bsonPP))
+
+	// ensure bson actually worked
+	newBytes, err := yaml.Marshal(bsonPP)
+	assert.NoError(t, err)
+	assert.True(t, bytes.Equal(yamlBytes, newBytes))
 }
 
 func TestMergeUnorderedUnique(t *testing.T) {
@@ -1736,12 +1955,12 @@ func TestMergeUnorderedUnique(t *testing.T) {
 			},
 		},
 		Functions: map[string]*YAMLCommandSet{
-			"func1": &YAMLCommandSet{
+			"func1": {
 				SingleCommand: &PluginCommandConf{
 					Command: "single_command",
 				},
 			},
-			"func2": &YAMLCommandSet{
+			"func2": {
 				MultiCommand: []PluginCommandConf{
 					{
 						Command: "multi_command1",
@@ -2360,7 +2579,7 @@ ignore:
 	assert.Equal(t, len(p1.Functions), 2)
 	assert.Equal(t, len(p1.Tasks), 2)
 	assert.Equal(t, len(p1.Ignore), 3)
-	assert.Equal(t, p1.Stepback, boolPtr(true))
+	assert.Equal(t, p1.Stepback, utility.TruePtr())
 	assert.NotEqual(t, p1.Post, nil)
 }
 
@@ -2455,4 +2674,83 @@ func TestUpdateForFile(t *testing.T) {
 	opts.UpdateForFile("nonexistent.yml")
 	// should be changed to patch diff because it's not a modified file
 
+}
+
+func TestFindAndTranslateProjectForPatch(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	env := &mock.Environment{}
+	require.NoError(t, env.Configure(ctx))
+
+	defer func() {
+		assert.NoError(t, db.ClearCollections(ParserProjectCollection, patch.Collection))
+	}()
+
+	for tName, tCase := range map[string]func(ctx context.Context, t *testing.T, p *patch.Patch, pp *ParserProject){
+		"SucceedsWithUnfinalizedPatch": func(ctx context.Context, t *testing.T, p *patch.Patch, pp *ParserProject) {
+			p.ProjectStorageMethod = evergreen.ProjectStorageMethodDB
+			require.NoError(t, p.Insert())
+			require.NoError(t, pp.Insert())
+
+			project, ppFromDB, err := FindAndTranslateProjectForPatch(ctx, env.Settings(), p)
+			require.NoError(t, err)
+			require.NotZero(t, pp)
+			require.NotZero(t, project)
+			assert.Equal(t, utility.FromStringPtr(pp.DisplayName), utility.FromStringPtr(ppFromDB.DisplayName))
+			assert.Equal(t, utility.FromStringPtr(pp.DisplayName), project.DisplayName)
+		},
+		"SucceedsWithFinalizedPatch": func(ctx context.Context, t *testing.T, p *patch.Patch, pp *ParserProject) {
+			v := Version{
+				Id:                   p.Id.Hex(),
+				ProjectStorageMethod: evergreen.ProjectStorageMethodDB,
+			}
+			require.NoError(t, v.Insert())
+
+			p.Activated = true
+			p.Version = v.Id
+			require.NoError(t, p.Insert())
+			require.NoError(t, pp.Insert())
+
+			project, ppFromDB, err := FindAndTranslateProjectForPatch(ctx, env.Settings(), p)
+			require.NoError(t, err)
+			require.NotZero(t, ppFromDB)
+			require.NotZero(t, project)
+			assert.Equal(t, utility.FromStringPtr(pp.DisplayName), utility.FromStringPtr(ppFromDB.DisplayName))
+			assert.Equal(t, utility.FromStringPtr(pp.DisplayName), project.DisplayName)
+		},
+		"SucceedsWithDeprecatedPatchedParserProject": func(ctx context.Context, t *testing.T, p *patch.Patch, pp *ParserProject) {
+			yamlPP, err := yaml.Marshal(pp)
+			require.NoError(t, err)
+			p.PatchedParserProject = string(yamlPP)
+			require.NoError(t, p.Insert())
+
+			project, ppFromPatch, err := FindAndTranslateProjectForPatch(ctx, env.Settings(), p)
+			require.NoError(t, err)
+			require.NotZero(t, ppFromPatch)
+			require.NotZero(t, project)
+			assert.Equal(t, utility.FromStringPtr(pp.DisplayName), utility.FromStringPtr(ppFromPatch.DisplayName))
+			assert.Equal(t, utility.FromStringPtr(pp.DisplayName), project.DisplayName)
+		},
+		"FailsWithoutStoredParserProject": func(ctx context.Context, t *testing.T, p *patch.Patch, pp *ParserProject) {
+			p.ProjectStorageMethod = evergreen.ProjectStorageMethodDB
+			require.NoError(t, p.Insert())
+
+			_, _, err := FindAndTranslateProjectForPatch(ctx, env.Settings(), p)
+			assert.Error(t, err)
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			require.NoError(t, db.ClearCollections(ParserProjectCollection, VersionCollection, patch.Collection))
+			p := patch.Patch{
+				Id: mgobson.NewObjectId(),
+			}
+			pp := ParserProject{
+				Id:          p.Id.Hex(),
+				DisplayName: utility.ToStringPtr("display-name"),
+			}
+
+			tCase(ctx, t, &p, &pp)
+		})
+	}
 }

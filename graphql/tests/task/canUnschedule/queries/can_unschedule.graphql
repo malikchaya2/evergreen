@@ -1,0 +1,11 @@
+{
+  yes: task(taskId: "some_task_3") {
+    canUnschedule
+  }
+  no: task(taskId: "some_task_2") {
+    canUnschedule
+  }
+  noBecauseExecutionTask: task(taskId: "execution_task") {
+    canUnschedule
+  }
+}

@@ -9,10 +9,10 @@ package data
 type DBConnector struct {
 	URL    string
 	Prefix string
-	DBTestConnector
 	DBCommitQueueConnector
 	DBProjectConnector
 	DBVersionConnector
+	DBGithubConnector
 }
 
 func (ctx *DBConnector) GetURL() string          { return ctx.URL }

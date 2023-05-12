@@ -1,0 +1,81 @@
+{
+  page1: mainlineCommits(options: { projectIdentifier: "evergreen", limit: 1 }) {
+    versions {
+      version {
+        id
+        author
+        order
+        buildVariants(options: {}) {
+          variant
+          displayName
+          tasks {
+            id
+            displayName
+            status
+          }
+        }
+      }
+      rolledUpVersions {
+        id
+        activated
+        order
+      }
+    }
+    nextPageOrderNumber
+    prevPageOrderNumber
+  }
+  page2: mainlineCommits(
+    options: { projectIdentifier: "evergreen", limit: 1, skipOrderNumber: 5 }
+  ) {
+    versions {
+      version {
+        id
+        author
+        order
+        buildVariants(options: {}) {
+          variant
+          displayName
+          tasks {
+            id
+            displayName
+            status
+          }
+        }
+      }
+      rolledUpVersions {
+        id
+        activated
+        order
+      }
+    }
+  nextPageOrderNumber
+  prevPageOrderNumber
+  }
+    prevPage: mainlineCommits(
+    options: { projectIdentifier: "evergreen", limit: 1, skipOrderNumber: 6 }
+  ) {
+    versions {
+      version {
+        id
+        author
+        order
+        buildVariants(options: {}) {
+          variant
+          displayName
+          tasks {
+            id
+            displayName
+            status
+          }
+        }
+      }
+      rolledUpVersions {
+        id
+        activated
+        order
+      }
+    }
+  nextPageOrderNumber
+  prevPageOrderNumber
+  }
+}

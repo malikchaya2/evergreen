@@ -1,38 +1,39 @@
+# This project YAML is used to run the smoke test.
+
 command_type: test
 stepback: false
-
 
 task_groups:
   - name: my_group
     max_hosts: 1
     setup_group:
-    - command: shell.exec
-      params:
-        script: |
-          set -o verbose
-          set -o errexit
-          echo "setup_group"
+      - command: shell.exec
+        params:
+          script: |
+            set -o verbose
+            set -o errexit
+            echo "setup_group"
     teardown_group:
-    - command: shell.exec
-      params:
-        script: |
-          set -o verbose
-          set -o errexit
-          echo "teardown_group"
+      - command: shell.exec
+        params:
+          script: |
+            set -o verbose
+            set -o errexit
+            echo "teardown_group"
     setup_task:
-    - command: shell.exec
-      params:
-        script: |
-          set -o verbose
-          set -o errexit
-          echo "setup_task"
+      - command: shell.exec
+        params:
+          script: |
+            set -o verbose
+            set -o errexit
+            echo "setup_task"
     teardown_task:
-    - command: shell.exec
-      params:
-        script: |
-          set -o verbose
-          set -o errexit
-          echo "teardown_task"
+      - command: shell.exec
+        params:
+          script: |
+            set -o verbose
+            set -o errexit
+            echo "teardown_task"
     tasks:
       - first_task_in_task_group
       - second_task_in_task_group
@@ -73,6 +74,24 @@ tasks:
             set -o verbose
             set -o errexit
             echo "fourth"
+  - name: container_task
+    commands:
+      - command: shell.exec
+        params:
+          script: |
+            set -o verbose
+            set -o errexit
+            echo "container task"
+  - name: generate_task
+    commands:
+      - command: git.get_project
+        params:
+          directory: src
+          token: "token foo"
+      - command: generate.tasks
+        params:
+          files:
+            - agent/command/testdata/generated.json
   - name: test
     commands:
       - command: git.get_project
@@ -94,6 +113,9 @@ tasks:
             # file to s3.put
             mkdir upload
             echo ${task_name} > upload/s3
+
+            # miscellaneous files written by commands
+            mkdir output
       - command: subprocess.exec
         params:
           working_dir: archive
@@ -141,23 +163,28 @@ tasks:
           file: "src/agent/command/testdata/xunit/junit_4.xml"
       - command: expansions.update
         params:
-          foo: bar
+          updates:
+            - key: foo
+              value: bar
+      - command: expansions.write
+        display_name: "Test expansions.write"
+        params:
+          file: output/expansions.yaml
+      - command: subprocess.exec
+        display_name: "Check updated expansions are in written expansions file"
+        params:
+          command: grep "foo.*bar" output/expansions.yaml
       - command: gotest.parse_files
         params:
           files:
             - "src/agent/command/testdata/gotest/4_simple.log"
-      - command: json.send
-        params:
-          name: "foo"
-          file: "src/agent/command/testdata/attach/plugin_attach_results.json"
-      - command: json.get_history
-        params:
-          task: ${task_name}
-          file: "foo.json"
-          name: "foo"
       - command: keyval.inc
         params:
           key: "test"
+          destination: "test_num"
+      - command: downstream_expansions.set
+        params:
+          file: "src/scripts/downstream_expansions.yml"
           destination: "test_num"
       - command: manifest.load
       - command: s3.put
@@ -192,8 +219,15 @@ tasks:
           aws_key: ${aws_key}
           aws_secret: ${aws_secret}
           s3_copy_files:
-              - {'source': {'path': 'evergreen/smoke/${build_id}-${build_variant}/evergreen-${task_name}-${revision}', 'bucket': 'mciuploads'},
-                'destination': {'path': 'evergreen/smoke/${build_id}-${build_variant}/evergreen-${task_name}-${revision}-copy', 'bucket': 'mciuploads'}}
+            - source:
+                path: "evergreen/smoke/${build_id}-${build_variant}/evergreen-${task_name}-${revision}"
+                bucket: mciuploads
+              destination:
+                path: "evergreen/smoke/${build_id}-${build_variant}/evergreen-${task_name}-${revision}-copy"
+                bucket: mciuploads
+      - command: timeout.update
+        params:
+          timeout_secs: 2700
 buildvariants:
   - name: localhost
     display_name: localhost
@@ -201,3 +235,25 @@ buildvariants:
       - localhost
     tasks:
       - name: my_group
+      - name: generate_task
+  - name: pod_bv
+    display_name: pod_bv
+    run_on:
+      - container
+    tasks:
+      - name: container_task
+
+# TODO (EVG-17658): Refactor smoke tests to allow for faking agent creation
+# The following configuration is currently unused since the container task
+# smoke test does not rely on the repotracker job to create tasks for the version.
+# A real image will be used as a part of the above ticket.
+containers:
+  - name: container
+    working_dir: /
+    image: "not_a_real_image"
+    resources:
+      cpu: 1024
+      memory_mb: 1024
+    system:
+      cpu_architecture: x86_64
+      operating_system: linux

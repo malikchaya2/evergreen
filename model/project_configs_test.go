@@ -16,6 +16,7 @@ task_groups:
   - command: shell.exec
     params:
       script: "echo hi"
+create_time: 2022-12-15T17:18:32Z
 `
 	pc, err := CreateProjectConfig([]byte(projYml), "")
 	assert.Nil(t, err)
@@ -32,9 +33,9 @@ build_baron_settings:
   ticket_create_project: BF
   ticket_search_projects: ["BF"]
 
-commit_queue_aliases:
-  - project_id: evg
-    variant: ubuntu1604
+github_pr_aliases:
+  - variant: "^ubuntu1604$"
+    task: ".*"
 
 `
 	pc, err = CreateProjectConfig([]byte(projYml), "")

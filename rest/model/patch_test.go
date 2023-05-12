@@ -1,15 +1,18 @@
 package model
 
 import (
+	"context"
+	"strings"
 	"testing"
 	"time"
-
-	"github.com/evergreen-ci/evergreen/model"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
+	"github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/evergreen/model/patch"
+	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/utility"
 	"github.com/stretchr/testify/assert"
@@ -17,7 +20,7 @@ import (
 )
 
 func TestAPIPatch(t *testing.T) {
-	assert.NoError(t, db.ClearCollections(model.ProjectRefCollection))
+	assert.NoError(t, db.ClearCollections(model.ProjectRefCollection, commitqueue.Collection))
 	assert := assert.New(t)
 	baseTime := time.Now()
 	pRef := model.ProjectRef{
@@ -40,21 +43,21 @@ func TestAPIPatch(t *testing.T) {
 		BuildVariants: []string{"bv1", "bv2"},
 		Tasks:         []string{"t1", "t2"},
 		VariantsTasks: []patch.VariantTasks{
-			patch.VariantTasks{
+			{
 				Variant: "bv1",
 				Tasks:   []string{"t1"},
 			},
-			patch.VariantTasks{
+			{
 				Variant: "bv2",
 				Tasks:   []string{"t2"},
 			},
 		},
 		Patches: []patch.ModulePatch{
-			patch.ModulePatch{},
+			{},
 		},
 		Activated:            true,
 		PatchedParserProject: "config",
-		Alias:                "__github",
+		Alias:                evergreen.CommitQueueAlias,
 		GithubPatchData: thirdparty.GithubPatch{
 			PRNumber:  123,
 			BaseOwner: "evergreen-ci",
@@ -65,9 +68,20 @@ func TestAPIPatch(t *testing.T) {
 			Author:    "octocat",
 		},
 	}
+	cq := commitqueue.CommitQueue{
+		ProjectID: p.Project,
+		Queue: []commitqueue.CommitQueueItem{
+			{PatchId: "something else"},
+			{PatchId: p.Id.Hex()},
+		},
+	}
+	assert.NoError(commitqueue.InsertQueue(&cq))
 
 	a := APIPatch{}
-	err := a.BuildFromService(p)
+	err := a.BuildFromService(p, &APIPatchArgs{
+		IncludeProjectIdentifier:   true,
+		IncludeCommitQueuePosition: true,
+	})
 	assert.NoError(err)
 
 	assert.Equal(p.Id.Hex(), utility.FromStringPtr(a.Id))
@@ -81,6 +95,7 @@ func TestAPIPatch(t *testing.T) {
 	assert.Equal(p.Version, utility.FromStringPtr(a.Version))
 	assert.Equal(p.Status, utility.FromStringPtr(a.Status))
 	assert.Zero(a.CreateTime.Sub(p.CreateTime))
+	assert.Equal(1, utility.FromIntPtr(a.CommitQueuePosition))
 	assert.Equal(-time.Hour, a.CreateTime.Sub(p.StartTime))
 	assert.Equal(-2*time.Hour, a.CreateTime.Sub(p.FinishTime))
 	for i, variant := range a.Variants {
@@ -92,10 +107,52 @@ func TestAPIPatch(t *testing.T) {
 	for i, vt := range a.VariantsTasks {
 		assert.Equal(p.VariantsTasks[i].Variant, utility.FromStringPtr(vt.Name))
 	}
-	assert.Equal("__github", utility.FromStringPtr(a.Alias))
+	assert.Equal(evergreen.CommitQueueAlias, utility.FromStringPtr(a.Alias))
 	assert.NotZero(a.GithubPatchData)
 	assert.NotEqual(a.VariantsTasks[0].Tasks, a.VariantsTasks[1].Tasks)
 	assert.Len(a.VariantsTasks[0].Tasks, 1)
+}
+
+func TestAPIPatchBuildModuleChanges(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	originalEnv := evergreen.GetEnvironment()
+	env := testutil.NewEnvironment(ctx, t)
+	evergreen.SetEnvironment(env)
+	defer func() {
+		evergreen.SetEnvironment(originalEnv)
+	}()
+	p := patch.Patch{
+		Patches: []patch.ModulePatch{
+			{
+				PatchSet: patch.PatchSet{
+					Summary: []thirdparty.Summary{
+						{
+							Description: "test",
+						},
+						{
+							Description: "test2",
+						},
+						{
+							Description: "test3",
+						},
+						{
+							Description: "test3",
+						},
+					},
+				},
+			},
+		},
+	}
+	a := APIPatch{Id: utility.ToStringPtr("patch_id")}
+	a.buildModuleChanges(p, "")
+	require.Len(t, a.ModuleCodeChanges, 1)
+	assert.Len(t, a.ModuleCodeChanges[0].FileDiffs, 4)
+	assert.NotEqual(t, strings.Index(utility.FromStringPtr(a.ModuleCodeChanges[0].FileDiffs[0].DiffLink), "commit_number=0"), -1)
+	assert.NotEqual(t, strings.Index(utility.FromStringPtr(a.ModuleCodeChanges[0].FileDiffs[1].DiffLink), "commit_number=1"), -1)
+	assert.NotEqual(t, strings.Index(utility.FromStringPtr(a.ModuleCodeChanges[0].FileDiffs[2].DiffLink), "commit_number=2"), -1)
+	assert.NotEqual(t, strings.Index(utility.FromStringPtr(a.ModuleCodeChanges[0].FileDiffs[3].DiffLink), "commit_number=3"), -1)
+
 }
 
 func TestGithubPatch(t *testing.T) {
@@ -110,8 +167,7 @@ func TestGithubPatch(t *testing.T) {
 		Author:    "octocat",
 	}
 	a := githubPatch{}
-	err := a.BuildFromService(p)
-	assert.NoError(err)
+	a.BuildFromService(p)
 	assert.Equal(123, a.PRNumber)
 	assert.Equal("evergreen-ci", utility.FromStringPtr(a.BaseOwner))
 	assert.Equal("evergreen", utility.FromStringPtr(a.BaseRepo))
@@ -140,6 +196,7 @@ func TestDownstreamTasks(t *testing.T) {
 		Triggers: patch.TriggerInfo{
 			ChildPatches: []string{childPatchId},
 		},
+		Status: evergreen.PatchCreated,
 	}
 
 	childPatch := patch.Patch{
@@ -154,14 +211,17 @@ func TestDownstreamTasks(t *testing.T) {
 			},
 		},
 		Activated: true,
+		Status:    evergreen.PatchCreated,
 	}
 	assert.NoError(childPatch.Insert())
 
 	a := APIPatch{}
-	err := a.BuildFromService(p)
+	err := a.BuildFromService(p, &APIPatchArgs{
+		IncludeChildPatches: true,
+	})
 	assert.NoError(err)
+	require.Len(t, a.DownstreamTasks, 1)
 	assert.Equal(*a.DownstreamTasks[0].Project, childPatch.Project)
-	assert.Len(a.DownstreamTasks, 1)
 	assert.Len(a.DownstreamTasks[0].Tasks, 2)
 	assert.Len(a.DownstreamTasks[0].VariantTasks, 1)
 }

@@ -1,8 +1,10 @@
 package internal
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 
@@ -13,7 +15,10 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/evergreen/util"
+	"github.com/mongodb/grip"
 	"github.com/pkg/errors"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/baggage"
 )
 
 type TaskConfig struct {
@@ -64,20 +69,20 @@ func (t *TaskConfig) GetExecTimeout() int {
 	return t.Timeout.ExecTimeoutSecs
 }
 
-func NewTaskConfig(d *apimodels.DistroView, p *model.Project, t *task.Task, r *model.ProjectRef, patchDoc *patch.Patch, e util.Expansions) (*TaskConfig, error) {
+func NewTaskConfig(workDir string, d *apimodels.DistroView, p *model.Project, t *task.Task, r *model.ProjectRef, patchDoc *patch.Patch, e util.Expansions) (*TaskConfig, error) {
 	// do a check on if the project is empty
 	if p == nil {
-		return nil, errors.Errorf("project for task with project_id %v is empty", t.Project)
+		return nil, errors.Errorf("project '%s' is nil", t.Project)
 	}
 
 	// check on if the project ref is empty
 	if r == nil {
-		return nil, errors.Errorf("Project ref with identifier: %v was empty", p.Identifier)
+		return nil, errors.Errorf("project ref '%s' is nil", p.Identifier)
 	}
 
 	bv := p.FindBuildVariant(t.BuildVariant)
 	if bv == nil {
-		return nil, errors.Errorf("couldn't find buildvariant: '%v'", t.BuildVariant)
+		return nil, errors.Errorf("cannot find build variant '%s' for task in project '%s'", t.BuildVariant, t.Project)
 	}
 
 	taskConfig := &TaskConfig{
@@ -87,7 +92,7 @@ func NewTaskConfig(d *apimodels.DistroView, p *model.Project, t *task.Task, r *m
 		Task:         t,
 		BuildVariant: bv,
 		Expansions:   &e,
-		WorkDir:      d.WorkDir,
+		WorkDir:      workDir,
 	}
 	if patchDoc != nil {
 		taskConfig.GithubPatchData = patchDoc.GithubPatchData
@@ -108,22 +113,29 @@ func (c *TaskConfig) GetWorkingDirectory(dir string) (string, error) {
 	}
 
 	if stat, err := os.Stat(dir); os.IsNotExist(err) {
-		return "", errors.Errorf("directory %s does not exist", dir)
+		return "", errors.Errorf("path '%s' does not exist", dir)
 	} else if err != nil || stat == nil {
-		return "", errors.Wrapf(err, "error retrieving file info for %s", dir)
+		return "", errors.Wrapf(err, "retrieving file info for path '%s'", dir)
 	} else if !stat.IsDir() {
-		return "", errors.Errorf("path %s is not a directory", dir)
+		return "", errors.Errorf("path '%s' is not a directory", dir)
 	}
 
 	return dir, nil
 }
 
+func (c *TaskConfig) GetCloneMethod() string {
+	if c.Distro != nil {
+		return c.Distro.CloneMethod
+	}
+	return evergreen.CloneMethodOAuth
+}
+
 func (tc *TaskConfig) GetTaskGroup(taskGroup string) (*model.TaskGroup, error) {
 	if tc == nil {
-		return nil, errors.New("unable to get task group: TaskConfig is nil")
+		return nil, errors.New("unable to get task group because task config is nil")
 	}
 	if tc.Task == nil {
-		return nil, errors.New("unable to get task group: task is nil")
+		return nil, errors.New("unable to get task group because task is nil")
 	}
 	if tc.Task.Version == "" {
 		return nil, errors.New("task has no version")
@@ -145,11 +157,52 @@ func (tc *TaskConfig) GetTaskGroup(taskGroup string) (*model.TaskGroup, error) {
 	} else {
 		tg = tc.Project.FindTaskGroup(taskGroup)
 		if tg == nil {
-			return nil, errors.Errorf("couldn't find task group %s", tc.Task.TaskGroup)
+			return nil, errors.Errorf("couldn't find task group '%s' in project '%s'", tc.Task.TaskGroup, tc.Project.Identifier)
 		}
 	}
 	if tg.Timeout == nil {
 		tg.Timeout = tc.Project.Timeout
 	}
 	return tg, nil
+}
+
+func (tc *TaskConfig) TaskAttributeMap() map[string]string {
+	return map[string]string{
+		evergreen.TaskIDOtelAttribute:            tc.Task.Id,
+		evergreen.TaskNameOtelAttribute:          tc.Task.DisplayName,
+		evergreen.TaskExecutionOtelAttribute:     strconv.Itoa(tc.Task.Execution),
+		evergreen.VersionIDOtelAttribute:         tc.Task.Version,
+		evergreen.VersionRequesterOtelAttribute:  tc.Task.Requester,
+		evergreen.BuildIDOtelAttribute:           tc.Task.BuildId,
+		evergreen.BuildNameOtelAttribute:         tc.Task.BuildVariant,
+		evergreen.ProjectIdentifierOtelAttribute: tc.ProjectRef.Identifier,
+		evergreen.ProjectIDOtelAttribute:         tc.ProjectRef.Id,
+		evergreen.DistroIDOtelAttribute:          tc.Task.DistroId,
+	}
+}
+
+func (tc *TaskConfig) AddTaskBaggageToCtx(ctx context.Context) (context.Context, error) {
+	catcher := grip.NewBasicCatcher()
+
+	bag := baggage.FromContext(ctx)
+	for key, val := range tc.TaskAttributeMap() {
+		member, err := baggage.NewMember(key, val)
+		if err != nil {
+			catcher.Add(errors.Wrapf(err, "making member for key '%s' val '%s'", key, val))
+			continue
+		}
+		bag, err = bag.SetMember(member)
+		catcher.Add(err)
+	}
+
+	return baggage.ContextWithBaggage(ctx, bag), catcher.Resolve()
+}
+
+func (tc *TaskConfig) TaskAttributes() []attribute.KeyValue {
+	var attributes []attribute.KeyValue
+	for key, val := range tc.TaskAttributeMap() {
+		attributes = append(attributes, attribute.String(key, val))
+	}
+
+	return attributes
 }

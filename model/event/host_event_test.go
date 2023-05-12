@@ -12,7 +12,7 @@ import (
 func TestLoggingHostEvents(t *testing.T) {
 	Convey("When logging host events", t, func() {
 
-		So(db.Clear(AllLogCollection), ShouldBeNil)
+		So(db.Clear(EventCollection), ShouldBeNil)
 
 		Convey("all events logged should be persisted to the database, and"+
 			" fetching them in order should sort by the time they were"+
@@ -32,15 +32,15 @@ func TestLoggingHostEvents(t *testing.T) {
 			time.Sleep(1 * time.Millisecond)
 			LogHostProvisioned(hostTag)
 			time.Sleep(1 * time.Millisecond)
-			LogHostRunningTaskSet(hostId, taskId)
+			LogHostRunningTaskSet(hostId, taskId, 0)
 			time.Sleep(1 * time.Millisecond)
-			LogHostRunningTaskCleared(hostId, taskId)
+			LogHostRunningTaskCleared(hostId, taskId, 0)
 			time.Sleep(1 * time.Millisecond)
 
 			// fetch all the events from the database, make sure they are
 			// persisted correctly
 
-			eventsForHost, err := Find(AllLogCollection, MostRecentHostEvents(hostId, hostTag, 50))
+			eventsForHost, err := Find(MostRecentHostEvents(hostId, hostTag, 50))
 			So(err, ShouldBeNil)
 
 			So(eventsForHost, ShouldHaveLength, 6)
@@ -115,23 +115,6 @@ func TestLoggingHostEvents(t *testing.T) {
 			So(eventData.Hostname, ShouldBeBlank)
 			So(eventData.TaskId, ShouldEqual, taskId)
 			So(eventData.TaskPid, ShouldBeBlank)
-
-			// test logging multiple executions of the same task
-			err = UpdateHostTaskExecutions(hostId, taskId, 0)
-			So(err, ShouldBeNil)
-
-			eventsForHost, err = Find(AllLogCollection, MostRecentHostEvents(hostId, "", 50))
-			So(err, ShouldBeNil)
-			So(len(eventsForHost), ShouldBeGreaterThan, 0)
-			for _, event = range eventsForHost {
-				So(event.ResourceType, ShouldEqual, ResourceTypeHost)
-				eventData = event.Data.(*HostEventData)
-				if eventData.TaskId != "" {
-					So(eventData.Execution, ShouldEqual, "0")
-				} else {
-					So(eventData.Execution, ShouldEqual, "")
-				}
-			}
 		})
 	})
 }

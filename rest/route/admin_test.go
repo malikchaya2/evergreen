@@ -49,7 +49,7 @@ func TestAdminRouteSuiteWithDB(t *testing.T) {
 
 func (s *AdminRouteSuite) SetupSuite() {
 	// test getting the route handler
-	s.NoError(db.ClearCollections(evergreen.ConfigCollection, task.Collection, task.OldCollection, build.Collection, model.VersionCollection, event.AllLogCollection, model.ProjectRefCollection), "clearing collections")
+	s.NoError(db.ClearCollections(evergreen.ConfigCollection, task.Collection, task.OldCollection, build.Collection, model.VersionCollection, event.EventCollection, model.ProjectRefCollection), "clearing collections")
 	b := &build.Build{
 		Id:      "buildtest",
 		Status:  evergreen.BuildStarted,
@@ -178,8 +178,10 @@ func (s *AdminRouteSuite) TestAdminRoute() {
 	s.EqualValues(testSettings.Notify.SMTP.From, settings.Notify.SMTP.From)
 	s.EqualValues(testSettings.Notify.SMTP.Port, settings.Notify.SMTP.Port)
 	s.Equal(len(testSettings.Notify.SMTP.AdminEmail), len(settings.Notify.SMTP.AdminEmail))
-	s.EqualValues(testSettings.PodInit.S3BaseURL, settings.PodInit.S3BaseURL)
-	s.EqualValues(testSettings.PodInit.MaxParallelPodRequests, settings.PodInit.MaxParallelPodRequests)
+	s.EqualValues(testSettings.PodLifecycle.S3BaseURL, settings.PodLifecycle.S3BaseURL)
+	s.EqualValues(testSettings.PodLifecycle.MaxParallelPodRequests, settings.PodLifecycle.MaxParallelPodRequests)
+	s.EqualValues(testSettings.PodLifecycle.MaxPodDefinitionCleanupRate, settings.PodLifecycle.MaxPodDefinitionCleanupRate)
+	s.EqualValues(testSettings.PodLifecycle.MaxSecretCleanupRate, settings.PodLifecycle.MaxSecretCleanupRate)
 	s.Equal(len(testSettings.Providers.AWS.EC2Keys), len(settings.Providers.AWS.EC2Keys))
 	s.EqualValues(testSettings.Providers.Docker.APIVersion, settings.Providers.Docker.APIVersion)
 	s.EqualValues(testSettings.Providers.GCE.ClientEmail, settings.Providers.GCE.ClientEmail)
@@ -196,7 +198,7 @@ func (s *AdminRouteSuite) TestAdminRoute() {
 	s.EqualValues(testSettings.ServiceFlags.ContainerConfigurationsDisabled, settings.ServiceFlags.ContainerConfigurationsDisabled)
 	s.EqualValues(testSettings.Slack.Level, settings.Slack.Level)
 	s.EqualValues(testSettings.Slack.Options.Channel, settings.Slack.Options.Channel)
-	s.EqualValues(testSettings.Splunk.Channel, settings.Splunk.Channel)
+	s.EqualValues(testSettings.Splunk.SplunkConnectionInfo.Channel, settings.Splunk.SplunkConnectionInfo.Channel)
 	s.EqualValues(testSettings.Ui.HttpListenAddr, settings.Ui.HttpListenAddr)
 
 	// test that invalid input errors
@@ -348,7 +350,7 @@ func (s *AdminRouteSuite) TestRestartVersionsRoute() {
 		CommitQueue: model.CommitQueueParams{
 			Enabled: utility.TruePtr(),
 		},
-		Enabled: utility.TruePtr(),
+		Enabled: true,
 		Owner:   "me",
 		Repo:    "my-repo",
 		Branch:  "my-branch",
@@ -438,7 +440,7 @@ func (s *AdminRouteSuite) TestRestartVersionsRoute() {
 }
 
 func (s *AdminRouteSuite) TestAdminEventRoute() {
-	s.NoError(db.ClearCollections(evergreen.ConfigCollection, event.AllLogCollection, distro.Collection), "Error clearing collections")
+	s.NoError(db.ClearCollections(evergreen.ConfigCollection, event.EventCollection, distro.Collection), "Error clearing collections")
 
 	// sd by test to have a valid distro in the collection
 	d1 := &distro.Distro{

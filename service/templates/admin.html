@@ -61,7 +61,7 @@ Admin Settings
 						<li class="link" ng-click="scrollTo('alerts')">Alerts</li>
 						<li class="link" ng-click="scrollTo('notify')">Notify</li>
 						<li class="link" ng-click="scrollTo('hostinit')">Hostinit</li>
-						<li class="link" ng-click="scrollTo('pod_init')">Pod init</li>
+						<li class="link" ng-click="scrollTo('pod_lifecycle')">Pod Lifecycle</li>
 						<li class="link" ng-click="scrollTo('scheduler')">Scheduler</li>
 						<li class="link" ng-click="scrollTo('repotracker')">Repotracker</li>
 						<div>Web</div>
@@ -79,6 +79,7 @@ Admin Settings
 						<li class="link" ng-click="scrollTo('slack')">Slack</li>
 						<li class="link" ng-click="scrollTo('splunk')">Splunk</li>
 						<li class="link" ng-click="scrollTo('newrelic')">New Relic</li>
+						<li class="link" ng-click="scrollTo('data_pipes')">Data-Pipes</li>
 						<li class="link" ng-click="scrollTo('cedar')">Cedar</li>
 						<div>Background Processing</div>
 						<li class="link" ng-click="scrollTo('amboy')">Amboy</li>
@@ -100,6 +101,8 @@ Admin Settings
 						<li class="link" ng-click="scrollTo('host_jasper')">Host Jasper</li>
 						<li class="link" ng-click="scrollTo('jira_notifications')">JIRA Custom Field Mappings</li>
 						<li class="link" ng-click="scrollTo('spawnhosts')">Spawn Hosts</li>
+						<li class="link" ng-click="scrollTo('tracer')">Tracer Config</li>
+						<li class="link" ng-click="scrollTo('project_creation')">Project Creation</li>
 						<div>Non-Configuration</div>
 						<li class="link" ng-click="scrollTo('restart')">Restart Tasks/Versions</li>
 						<a class="link" href="/admin/events" style="margin-left:10px;">Event Log</a>
@@ -286,7 +289,7 @@ Admin Settings
 													</md-radio-group>
 												</td>
 											</tr>
-											<tr>
+                                                                                        <tr>
 												<td>Cache historical statistics</td>
 												<td colspan="2">
 													<md-radio-group
@@ -397,6 +400,17 @@ Admin Settings
 												</td>
 											</tr>
 											<tr>
+												<td>Public access for legacy UI</td>
+												<td colspan="2">
+													<md-radio-group
+															data-ng-model="Settings.service_flags.legacy_ui_public_access_disabled"
+															layout="row">
+														<md-radio-button data-ng-value="false"></md-radio-button>
+														<md-radio-button data-ng-value="true"></md-radio-button>
+													</md-radio-group>
+												</td>
+											</tr>
+											<tr>
 												<td>&nbsp;</td>
 											</tr>
 											<tr>
@@ -496,7 +510,7 @@ Admin Settings
 												</button>
 											</section>
 										</div>
-									</div> 
+									</div>
 								</md-card-content>
 							</md-card>
 
@@ -616,7 +630,6 @@ Admin Settings
 						</section>
 
 						<section layout="row" flex>
-
 							<md-card flex=50 id="hostinit">
 								<md-card-title>
 									<md-card-title-text>
@@ -650,23 +663,31 @@ Admin Settings
 								</md-card-content>
 							</md-card>
 
-							<md-card flex=50 id="pod_init">
+							<md-card flex=50 id="pod_lifecycle">
 								<md-card-title>
 									<md-card-title-text>
-										<span>Pod init</span>
+										<span>Pod Lifecycle</span>
 									</md-card-title-text>
-									<md-button ng-click="clearSection('pod_init')">
+									<md-button ng-click="clearSection('pod_lifecycle')">
 										<i class="fa fa-trash"></i>
 									</md-button>
 								</md-card-title>
 								<md-card-content>
 									<md-input-container class="control" style="width:45%;">
 										<label>S3 Download Base URL</label>
-										<input type="text" ng-model="Settings.pod_init.s3_base_url">
+										<input type="text" ng-model="Settings.pod_lifecycle.s3_base_url">
 									</md-input-container>
 									<md-input-container class="control" style="width:45%;">
 										<label>Max Parallel Pod Requests</label>
-										<input type="number" ng-model="Settings.pod_init.max_parallel_pod_requests">
+										<input type="number" ng-model="Settings.pod_lifecycle.max_parallel_pod_requests">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Max Pod Definition Cleanup (Per Job)</label>
+										<input type="number" ng-model="Settings.pod_lifecycle.max_pod_definition_cleanup_rate">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Max Secret Cleanup (Per Job)</label>
+										<input type="number" ng-model="Settings.pod_lifecycle.max_secret_cleanup_rate">
 									</md-input-container>
 								</md-card-content>
 							</md-card>
@@ -854,6 +875,10 @@ Admin Settings
 											<label>Batch Size</label>
 											<input type="number" ng-model="Settings.commit_queue.batch_size">
 										</md-input-container>
+										<md-input-container class="control" style="width:45%;">
+											<label>Max Retries For System Failed Tasks</label>
+											<input type="number" ng-model="Settings.commit_queue.max_system_failed_task_retries">
+										</md-input-container>
 										<button ng-click="clearCommitQueues()" class="md-raised md-button">Clear Commit
 											Queues</button>
 									</md-card-content>
@@ -881,6 +906,10 @@ Admin Settings
 									<md-input-container class="control" style="width:45%;">
 										<label>UIv2 URL</label>
 										<input type="text" ng-model="Settings.ui.uiv2_url">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Parsley URL</label>
+										<input type="text" ng-model="Settings.ui.parsley_url">
 									</md-input-container>
 									<md-input-container class="control" style="width:45%;  margin-left:50px;">
 										<label>HTTP listener address</label>
@@ -1287,19 +1316,19 @@ Admin Settings
 										<label>Channel</label>
 										<input type="text" ng-model="Settings.slack.options.channel">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%;">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Name</label>
 										<input type="text" ng-model="Settings.slack.options.name">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%; margin-left:50px;">
+									<md-input-container class="control" style="width:45%;">
 										<label>Username</label>
 										<input type="text" ng-model="Settings.slack.options.username">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%;">
-										<label>Icon URL</label>
-										<input type="text" ng-model="Settings.slack.options.icon_url">
-									</md-input-container>
 									<md-input-container class="control" style="width:45%; margin-left:50px;">
+										<label>App Name</label>
+										<input type="text" ng-model="Settings.slack.name">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
 										<label>Fields to set</label>
 										<textarea ng-model="Settings.slack.options.fields" ng-list="&#10;"
 											ng-trim="false" rows="3" md-select-on-focus></textarea>
@@ -1335,15 +1364,15 @@ Admin Settings
 								<md-card-content>
 									<md-input-container class="control" style="width:45%;">
 										<label>Server URL</label>
-										<input type="text" ng-model="Settings.splunk.url">
+										<input type="text" ng-model="Settings.splunk.splunk_connection_info.url">
 									</md-input-container>
 									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Token</label>
-										<input type="text" ng-model="Settings.splunk.token">
+										<input type="text" ng-model="Settings.splunk.splunk_connection_info.token">
 									</md-input-container>
 									<md-input-container class="control" style="width:45%;">
 										<label>Channel</label>
-										<input type="text" ng-model="Settings.splunk.channel">
+										<input type="text" ng-model="Settings.splunk.splunk_connection_info.channel">
 									</md-input-container>
 								</md-card-content>
 							</md-card>
@@ -1382,6 +1411,41 @@ Admin Settings
 									</md-input-container>
 								</md-card-content>
 							</md-card>
+							<md-card flex=50 id="data_pipes" style="height:auto">
+								<md-card-title>
+									<md-card-title-text>
+										<span>Data-Pipes</span>
+									</md-card-title-text>
+									<md-button ng-click="clearSection('data_pipes')">
+										<i class="fa fa-trash"></i>
+									</md-button>
+								</md-card-title>
+								<md-card-content>
+									<md-input-container class="control" style="width:45%;">
+										<label>Host</label>
+										<input type="text" ng-model="Settings.data_pipes.host">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Region</label>
+										<input type="text" ng-model="Settings.data_pipes.region">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>AWS Access Key</label>
+										<input type="text" ng-model="Settings.data_pipes.aws_access_key">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>AWS Secret Key</label>
+										<input type="text" ng-model="Settings.data_pipes.aws_secret_key">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>AWS Token</label>
+										<input type="text" ng-model="Settings.data_pipes.aws_token">
+									</md-input-container>
+								</md-card-content>
+							</md-card>
+						</section>
+
+						<section layout="row" flex>
 							<md-card flex=50 id="cedar" style="height:auto">
 								<md-card-title>
 									<md-card-title-text>
@@ -1432,71 +1496,83 @@ Admin Settings
 										<input type="text" ng-model="Settings.amboy.single_name">
 									</md-input-container>
 									<md-input-container class="control" style="width:45%;">
-										<label>DB name</label>
-										<input type="text" ng-model="Settings.amboy.database">
+										<label>DB URL</label>
+										<input type="text" ng-model="Settings.amboy.db_connection.url">
 									</md-input-container>
 									<md-input-container class="control" style="width:45%; margin-left:50px;">
+										<label>DB name</label>
+										<input type="text" ng-model="Settings.amboy.db_connection.database">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>DB user</label>
+										<input type="text" ng-model="Settings.amboy.db_connection.username">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
+										<label>DB password</label>
+										<input type="text" ng-model="Settings.amboy.db_connection.password">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%">
 										<label>Local pool size</label>
 										<input type="number" ng-model="Settings.amboy.pool_size_local">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%;">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Remote pool size</label>
 										<input type="number" ng-model="Settings.amboy.pool_size_remote">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%; margin-left:50px;">
+									<md-input-container class="control" style="width:45%">
 										<label>Local storage size</label>
 										<input type="number" ng-model="Settings.amboy.local_storage_size">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<md-checkbox ng-model="Settings.amboy.remote_require_priority">Remote Require
 											Priority</md-checkbox>
 									</md-input-container>
-									<md-input-container class="control" style="width:45%; margin-left:50px;">
+									<md-input-container class="control" style="width:45%;">
 										<label>Lock timeout (minutes)</label>
 										<input type="number" ng-model="Settings.amboy.lock_timeout_minutes">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%;">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Sample size</label>
 										<input type="number" ng-model="Settings.amboy.sample_size">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%; margin-left:50px;">
+									<md-input-container class="control" style="width:45%;">
 										<label>Retry Handler Workers</label>
 										<input type="number" ng-model="Settings.amboy.retry.num_workers">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%;">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Retry Handler Max Job Capacity</label>
 										<input type="number" ng-model="Settings.amboy.retry.max_capacity">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%; margin-left:50px;">
+									<md-input-container class="control" style="width:45%;">
 										<label>Max Retry Handler Attempts per Job</label>
 										<input type="number" ng-model="Settings.amboy.retry.max_retry_attempts">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%;">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Max Retry Handler Total Time per Job (Seconds)</label>
 										<input type="number" ng-model="Settings.amboy.retry.max_retry_time_seconds">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%; margin-left:50px;">
+									<md-input-container class="control" style="width:45%;">
 										<label>Retry Backoff per Job Attempt (Seconds)</label>
 										<input type="number" ng-model="Settings.amboy.retry.retry_backoff_seconds">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%;">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Frequency of Checking for Stale Retrying Jobs (Seconds)</label>
 										<input type="number" ng-model="Settings.amboy.retry.stale_retrying_monitor_interval_seconds">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%; margin-left:50px;">
+									<md-input-container class="control" style="width:45%;">
 										<label>Group default workers</label>
 										<input type="number" ng-model="Settings.amboy.group_default_workers">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Group background create frequency</label>
 										<input type="number"
 											ng-model="Settings.amboy.group_background_create_frequency">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%; margin-left:50px">
+									<md-input-container class="control" style="width:45%;">
 										<label>Group prune frequency</label>
 										<input type="number" ng-model="Settings.amboy.group_prune_frequency">
 									</md-input-container>
-									<md-input-container class="control" style="width:45%;">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Group TTL</label>
 										<input type="number" ng-model="Settings.amboy.group_ttl">
 									</md-input-container>
@@ -1512,15 +1588,19 @@ Admin Settings
 													<label>Name</label>
 													<input type="text" ng-model="queue.name">
 												</md-input-container>
-												<md-input-container class="control" style="width:45%;margin-left:50px;">
+												<md-input-container class="control" style="width:45%;margin-left:50px">
+													<label>Regular Expression</label>
+													<input type="text" ng-model="queue.regexp">
+												</md-input-container>
+												<md-input-container class="control" style="width:45%;">
 													<label>Number of Workers</label>
 													<input type="number" ng-model="queue.num_workers">
 												</md-input-container>
-												<md-input-container class="control" style="width:45%;">
+												<md-input-container class="control" style="width:45%;margin-left:50px;">
 													<label>Sample Size</label>
 													<input type="number" ng-model="queue.sample_size" placeholder="Sample Size">
 												</md-input-container>
-												<md-input-container class="control" style="width:45%;margin-left:50px;">
+												<md-input-container class="control" style="width:45%;">
 													<label>Lock Timeout (Seconds)</label>
 													<input type="number" ng-model="queue.lock_timeout_seconds">
 												</md-input-container>
@@ -1540,14 +1620,18 @@ Admin Settings
 												<input type="text" ng-model="new_amboy_named_queue.name">
 											</md-input-container>
 											<md-input-container class="control" style="width:45%;margin-left:50px;">
+												<label>Regular Expression</label>
+												<input type="text" ng-model="new_amboy_named_queue.regexp">
+											</md-input-container>
+											<md-input-container class="control" style="width:45%;">
 												<label>Number of Workers</label>
 												<input type="number" ng-model="new_amboy_named_queue.num_workers">
 											</md-input-container>
-											<md-input-container class="control" style="width:45%;">
+											<md-input-container class="control" style="width:45%;margin-left:50px;">
 												<label>Sample Size</label>
 												<input type="number" ng-model="new_amboy_named_queue.sample_size" placeholder="Sample Size">
 											</md-input-container>
-											<md-input-container class="control" style="width:45%;margin-left:50px;">
+											<md-input-container class="control" style="width:45%;">
 												<label>Lock Timeout (Seconds)</label>
 												<input type="number" ng-model="new_amboy_named_queue.lock_timeout_seconds">
 											</md-input-container>
@@ -1780,6 +1864,22 @@ Admin Settings
 										<input type="text" ng-model="Settings.providers.aws.task_sync_read.bucket">
 									</md-input-container>
 									<md-input-container class="control" style="width:45%; margin-left:50px;">
+										<label>Parser Project S3 Key</label>
+										<input type="text" ng-model="Settings.providers.aws.parser_project.key">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Parser Project S3 Secret</label>
+										<input type="text" ng-model="Settings.providers.aws.parser_project.secret">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
+										<label>Parser Project S3 Bucket</label>
+										<input type="text" ng-model="Settings.providers.aws.parser_project.bucket">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Parser Project S3 Prefix</label>
+										<input type="text" ng-model="Settings.providers.aws.parser_project.prefix">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Default Security Group</label>
 										<input type="text" ng-model="Settings.providers.aws.default_security_group">
 									</md-input-container>
@@ -1793,10 +1893,18 @@ Admin Settings
 										<textarea ng-model="Settings.providers.aws.allowed_instance_types"
 											ng-list="&#10;" ng-trim="false" rows="3" md-select-on-focus></textarea>
 									</md-input-container>
-									<md-input-container class="control" style="width:45%; margin-left:50px">
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Allowed Regions</label>
 										<textarea ng-model="Settings.providers.aws.allowed_regions" ng-list="&#10;"
 											ng-trim="false" rows="3" md-select-on-focus></textarea>
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Pod ECS Max CPU Units Per Pod</label>
+										<input type="number" ng-model="Settings.providers.aws.pod.ecs.max_cpu">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
+										<label>Pod ECS Max Memory (MB) Per Pod</label>
+										<input type="number" ng-model="Settings.providers.aws.pod.ecs.max_memory_mb">
 									</md-input-container>
 									<md-input-container class="control" style="width:45%;">
 										<label>Pod Role</label>
@@ -1821,6 +1929,18 @@ Admin Settings
 									<md-input-container class="control" style="width:45%; margin-left:50px;">
 										<label>Pod ECS Execution Role</label>
 										<input type="text" ng-model="Settings.providers.aws.pod.ecs.execution_role">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Pod ECS Log Region</label>
+										<input type="text" ng-model="Settings.providers.aws.pod.ecs.log_region">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%; margin-left:50px;">
+										<label>Pod ECS Log Group Name</label>
+										<input type="text" ng-model="Settings.providers.aws.pod.ecs.log_group">
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Pod ECS Log Stream Prefix</label>
+										<input type="text" ng-model="Settings.providers.aws.pod.ecs.log_stream_prefix">
 									</md-input-container>
 									<md-card-title>
 										<md-card-title-text>
@@ -1958,13 +2078,16 @@ Admin Settings
 													<md-input-container class="control" flex=25>
 														<input class="control" type="text" ng-model="capacityProvider.name" placeholder="Name">
 													</md-input-container>
-													<br />
 													<md-input-container class="control" flex=25>
 														<md-select ng-model="capacityProvider.os" placeholder="OS">
 															<md-option ng-repeat="os in validECSOSes" value="[[os]]">[[os]]</md-option>
 														</md-select>
 													</md-input-container>
-													<br />
+													<md-input-container class="control" flex=25>
+														<md-select ng-model="capacityProvider.windows_version" placeholder="Windows version">
+															<md-option ng-repeat="(displayWinVer, winVer) in validECSWindowsVersions" value="[[winVer]]">[[displayWinVer]]</md-option>
+														</md-select>
+													</md-input-container>
 													<md-input-container class="control" flex=25>
 														<md-select ng-model="capacityProvider.arch" placeholder="Arch">
 															<md-option ng-repeat="arch in validECSArches" value="[[arch]]">[[arch]]</md-option>
@@ -1984,13 +2107,16 @@ Admin Settings
 													<input class="control" type="text" ng-model="new_ecs_capacity_provider.name"
 														placeholder="Name">
 												</md-input-container>
-												<br />
 												<md-input-container class="control" flex=25>
 													<md-select ng-model="new_ecs_capacity_provider.os" placeholder="OS">
 														<md-option ng-repeat="os in validECSOSes" value="[[os]]">[[os]]</md-option>
 													</md-select>
 												</md-input-container>
-												<br />
+												<md-input-container class="control" flex=25>
+													<md-select ng-model="new_ecs_capacity_provider.windows_version" placeholder="Windows version">
+														<md-option ng-repeat="(displayWinVer, winVer) in validECSWindowsVersions" value="[[winVer]]">[[displayWinVer]]</md-option>
+													</md-select>
+												</md-input-container>
 												<md-input-container class="control" flex=25>
 													<md-select ng-model="new_ecs_capacity_provider.arch" placeholder="Arch">
 														<md-option ng-repeat="arch in validECSArches" value="[[arch]]">[[arch]]</md-option>
@@ -2433,9 +2559,100 @@ Admin Settings
 								</md-card-content>
 							</md-card>
 						</section>
-
-					</md-card-content>
-
+						<section layout="row" flex>
+							<md-card flex=50 id="tracer">
+								<md-card-title>
+									<md-card-title-text>
+										<span>Tracer Configuration</span>
+									</md-card-title-text>
+									<md-button ng-click="clearSection('tracer')">
+										<i class="fa fa-trash"></i>
+									</md-button>
+								</md-card-title>
+								<md-card-content>
+									<md-input-container class="control" style="width:45%;">
+										<md-checkbox ng-model="Settings.tracer.enabled">
+											Enabled
+										</md-checkbox>
+									</md-input-container>
+									<md-input-container class="control" style="width:45%;">
+										<label>Collector Endpoint</label>
+										<input type="string" ng-model="Settings.tracer.collector_endpoint">
+									</md-input-container>
+								</md-card-content>
+							</md-card>
+						</section>
+						<section layout="row" flex>
+							<md-card flex=50 id="project_creation" style="max-width:49%">
+								<md-card-title>
+									<md-card-title-text>
+										<span>Project Creation Settings</span>
+									</md-card-title-text>
+									<md-button ng-click="clearSection('project_creation')">
+										<i class="fa fa-trash"></i>
+									</md-button>
+								</md-card-title>
+								<md-card-content>
+									<section layout="row" flex>
+										<md-input-container class="control" style="width:45%;">
+											<label>Total Project Limit</label>
+											<input type="number" ng-model="Settings.project_creation.total_project_limit">
+										</md-input-container>
+										<md-input-container class="control" style="width:45%;">
+											<label>Project Per Repo Limit</label>
+											<input type="number" ng-model="Settings.project_creation.repo_project_limit">
+										</md-input-container>
+									</section>
+									<section layout="row" flex>
+										<md-input-container class="control" style="width:45%;">
+											<label>Jira Project to Request S3 Credentials From</label>
+											<input type="text" ng-model="Settings.project_creation.jira_project">
+										</md-input-container>
+									
+									</section>
+										<md-card style="margin-bottom:20px;">
+											<md-card-title>
+												<md-card-title-text>
+													<span>Repo Exceptions</span>
+												</md-card-title-text>
+											</md-card-title>
+											<md-card-content>
+												<div id="repo-list" class="form-group" ng-repeat="(index, repo_exceptions) in Settings.project_creation.repo_exceptions">
+													<section layout="row" flex>
+														<md-input-container class="control" flex=25>
+															<input class="control" type="text" ng-model="repo_exceptions.owner" placeholder="Owner Name">
+														</md-input-container>
+														<md-input-container class="control" flex=50>
+															<input class="control" type="text" ng-model="repo_exceptions.repo" placeholder="Repo Name">
+														</md-input-container>
+														<div style="margin-top: 1%;">
+															<button class="btn btn-default btn-danger" type="button" style="float: left"
+																ng-click="deleteOwnerRepo(index)">
+																<i class="fa fa-trash"></i>
+															</button>
+														</div>
+													</section>
+												</div>
+												<section layout="row" flex>
+													<md-input-container class="control" flex=25>
+														<input class="control" type="text" ng-model="new_owner_repo.owner" placeholder="Owner Name">
+													</md-input-container>
+	
+													<md-input-container class="control" flex=50>
+														<input class="control" type="text" ng-model="new_owner_repo.repo" placeholder="Repo Name">
+													</md-input-container>
+													<div style="margin-top: 1%;">
+														<button class="plus-button btn btn-primary" ng-disabled="!validOwnerRepo(new_owner_repo)" type="button"
+															style="float: left" ng-click="addOwnerRepo()">
+															<i class="fa fa-plus"></i>
+														</button>
+														<label class="control">[[ invalidOwnerRepo ]]</label>
+													</div>
+												</section>
+										</md-card>
+								</md-card-content>
+							</md-card>
+						</section>
 					<md-card-footer class="squeezeTop">
 						<md-button type="submit" class="md-raised" ng-click="saveSettings()">Save Changes</md-button>
 					</md-card-footer>
@@ -2447,8 +2664,8 @@ Admin Settings
 					<i class="fa fa-refresh"></i>
 					<md-card-title-text>
 						<span>Restart Tasks/Commit Queue Versions</span>
-						<span class="md-subhead">Restart failed tasks or commit queue versions that ran between two
-							times. Uses Eastern timezone.</span>
+						<span class="md-subhead">Restart failed tasks or commit queue versions that started or finished
+							between two times. Uses Eastern timezone regardless of configured timezone.</span>
 					</md-card-title-text>
 				</md-card-title>
 				<md-card-content>

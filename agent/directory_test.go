@@ -1,7 +1,6 @@
 package agent
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -25,12 +24,12 @@ func TestRemoveTaskDirectory(t *testing.T) {
 	}
 	wd, err := os.Getwd()
 	require.NoError(err)
-	tmpDir, err := ioutil.TempDir(wd, "test-remove")
+	tmpDir, err := os.MkdirTemp(wd, "test-remove")
 	require.NoError(err)
 	err = os.MkdirAll(filepath.Join(tmpDir, "foo", "bar", a, b), 0755)
 	require.NoError(err)
 	// verify files with read-only permissions get deleted
-	require.NoError(ioutil.WriteFile(filepath.Join(tmpDir, "read.txt"), []byte("haha can't delete me!"), 0444))
+	require.NoError(os.WriteFile(filepath.Join(tmpDir, "read.txt"), []byte("haha can't delete me!"), 0444))
 
 	// remove the task directory
 	agent := Agent{}
@@ -43,39 +42,37 @@ func TestDirectoryCleanup(t *testing.T) {
 	assert := assert.New(t)
 
 	// create a temp directory for the test
-	dir, err := ioutil.TempDir("", "dir-cleanup")
-	assert.NoError(err)
-	stat, err := os.Stat(dir)
-	assert.True(stat.IsDir())
-	assert.True(osExists(err))
+	dir := t.TempDir()
 
 	// create a file in that directory
 	fn := filepath.Join(dir, "foo")
-	assert.NoError(ioutil.WriteFile(fn, []byte("hello world!"), 0644))
-	stat, err = os.Stat(fn)
+	assert.NoError(os.WriteFile(fn, []byte("hello world!"), 0644))
+	stat, err := os.Stat(fn)
 	assert.False(stat.IsDir())
 	assert.True(osExists(err))
 
 	// cannot run the operation on a file, and it will not delete
-	// that files
-	tryCleanupDirectory(fn)
+	// that file
+	a := Agent{}
+	a.tryCleanupDirectory(fn)
 	_, err = os.Stat(fn)
 	assert.True(osExists(err))
 
 	// running the operation on the top level directory does not
-	// delete that directory
-	tryCleanupDirectory(dir)
+	// delete that directory but does delete the files within it
+	a.tryCleanupDirectory(dir)
 	_, err = os.Stat(dir)
 	assert.True(osExists(err))
 
-	// does not clean up files in the root directory
-	_, err = os.Stat(fn)
-	assert.True(osExists(err))
-
-	// verify a subdirectory gets deleted
+	// verify a subdirectory containing a read-only file is deleted
 	toDelete := filepath.Join(dir, "wrapped-dir-cleanup")
 	assert.NoError(os.Mkdir(toDelete, 0777))
-	tryCleanupDirectory(dir)
+	readOnlyFileToDelete := filepath.Join(toDelete, "read-only")
+	assert.NoError(os.WriteFile(readOnlyFileToDelete, []byte("cookies"), 0644))
+	assert.NoError(os.Chmod(readOnlyFileToDelete, 0444))
+	a.tryCleanupDirectory(dir)
+	_, err = os.Stat(readOnlyFileToDelete)
+	assert.True(os.IsNotExist(err))
 	_, err = os.Stat(toDelete)
 	assert.True(os.IsNotExist(err))
 
@@ -84,11 +81,9 @@ func TestDirectoryCleanup(t *testing.T) {
 	assert.NoError(os.MkdirAll(gitDir, 0777))
 	shouldNotDelete := filepath.Join(dir, "dir1", "delete-me")
 	assert.NoError(os.MkdirAll(shouldNotDelete, 0777))
-	tryCleanupDirectory(dir)
+	a.tryCleanupDirectory(dir)
 	_, err = os.Stat(gitDir)
 	assert.False(os.IsNotExist(err))
 	_, err = os.Stat(shouldNotDelete)
 	assert.False(os.IsNotExist(err))
-
-	assert.NoError(os.RemoveAll(dir))
 }

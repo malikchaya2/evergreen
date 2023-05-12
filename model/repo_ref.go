@@ -28,7 +28,6 @@ var (
 	RepoRefIdKey             = bsonutil.MustHaveTag(RepoRef{}, "Id")
 	RepoRefOwnerKey          = bsonutil.MustHaveTag(RepoRef{}, "Owner")
 	RepoRefRepoKey           = bsonutil.MustHaveTag(RepoRef{}, "Repo")
-	RepoRefEnabledKey        = bsonutil.MustHaveTag(RepoRef{}, "Enabled")
 	RepoRefPrivateKey        = bsonutil.MustHaveTag(RepoRef{}, "Private")
 	RepoRefAdminsKey         = bsonutil.MustHaveTag(RepoRef{}, "Admins")
 	RepoRefCommitQueueKey    = bsonutil.MustHaveTag(RepoRef{}, "CommitQueue")
@@ -37,8 +36,7 @@ var (
 )
 
 func (r *RepoRef) Add(creator *user.DBUser) error {
-	err := r.Upsert()
-	if err != nil {
+	if err := r.Upsert(); err != nil {
 		return errors.Wrap(err, "upserting repo ref")
 	}
 	return r.addPermissions(creator)
@@ -96,6 +94,10 @@ func FindRepoRefByOwnerAndRepo(owner, repoName string) (*RepoRef, error) {
 // for the repo and branches, and gives branch admins permission to view the repo.
 func (r *RepoRef) addPermissions(creator *user.DBUser) error {
 	rm := evergreen.GetEnvironment().RoleManager()
+	// Add to the general scope.
+	if err := rm.AddResourceToScope(evergreen.AllProjectsScope, r.Id); err != nil {
+		return errors.Wrapf(err, "adding repo '%s' to the scope '%s'", r.Id, evergreen.AllProjectsScope)
+	}
 
 	adminScope := gimlet.Scope{
 		ID:        GetRepoAdminScope(r.Id),
@@ -183,6 +185,7 @@ func (r *RepoRef) MakeRestricted(branchProjects []ProjectRef) error {
 	rm := evergreen.GetEnvironment().RoleManager()
 	scopeId := GetUnrestrictedBranchProjectsScope(r.Id)
 	branchOnlyAdmins := []string{}
+
 	// if the branch project is now restricted, remove it from the unrestricted scope
 	for _, p := range branchProjects {
 		if !p.IsRestricted() {

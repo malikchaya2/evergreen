@@ -9,6 +9,8 @@ import (
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/anser/bsonutil"
 	adb "github.com/mongodb/anser/db"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo/options"
@@ -42,17 +44,19 @@ var (
 	FavoriteProjectsKey       = bsonutil.MustHaveTag(DBUser{}, "FavoriteProjects")
 )
 
-//nolint: deadcode, megacheck, unused
+//nolint:megacheck,unused
 var (
 	githubUserUID         = bsonutil.MustHaveTag(GithubUser{}, "UID")
 	githubUserLastKnownAs = bsonutil.MustHaveTag(GithubUser{}, "LastKnownAs")
 )
 
 var (
-	SettingsTZKey             = bsonutil.MustHaveTag(UserSettings{}, "Timezone")
-	userSettingsGithubUserKey = bsonutil.MustHaveTag(UserSettings{}, "GithubUser")
-	UseSpruceOptionsKey       = bsonutil.MustHaveTag(UserSettings{}, "UseSpruceOptions")
-	SpruceV1Key               = bsonutil.MustHaveTag(UseSpruceOptions{}, "SpruceV1")
+	SettingsTZKey                = bsonutil.MustHaveTag(UserSettings{}, "Timezone")
+	userSettingsGithubUserKey    = bsonutil.MustHaveTag(UserSettings{}, "GithubUser")
+	userSettingsSlackUsernameKey = bsonutil.MustHaveTag(UserSettings{}, "SlackUsername")
+	userSettingsSlackMemberIdKey = bsonutil.MustHaveTag(UserSettings{}, "SlackMemberId")
+	UseSpruceOptionsKey          = bsonutil.MustHaveTag(UserSettings{}, "UseSpruceOptions")
+	SpruceV1Key                  = bsonutil.MustHaveTag(UseSpruceOptions{}, "SpruceV1")
 )
 
 // ById returns a query that matches a user by ID.
@@ -179,6 +183,22 @@ func FindByGithubName(name string) (*DBUser, error) {
 	return &u, nil
 }
 
+// FindBySlackUsername finds a user with the given Slack Username.
+func FindBySlackUsername(userName string) (*DBUser, error) {
+	u := DBUser{}
+	err := db.FindOneQ(Collection, db.Query(bson.M{
+		bsonutil.GetDottedKeyName(SettingsKey, userSettingsSlackUsernameKey): userName,
+	}), &u)
+	if adb.ResultsNotFound(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, errors.Wrap(err, "finding user by Slack Username")
+	}
+
+	return &u, nil
+}
+
 func FindByRole(role string) ([]DBUser, error) {
 	res := []DBUser{}
 	err := db.FindAllQ(
@@ -220,7 +240,7 @@ func GetPatchUser(gitHubUID int) (*DBUser, error) {
 		if u == nil {
 			u = &DBUser{
 				Id:       evergreen.GithubPatchUser,
-				DispName: "Github Pull Requests",
+				DispName: "GitHub Pull Requests",
 				APIKey:   utility.RandomString(),
 			}
 			if err = u.Insert(); err != nil {
@@ -295,6 +315,7 @@ func GetOrCreateUser(userId, displayName, email, accessToken, refreshToken strin
 	if refreshToken != "" {
 		setFields[bsonutil.GetDottedKeyName(LoginCacheKey, LoginCacheRefreshTokenKey)] = refreshToken
 	}
+
 	setOnInsertFields := bson.M{
 		APIKeyKey: utility.RandomString(),
 		bsonutil.GetDottedKeyName(SettingsKey, UseSpruceOptionsKey, SpruceV1Key): true,
@@ -319,7 +340,58 @@ func GetOrCreateUser(userId, displayName, email, accessToken, refreshToken strin
 		return nil, errors.Wrapf(err, "decoding user '%s'", userId)
 
 	}
+
+	if err := setSlackInformation(env, u); err != nil {
+		grip.Error(message.WrapError(err, message.Fields{
+			"message":       "could not set Slack information for user",
+			"user_id":       u.Id,
+			"email_address": u.EmailAddress,
+		}))
+		return u, nil
+	}
+
 	return u, nil
+}
+
+func setSlackInformation(env evergreen.Environment, u *DBUser) error {
+	if u.Settings.SlackMemberId != "" {
+		// user already has a slack member id set
+		return nil
+	}
+	if u.EmailAddress == "" {
+		// we can't fetch the slack information without the user's email address
+		return errors.New("user has no email address")
+	}
+
+	slackEnv := env.Settings().Slack
+	slackUser, err := slackEnv.Options.GetSlackUser(slackEnv.Token, u.EmailAddress)
+	if err != nil {
+		return errors.Wrapf(err, "getting Slack user with email address '%s'", u.EmailAddress)
+	}
+	if slackUser == nil {
+		grip.Error(message.Fields{
+			"message":       "Couldn't find slack user by email address",
+			"user_id":       u.Id,
+			"email_address": u.EmailAddress,
+		})
+		return nil
+	}
+
+	slackFields := bson.M{
+		bsonutil.GetDottedKeyName(SettingsKey, userSettingsSlackMemberIdKey): slackUser.ID,
+	}
+	if slackUser.Name != "" {
+		slackFields[bsonutil.GetDottedKeyName(SettingsKey, userSettingsSlackUsernameKey)] = slackUser.Name
+	}
+
+	update := bson.M{"$set": slackFields}
+
+	if err := UpdateOne(bson.M{IdKey: u.Id}, update); err != nil {
+		return errors.Wrap(err, "updating slack information")
+	}
+
+	return nil
+
 }
 
 // FindNeedsReauthorization finds all users that need to be reauthorized after
@@ -409,6 +481,22 @@ func ClearLoginCache(user gimlet.User) error {
 	query := bson.M{IdKey: u.Id}
 	if err := UpdateOne(query, update); err != nil {
 		return errors.Wrap(err, "updating user cache")
+	}
+
+	return nil
+}
+
+// ClearUser clears one user's settings, roles, and login cache.
+func ClearUser(userId string) error {
+	update := bson.M{
+		"$unset": bson.M{
+			SettingsKey:   1,
+			RolesKey:      1,
+			LoginCacheKey: 1,
+		}}
+	query := bson.M{IdKey: userId}
+	if err := UpdateOne(query, update); err != nil {
+		return errors.Wrap(err, "unsetting user settings")
 	}
 
 	return nil

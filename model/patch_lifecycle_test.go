@@ -3,7 +3,6 @@ package model
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"strings"
@@ -16,11 +15,13 @@ import (
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/evergreen/model/distro"
+	"github.com/evergreen-ci/evergreen/model/manifest"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/evergreen/thirdparty"
+	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
@@ -52,11 +53,11 @@ func init() {
 }
 
 func clearAll(t *testing.T) {
-	require.NoError(t, db.ClearCollections(ProjectRefCollection, patch.Collection, VersionCollection, build.Collection, task.Collection, distro.Collection))
+	require.NoError(t, db.ClearCollections(manifest.Collection, ParserProjectCollection, ProjectRefCollection, patch.Collection, VersionCollection, build.Collection, task.Collection, distro.Collection))
 }
 
 // resetPatchSetup clears the ProjectRef, Patch, Version, Build, and Task Collections
-// and creates a patch from the test path given.
+// and creates a patch from the test path given. The patch is not inserted.
 func resetPatchSetup(t *testing.T, testPath string) *patch.Patch {
 	clearAll(t)
 	projectRef := &ProjectRef{
@@ -85,7 +86,7 @@ func resetPatchSetup(t *testing.T, testPath string) *patch.Patch {
 	err = baseVersion.Insert()
 	require.NoError(t, err, "Couldn't insert test base version: %v", err)
 
-	fileBytes, err := ioutil.ReadFile(patchFile)
+	fileBytes, err := os.ReadFile(patchFile)
 	require.NoError(t, err, "Couldn't read patch file: %v", err)
 
 	// this patch adds a new task to the existing build
@@ -111,8 +112,7 @@ func resetPatchSetup(t *testing.T, testPath string) *patch.Patch {
 			},
 		},
 	}
-	err = configPatch.Insert()
-	require.NoError(t, err, "Couldn't insert test patch: %v", err)
+
 	return configPatch
 }
 
@@ -135,7 +135,7 @@ func resetProjectlessPatchSetup(t *testing.T) *patch.Patch {
 	err := projectRef.Insert()
 	require.NoError(t, err, "Couldn't insert test project ref: %v", err)
 
-	fileBytes, err := ioutil.ReadFile(newProjectPatchFile)
+	fileBytes, err := os.ReadFile(newProjectPatchFile)
 	require.NoError(t, err, "Couldn't read patch file: %v", err)
 
 	// this patch adds a new task to the existing build
@@ -172,38 +172,100 @@ func TestSetPriority(t *testing.T) {
 	for _, p := range patches {
 		assert.NoError(t, p.Insert())
 	}
-	err := SetVersionPriority("aabbccddeeff001122334455", 7, "")
+	err := SetVersionsPriority([]string{"aabbccddeeff001122334455"}, 7, "")
 	assert.NoError(t, err)
 	foundTask, err := task.FindOneId("t1")
 	assert.NoError(t, err)
 	assert.Equal(t, int64(7), foundTask.Priority)
 }
 
-func TestGetPatchedProject(t *testing.T) {
+func TestGetPatchedProjectAndGetPatchedProjectConfig(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	testutil.ConfigureIntegrationTest(t, patchTestConfig, "TestConfigurePatch")
+	testutil.ConfigureIntegrationTest(t, patchTestConfig, t.Name())
+	token, err := patchTestConfig.GetGithubOauthToken()
+	require.NoError(t, err)
 	Convey("With calling GetPatchedProject with a config and remote configuration path",
 		t, func() {
 			Convey("Calling GetPatchedProject returns a valid project given a patch and settings", func() {
 				configPatch := resetPatchSetup(t, configFilePath)
-				token, err := patchTestConfig.GetGithubOauthToken()
+				project, patchConfig, err := GetPatchedProject(ctx, patchTestConfig, configPatch, token)
 				So(err, ShouldBeNil)
-				project, patchConfig, err := GetPatchedProject(ctx, configPatch, token)
-				So(err, ShouldBeNil)
-				So(patchConfig, ShouldNotBeEmpty)
 				So(project, ShouldNotBeNil)
+				So(patchConfig, ShouldNotBeNil)
+				So(patchConfig.PatchedParserProjectYAML, ShouldNotBeEmpty)
+				So(patchConfig.PatchedParserProject, ShouldNotBeNil)
+
+				Convey("Calling GetPatchedProjectConfig should return the same project config as GetPatchedProject", func() {
+					projectConfig, err := GetPatchedProjectConfig(ctx, patchTestConfig, configPatch, token)
+					So(err, ShouldBeNil)
+					So(projectConfig, ShouldEqual, patchConfig.PatchedProjectConfig)
+				})
+
+				Convey("Calling GetPatchedProject with a created but unfinalized patch", func() {
+					configPatch := resetPatchSetup(t, configFilePath)
+
+					// Simulate what patch creation does.
+					patchConfig.PatchedParserProject.Id = configPatch.Id.Hex()
+					So(patchConfig.PatchedParserProject.Insert(), ShouldBeNil)
+					configPatch.ProjectStorageMethod = evergreen.ProjectStorageMethodDB
+					configPatch.PatchedProjectConfig = patchConfig.PatchedProjectConfig
+
+					projectFromPatchAndDB, patchConfigFromPatchAndDB, err := GetPatchedProject(ctx, patchTestConfig, configPatch, "invalid-token-do-not-fetch-from-github")
+					So(err, ShouldBeNil)
+					So(projectFromPatchAndDB, ShouldNotBeNil)
+					So(len(projectFromPatchAndDB.Tasks), ShouldEqual, len(project.Tasks))
+					So(patchConfig, ShouldNotBeNil)
+					So(patchConfigFromPatchAndDB.PatchedParserProject, ShouldNotBeNil)
+					So(len(patchConfigFromPatchAndDB.PatchedParserProject.Tasks), ShouldEqual, len(patchConfig.PatchedParserProject.Tasks))
+					So(patchConfigFromPatchAndDB.PatchedProjectConfig, ShouldEqual, patchConfig.PatchedProjectConfig)
+
+					Convey("Calling GetPatchedProjectConfig should return the same project config as GetPatchedProject", func() {
+						projectConfigFromPatch, err := GetPatchedProjectConfig(ctx, patchTestConfig, configPatch, token)
+						So(err, ShouldBeNil)
+						So(projectConfigFromPatch, ShouldEqual, patchConfig.PatchedProjectConfig)
+					})
+				})
+
+				Convey("Calling GetPatchedProject with a created but unfinalized patch using deprecated patched parser project", func() {
+					configPatch := resetPatchSetup(t, configFilePath)
+
+					// Simulate what patch creation does for old patches.
+					configPatch.PatchedParserProject = patchConfig.PatchedParserProjectYAML
+					configPatch.PatchedProjectConfig = patchConfig.PatchedProjectConfig
+
+					projectFromPatch, patchConfigFromPatch, err := GetPatchedProject(ctx, patchTestConfig, configPatch, "invalid-token-do-not-fetch-from-github")
+					So(err, ShouldBeNil)
+					So(patchConfigFromPatch, ShouldNotBeNil)
+					So(projectFromPatch, ShouldNotBeNil)
+					So(len(projectFromPatch.Tasks), ShouldEqual, len(project.Tasks))
+					So(patchConfigFromPatch.PatchedParserProject, ShouldNotBeNil)
+					So(len(patchConfigFromPatch.PatchedParserProject.Tasks), ShouldEqual, len(patchConfig.PatchedParserProject.Tasks))
+					So(patchConfigFromPatch.PatchedParserProjectYAML, ShouldEqual, patchConfig.PatchedParserProjectYAML)
+					So(patchConfigFromPatch.PatchedProjectConfig, ShouldEqual, patchConfig.PatchedProjectConfig)
+
+					Convey("Calling GetPatchedProjectConfig should return the same project config as GetPatchedProject", func() {
+						projectConfigFromPatch, err := GetPatchedProjectConfig(ctx, patchTestConfig, configPatch, token)
+						So(err, ShouldBeNil)
+						So(projectConfigFromPatch, ShouldEqual, patchConfig.PatchedProjectConfig)
+					})
+				})
+
 			})
 
 			Convey("Calling GetPatchedProject on a project-less version returns a valid project", func() {
 				configPatch := resetProjectlessPatchSetup(t)
-				token, err := patchTestConfig.GetGithubOauthToken()
-				So(err, ShouldBeNil)
-				project, patchConfig, err := GetPatchedProject(ctx, configPatch, token)
+				project, patchConfig, err := GetPatchedProject(ctx, patchTestConfig, configPatch, token)
 				So(err, ShouldBeNil)
 				So(patchConfig, ShouldNotBeEmpty)
 				So(project, ShouldNotBeNil)
+
+				Convey("Calling GetPatchedProjectConfig should return the same project config as GetPatchedProject", func() {
+					projectConfig, err := GetPatchedProjectConfig(ctx, patchTestConfig, configPatch, token)
+					So(err, ShouldBeNil)
+					So(projectConfig, ShouldEqual, patchConfig.PatchedProjectConfig)
+				})
 			})
 
 			Convey("Calling GetPatchedProject on a patch with GridFS patches works", func() {
@@ -214,12 +276,16 @@ func TestGetPatchedProject(t *testing.T) {
 				configPatch.Patches[0].PatchSet.Patch = ""
 				configPatch.Patches[0].PatchSet.PatchFileId = patchFileID.Hex()
 
-				token, err := patchTestConfig.GetGithubOauthToken()
-				So(err, ShouldBeNil)
-				project, patchConfig, err := GetPatchedProject(ctx, configPatch, token)
+				project, patchConfig, err := GetPatchedProject(ctx, patchTestConfig, configPatch, token)
 				So(err, ShouldBeNil)
 				So(patchConfig, ShouldNotBeEmpty)
 				So(project, ShouldNotBeNil)
+
+				Convey("Calling GetPatchedProjectConfig should return the same project config as GetPatchedProject", func() {
+					projectConfig, err := GetPatchedProjectConfig(ctx, patchTestConfig, configPatch, token)
+					So(err, ShouldBeNil)
+					So(projectConfig, ShouldEqual, patchConfig.PatchedProjectConfig)
+				})
 			})
 
 			Reset(func() {
@@ -230,88 +296,210 @@ func TestGetPatchedProject(t *testing.T) {
 }
 
 func TestFinalizePatch(t *testing.T) {
-	testutil.ConfigureIntegrationTest(t, patchTestConfig, "TestFinalizePatch")
-
+	testutil.ConfigureIntegrationTest(t, patchTestConfig, t.Name())
+	require.NoError(t, evergreen.UpdateConfig(patchTestConfig), ShouldBeNil)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	Convey("With FinalizePatch on a project and commit event generated from GetPatchedProject path",
-		t, func() {
-			configPatch := resetPatchSetup(t, configFilePath)
-			Convey("a patched config should drive version creation", func() {
-				token, err := patchTestConfig.GetGithubOauthToken()
-				So(err, ShouldBeNil)
-				project, patchConfig, err := GetPatchedProject(ctx, configPatch, token)
-				So(err, ShouldBeNil)
-				So(project, ShouldNotBeNil)
-				configPatch.PatchedParserProject = patchConfig.PatchedParserProject
-				token, err = patchTestConfig.GetGithubOauthToken()
-				So(err, ShouldBeNil)
-				version, err := FinalizePatch(ctx, configPatch, evergreen.PatchVersionRequester, token)
-				So(err, ShouldBeNil)
-				So(version, ShouldNotBeNil)
-				So(version.Parameters, ShouldHaveLength, 1)
-				// ensure the relevant builds/tasks were created
-				builds, err := build.Find(build.All)
-				So(err, ShouldBeNil)
-				So(len(builds), ShouldEqual, 1)
-				So(len(builds[0].Tasks), ShouldEqual, 2)
-				tasks, err := task.Find(bson.M{})
-				So(err, ShouldBeNil)
-				So(len(tasks), ShouldEqual, 2)
-			})
+	// Running a multi-document transaction requires the collections to exist
+	// first before any documents can be inserted.
+	require.NoError(t, db.CreateCollections(manifest.Collection, VersionCollection, ParserProjectCollection, ProjectConfigCollection))
 
-			Convey("a patch that does not include the remote config should not "+
-				"drive version creation", func() {
-				patchedConfigFile := "fakeInPatchSoNotPatched"
-				configPatch := resetPatchSetup(t, patchedConfigFile)
-				token, err := patchTestConfig.GetGithubOauthToken()
-				So(err, ShouldBeNil)
-				project, patchConfig, err := GetPatchedProject(ctx, configPatch, token)
-				So(project, ShouldNotBeNil)
-				So(err, ShouldBeNil)
-				configPatch.PatchedParserProject = patchConfig.PatchedParserProject
-				token, err = patchTestConfig.GetGithubOauthToken()
-				So(err, ShouldBeNil)
-				version, err := FinalizePatch(ctx, configPatch, evergreen.PatchVersionRequester, token)
-				So(err, ShouldBeNil)
-				So(version, ShouldNotBeNil)
-				So(err, ShouldBeNil)
-				So(version, ShouldNotBeNil)
+	token, err := patchTestConfig.GetGithubOauthToken()
+	require.NoError(t, err)
 
-				// ensure the relevant builds/tasks were created
-				builds, err := build.Find(build.All)
-				So(err, ShouldBeNil)
-				So(len(builds), ShouldEqual, 1)
-				So(len(builds[0].Tasks), ShouldEqual, 1)
-				tasks, err := task.FindAll(task.All)
-				So(err, ShouldBeNil)
-				So(len(tasks), ShouldEqual, 1)
-			})
+	for name, test := range map[string]func(t *testing.T, p *patch.Patch, patchConfig *PatchConfig){
+		"VersionCreationWithPatchedParserProject": func(t *testing.T, p *patch.Patch, patchConfig *PatchConfig) {
+			modulesYml := `
+modules:
+  - name: sandbox
+    repo: git@github.com:evergreen-ci/commit-queue-sandbox.git
+    branch: main
+  - name: evergreen
+    repo: git@github.com:evergreen-ci/evergreen.git
+    branch: main
+`
+			p.PatchedParserProject = patchConfig.PatchedParserProjectYAML
+			p.PatchedParserProject += modulesYml
+			require.NoError(t, p.Insert())
 
-			Convey("a commit queue patch with no tasks/build variants should not create a version", func() {
-				//normal patch works
-				token, err := patchTestConfig.GetGithubOauthToken()
-				So(err, ShouldBeNil)
-				configPatch := resetPatchSetup(t, configFilePath)
-				configPatch.Tasks = []string{}
-				configPatch.BuildVariants = []string{}
-				configPatch.VariantsTasks = []patch.VariantTasks{}
-				v, err := FinalizePatch(ctx, configPatch, evergreen.MergeTestRequester, token)
-				So(err, ShouldBeNil)
-				So(v, ShouldNotBeNil)
-				So(v.BuildIds, ShouldBeEmpty)
+			version, err := FinalizePatch(ctx, p, evergreen.PatchVersionRequester, token)
+			require.NoError(t, err)
+			assert.NotNil(t, version)
+			assert.Len(t, version.Parameters, 1)
+			assert.Equal(t, evergreen.ProjectStorageMethodDB, version.ProjectStorageMethod, "version's project storage method should be set")
 
-				// commit queue patch should not
-				configPatch.Alias = evergreen.CommitQueueAlias
-				_, err = FinalizePatch(ctx, configPatch, evergreen.MergeTestRequester, token)
-				So(err, ShouldNotBeNil)
-				So(err.Error(), ShouldContainSubstring, "no builds or tasks for commit queue version")
-			})
-			Reset(func() {
-				So(db.Clear(distro.Collection), ShouldBeNil)
-			})
+			dbPatch, err := patch.FindOneId(p.Id.Hex())
+			require.NoError(t, err)
+			require.NotZero(t, dbPatch)
+			assert.True(t, dbPatch.Activated)
+			assert.Zero(t, dbPatch.PatchedParserProject)
+			// ensure the relevant builds/tasks were created
+			builds, err := build.Find(build.All)
+			require.NoError(t, err)
+			assert.Len(t, builds, 1)
+			assert.Len(t, builds[0].Tasks, 2)
+			tasks, err := task.Find(bson.M{})
+			require.NoError(t, err)
+			assert.Len(t, tasks, 2)
+		},
+		"VersionCreationWithParserProjectInDB": func(t *testing.T, p *patch.Patch, patchConfig *PatchConfig) {
+			project, patchConfig, err := GetPatchedProject(ctx, patchTestConfig, p, token)
+			require.NoError(t, err)
+			assert.NotNil(t, project)
+
+			patchConfig.PatchedParserProject.Id = p.Id.Hex()
+			require.NoError(t, patchConfig.PatchedParserProject.Insert())
+			ppStorageMethod := evergreen.ProjectStorageMethodDB
+			p.ProjectStorageMethod = ppStorageMethod
+			require.NoError(t, p.Insert())
+
+			version, err := FinalizePatch(ctx, p, evergreen.PatchVersionRequester, token)
+			require.NoError(t, err)
+			assert.NotNil(t, version)
+			assert.Len(t, version.Parameters, 1)
+			assert.Equal(t, ppStorageMethod, version.ProjectStorageMethod, "version's project storage method should match that of its patch")
+
+			dbPatch, err := patch.FindOneId(p.Id.Hex())
+			require.NoError(t, err)
+			require.NotZero(t, dbPatch)
+			assert.True(t, dbPatch.Activated)
+			// ensure the relevant builds/tasks were created
+			builds, err := build.Find(build.All)
+			require.NoError(t, err)
+			assert.Len(t, builds, 1)
+			assert.Len(t, builds[0].Tasks, 2)
+			tasks, err := task.Find(bson.M{})
+			require.NoError(t, err)
+			assert.Len(t, tasks, 2)
+		},
+		"VersionCreationWithAutoUpdateModules": func(t *testing.T, p *patch.Patch, patchConfig *PatchConfig) {
+			project, patchConfig, err := GetPatchedProject(ctx, patchTestConfig, p, token)
+			require.NoError(t, err)
+			assert.NotNil(t, project)
+
+			baseManifest := manifest.Manifest{
+				Revision:    patchedRevision,
+				ProjectName: patchedProject,
+				Modules: map[string]*manifest.Module{
+					"sandbox":   {Branch: "main", Repo: "sandbox", Owner: "else", Revision: "123"},
+					"evergreen": {Branch: "main", Repo: "evergreen", Owner: "something", Revision: "abc"},
+				},
+				IsBase: true,
+			}
+			_, err = baseManifest.TryInsert()
+			require.NoError(t, err)
+
+			modulesYml := `
+modules:
+  - name: sandbox
+    repo: git@github.com:evergreen-ci/commit-queue-sandbox.git
+    branch: main
+    auto_update: true
+  - name: evergreen
+    repo: git@github.com:evergreen-ci/evergreen.git
+    branch: main
+`
+			p.PatchedParserProject = patchConfig.PatchedParserProjectYAML
+			p.PatchedParserProject += modulesYml
+			require.NoError(t, p.Insert())
+
+			version, err := FinalizePatch(ctx, p, evergreen.PatchVersionRequester, token)
+			require.NoError(t, err)
+			assert.NotNil(t, version)
+			// Ensure that the manifest was created and that auto_update worked for
+			// sandbox module but was skipped for evergreen
+			mfst, err := manifest.FindOne(manifest.ById(p.Id.Hex()))
+			require.NoError(t, err)
+			assert.NotNil(t, mfst)
+			assert.Len(t, mfst.Modules, 2)
+			assert.NotEqual(t, mfst.Modules["sandbox"].Revision, "123")
+			assert.Equal(t, mfst.Modules["evergreen"].Revision, "abc")
+		},
+		"EmptyCommitQueuePatchDoesntCreateVersion": func(t *testing.T, p *patch.Patch, patchConfig *PatchConfig) {
+			patchConfig.PatchedParserProject.Id = p.Id.Hex()
+			require.NoError(t, patchConfig.PatchedParserProject.Insert())
+			ppStorageMethod := evergreen.ProjectStorageMethodDB
+			p.ProjectStorageMethod = ppStorageMethod
+
+			//normal patch works
+			p.Tasks = []string{}
+			p.BuildVariants = []string{}
+			p.VariantsTasks = []patch.VariantTasks{}
+			require.NoError(t, p.Insert())
+
+			v, err := FinalizePatch(ctx, p, evergreen.MergeTestRequester, token)
+			require.NoError(t, err)
+			assert.NotNil(t, v)
+			assert.Empty(t, v.BuildIds)
+
+			// commit queue patch should not
+			p.Alias = evergreen.CommitQueueAlias
+			_, err = FinalizePatch(ctx, p, evergreen.MergeTestRequester, token)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), "no builds or tasks for commit queue version")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			p := resetPatchSetup(t, configFilePath)
+
+			project, patchConfig, err := GetPatchedProject(ctx, patchTestConfig, p, token)
+			require.NoError(t, err)
+			assert.NotNil(t, project)
+
+			test(t, p, patchConfig)
 		})
+	}
+}
+
+func TestGetFullPatchParams(t *testing.T) {
+	require.NoError(t, db.ClearCollections(ProjectRefCollection, ProjectAliasCollection, patch.Collection))
+	p := patch.Patch{
+		Id:      patch.NewId("aaaaaaaaaaff001122334455"),
+		Project: "p1",
+		Alias:   "test_alias",
+		Parameters: []patch.Parameter{
+			{
+				Key:   "a",
+				Value: "3",
+			},
+			{
+				Key:   "c",
+				Value: "4",
+			},
+		},
+	}
+	alias := ProjectAlias{
+		ProjectID: "p1",
+		Alias:     "test_alias",
+		Variant:   "ubuntu",
+		Task:      "subcommand",
+		Parameters: []patch.Parameter{
+			{
+				Key:   "a",
+				Value: "1",
+			},
+			{
+				Key:   "b",
+				Value: "2",
+			},
+		},
+	}
+	pRef := ProjectRef{
+		Id: "p1",
+	}
+	require.NoError(t, pRef.Insert())
+	require.NoError(t, p.Insert())
+	require.NoError(t, alias.Upsert())
+
+	params, err := getFullPatchParams(&p)
+	require.NoError(t, err)
+	require.Len(t, params, 3)
+	for _, param := range params {
+		if param.Key == "a" {
+			assert.Equal(t, param.Value, "3")
+		}
+	}
 }
 
 func TestMakePatchedConfig(t *testing.T) {
@@ -325,7 +513,7 @@ func TestMakePatchedConfig(t *testing.T) {
 
 		Convey("the config should be patched correctly", func() {
 			remoteConfigPath := filepath.Join("config", "evergreen.yml")
-			fileBytes, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "patch.diff"))
+			fileBytes, err := os.ReadFile(filepath.Join(cwd, "testdata", "patch.diff"))
 			So(err, ShouldBeNil)
 			// update patch with remove config path variable
 			diffString := fmt.Sprintf(string(fileBytes),
@@ -344,7 +532,7 @@ func TestMakePatchedConfig(t *testing.T) {
 					},
 				}},
 			}
-			projectBytes, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "project.config"))
+			projectBytes, err := os.ReadFile(filepath.Join(cwd, "testdata", "project.config"))
 			So(err, ShouldBeNil)
 			projectData, err := MakePatchedConfig(ctx, env, p, remoteConfigPath, string(projectBytes))
 			So(err, ShouldBeNil)
@@ -357,7 +545,7 @@ func TestMakePatchedConfig(t *testing.T) {
 		})
 		Convey("an empty base config should be patched correctly", func() {
 			remoteConfigPath := filepath.Join("model", "testdata", "project2.config")
-			fileBytes, err := ioutil.ReadFile(filepath.Join(cwd, "testdata", "project.diff"))
+			fileBytes, err := os.ReadFile(filepath.Join(cwd, "testdata", "project.diff"))
 			So(err, ShouldBeNil)
 			p := &patch.Patch{
 				Patches: []patch.ModulePatch{{
@@ -413,206 +601,15 @@ func shouldContainPair(actual interface{}, expected ...interface{}) string {
 	return fmt.Sprintf("Expected list to contain pair '%v', but it didn't", expectedPair)
 }
 
-func TestIncludeDependencies(t *testing.T) {
-	Convey("With a project task config with cross-variant dependencies", t, func() {
-		parserProject := &ParserProject{
-			Tasks: []parserTask{
-				{Name: "t1"},
-				{Name: "t2", DependsOn: parserDependencies{{TaskSelector: taskSelector{Name: "t1"}}}},
-				{Name: "t3"},
-				{Name: "t4", Patchable: new(bool)},
-				{Name: "t5", DependsOn: parserDependencies{{TaskSelector: taskSelector{Name: "t4"}}}},
-			},
-			BuildVariants: []parserBV{
-				{Name: "v1", Tasks: []parserBVTaskUnit{{Name: "t1"}, {Name: "t2"}}},
-				{Name: "v2", Tasks: []parserBVTaskUnit{
-					{Name: "t3", DependsOn: parserDependencies{
-						{TaskSelector: taskSelector{Name: "t2", Variant: &variantSelector{StringSelector: "v1"}}},
-					}},
-					{Name: "t4"},
-					{Name: "t5"},
-				}},
-			},
-		}
-		p, err := TranslateProject(parserProject)
-		So(err, ShouldBeNil)
-		So(p, ShouldNotBeNil)
-
-		Convey("a patch against v1/t1 should remain unchanged", func() {
-			pairs, _ := IncludeDependencies(p, []TVPair{{"v1", "t1"}}, evergreen.PatchVersionRequester)
-			So(len(pairs), ShouldEqual, 1)
-			So(pairs[0], ShouldResemble, TVPair{"v1", "t1"})
-		})
-
-		Convey("a patch against v1/t2 should add t1", func() {
-			pairs, _ := IncludeDependencies(p, []TVPair{{"v1", "t2"}}, evergreen.PatchVersionRequester)
-			So(len(pairs), ShouldEqual, 2)
-			So(pairs, shouldContainPair, TVPair{"v1", "t2"})
-			So(pairs, shouldContainPair, TVPair{"v1", "t1"})
-		})
-
-		Convey("a patch against v2/t3 should add t1,t2, and v1", func() {
-			pairs, _ := IncludeDependencies(p, []TVPair{{"v2", "t3"}}, evergreen.PatchVersionRequester)
-			So(len(pairs), ShouldEqual, 3)
-			So(pairs, shouldContainPair, TVPair{"v1", "t2"})
-			So(pairs, shouldContainPair, TVPair{"v1", "t1"})
-			So(pairs, shouldContainPair, TVPair{"v2", "t3"})
-		})
-
-		Convey("a patch against v2/t5 should be pruned, since its dependency is not patchable", func() {
-			pairs, _ := IncludeDependencies(p, []TVPair{{"v2", "t5"}}, evergreen.PatchVersionRequester)
-			So(len(pairs), ShouldEqual, 0)
-
-			pairs, _ = IncludeDependencies(p, []TVPair{{"v2", "t5"}}, evergreen.RepotrackerVersionRequester)
-			So(len(pairs), ShouldEqual, 2)
-		})
-	})
-
-	Convey("With a project task config with * selectors", t, func() {
-		parserProject := &ParserProject{
-			Tasks: []parserTask{
-				{Name: "t1"},
-				{Name: "t2"},
-				{Name: "t3", DependsOn: parserDependencies{{TaskSelector: taskSelector{Name: AllDependencies}}}},
-				{Name: "t4", DependsOn: parserDependencies{
-					{TaskSelector: taskSelector{
-						Name: "t3", Variant: &variantSelector{StringSelector: AllVariants},
-					}},
-				}},
-				{Name: "t5", DependsOn: parserDependencies{
-					{TaskSelector: taskSelector{
-						Name: AllDependencies, Variant: &variantSelector{StringSelector: AllVariants},
-					}},
-				}},
-			},
-			BuildVariants: []parserBV{
-				{Name: "v1", Tasks: []parserBVTaskUnit{{Name: "t1"}, {Name: "t2"}, {Name: "t3"}}},
-				{Name: "v2", Tasks: []parserBVTaskUnit{{Name: "t1"}, {Name: "t2"}, {Name: "t3"}}},
-				{Name: "v3", Tasks: []parserBVTaskUnit{{Name: "t4"}}},
-				{Name: "v4", Tasks: []parserBVTaskUnit{{Name: "t5"}}},
-			},
-		}
-		p, err := TranslateProject(parserProject)
-		So(err, ShouldBeNil)
-		So(p, ShouldNotBeNil)
-
-		Convey("a patch against v1/t3 should include t2 and t1", func() {
-			pairs, _ := IncludeDependencies(p, []TVPair{{"v1", "t3"}}, evergreen.PatchVersionRequester)
-			So(len(pairs), ShouldEqual, 3)
-			So(pairs, shouldContainPair, TVPair{"v1", "t2"})
-			So(pairs, shouldContainPair, TVPair{"v1", "t1"})
-			So(pairs, shouldContainPair, TVPair{"v1", "t3"})
-		})
-
-		Convey("a patch against v3/t4 should include v1, v2, t3, t2, and t1", func() {
-			pairs, _ := IncludeDependencies(p, []TVPair{{"v3", "t4"}}, evergreen.PatchVersionRequester)
-			So(len(pairs), ShouldEqual, 7)
-
-			So(pairs, shouldContainPair, TVPair{"v3", "t4"})
-			// requires t3 on the other variants
-			So(pairs, shouldContainPair, TVPair{"v1", "t3"})
-			So(pairs, shouldContainPair, TVPair{"v2", "t3"})
-
-			// t3 requires all the others
-			So(pairs, shouldContainPair, TVPair{"v1", "t2"})
-			So(pairs, shouldContainPair, TVPair{"v1", "t1"})
-			So(pairs, shouldContainPair, TVPair{"v2", "t2"})
-			So(pairs, shouldContainPair, TVPair{"v2", "t1"})
-		})
-
-		Convey("a patch against v4/t5 should include v1, v2, v3, t4, t3, t2, and t1", func() {
-			pairs, _ := IncludeDependencies(p, []TVPair{{"v4", "t5"}}, evergreen.PatchVersionRequester)
-			So(len(pairs), ShouldEqual, 8)
-			So(pairs, shouldContainPair, TVPair{"v4", "t5"})
-			So(pairs, shouldContainPair, TVPair{"v1", "t1"})
-			So(pairs, shouldContainPair, TVPair{"v1", "t2"})
-			So(pairs, shouldContainPair, TVPair{"v1", "t3"})
-			So(pairs, shouldContainPair, TVPair{"v2", "t1"})
-			So(pairs, shouldContainPair, TVPair{"v2", "t2"})
-			So(pairs, shouldContainPair, TVPair{"v2", "t3"})
-			So(pairs, shouldContainPair, TVPair{"v3", "t4"})
-		})
-	})
-
-	Convey("With a project task config with cyclical requirements", t, func() {
-		all := []parserBVTaskUnit{{Name: "1"}, {Name: "2"}, {Name: "3"}}
-		parserProject := &ParserProject{
-			Tasks: []parserTask{
-				{Name: "1", DependsOn: parserDependencies{{TaskSelector: taskSelector{Name: "2"}}, {TaskSelector: taskSelector{Name: "3"}}}},
-				{Name: "2", DependsOn: parserDependencies{{TaskSelector: taskSelector{Name: "1"}}, {TaskSelector: taskSelector{Name: "3"}}}},
-				{Name: "3", DependsOn: parserDependencies{{TaskSelector: taskSelector{Name: "2"}}, {TaskSelector: taskSelector{Name: "1"}}}},
-			},
-			BuildVariants: []parserBV{
-				{Name: "v1", Tasks: all},
-				{Name: "v2", Tasks: all},
-			},
-		}
-
-		p, err := TranslateProject(parserProject)
-		So(err, ShouldBeNil)
-		So(p, ShouldNotBeNil)
-
-		Convey("all tasks should be scheduled no matter which is initially added", func() {
-			Convey("for '1'", func() {
-				pairs, _ := IncludeDependencies(p, []TVPair{{"v1", "1"}}, evergreen.PatchVersionRequester)
-				So(len(pairs), ShouldEqual, 3)
-				So(pairs, shouldContainPair, TVPair{"v1", "1"})
-				So(pairs, shouldContainPair, TVPair{"v1", "2"})
-				So(pairs, shouldContainPair, TVPair{"v1", "3"})
-			})
-			Convey("for '2'", func() {
-				pairs, _ := IncludeDependencies(p, []TVPair{{"v1", "2"}, {"v2", "2"}}, evergreen.PatchVersionRequester)
-				So(len(pairs), ShouldEqual, 6)
-				So(pairs, shouldContainPair, TVPair{"v1", "1"})
-				So(pairs, shouldContainPair, TVPair{"v1", "2"})
-				So(pairs, shouldContainPair, TVPair{"v1", "3"})
-				So(pairs, shouldContainPair, TVPair{"v2", "1"})
-				So(pairs, shouldContainPair, TVPair{"v2", "2"})
-				So(pairs, shouldContainPair, TVPair{"v2", "3"})
-			})
-			Convey("for '3'", func() {
-				pairs, _ := IncludeDependencies(p, []TVPair{{"v2", "3"}}, evergreen.PatchVersionRequester)
-				So(len(pairs), ShouldEqual, 3)
-				So(pairs, shouldContainPair, TVPair{"v2", "1"})
-				So(pairs, shouldContainPair, TVPair{"v2", "2"})
-				So(pairs, shouldContainPair, TVPair{"v2", "3"})
-			})
-		})
-	})
-	Convey("With a task that depends on task groups", t, func() {
-		parserProject := &ParserProject{
-			Tasks: []parserTask{
-				{Name: "a", DependsOn: parserDependencies{{TaskSelector: taskSelector{Name: "*", Variant: &variantSelector{StringSelector: "*"}}}}},
-				{Name: "b"},
-			},
-			TaskGroups: []parserTaskGroup{
-				{Name: "task-group", Tasks: []string{"b"}},
-			},
-			BuildVariants: []parserBV{
-				{Name: "variant-with-group", Tasks: []parserBVTaskUnit{{Name: "task-group"}}},
-				{Name: "initial-variant", Tasks: []parserBVTaskUnit{{Name: "a"}}},
-			},
-		}
-		p, err := TranslateProject(parserProject)
-		So(err, ShouldBeNil)
-		So(p, ShouldNotBeNil)
-
-		initDep := TVPair{TaskName: "a", Variant: "initial-variant"}
-		pairs, _ := IncludeDependencies(p, []TVPair{initDep}, evergreen.PatchVersionRequester)
-		So(pairs, ShouldHaveLength, 2)
-		So(initDep, ShouldBeIn, pairs)
-	})
-}
-
 func TestVariantTasksToTVPairs(t *testing.T) {
 	assert := assert.New(t)
 
 	input := []patch.VariantTasks{
-		patch.VariantTasks{
+		{
 			Variant: "variant",
 			Tasks:   []string{"task1", "task2", "task3"},
 			DisplayTasks: []patch.DisplayTask{
-				patch.DisplayTask{
+				{
 					Name: "displaytask1",
 				},
 			},
@@ -659,13 +656,13 @@ func TestAddNewPatch(t *testing.T) {
 	proj := &Project{
 		Identifier: "project",
 		BuildVariants: []BuildVariant{
-			BuildVariant{
+			{
 				Name: "variant",
 				Tasks: []BuildVariantTaskUnit{
-					{Name: "task1"}, {Name: "task2"}, {Name: "task3"},
+					{Name: "task1", Variant: "variant"}, {Name: "task2", Variant: "variant"}, {Name: "task3", Variant: "variant"},
 				},
 				DisplayTasks: []patch.DisplayTask{
-					patch.DisplayTask{
+					{
 						Name:      "displaytask1",
 						ExecTasks: []string{"task1", "task2"},
 					},
@@ -674,28 +671,37 @@ func TestAddNewPatch(t *testing.T) {
 			},
 		},
 		Tasks: []ProjectTask{
-			ProjectTask{Name: "task1"}, ProjectTask{Name: "task2"}, ProjectTask{Name: "task3"},
+			{Name: "task1"}, {Name: "task2"}, {Name: "task3"},
 		},
 	}
 	tasks := VariantTasksToTVPairs([]patch.VariantTasks{
-		patch.VariantTasks{
+		{
 			Variant: "variant",
 			Tasks:   []string{"task1", "task2", "task3"},
 			DisplayTasks: []patch.DisplayTask{
-				patch.DisplayTask{
+				{
 					Name: "displaytask1",
 				},
 			},
 		},
 	})
-	_, err := addNewBuilds(context.Background(), specificActivationInfo{}, v, proj, tasks, nil, p.SyncAtEndOpts, &ref, "")
+	creationInfo := TaskCreationInfo{
+		Project:        proj,
+		ProjectRef:     &ref,
+		Version:        v,
+		Pairs:          tasks,
+		ActivationInfo: specificActivationInfo{},
+		SyncAtEndOpts:  p.SyncAtEndOpts,
+		GeneratedBy:    "",
+	}
+	_, err := addNewBuilds(context.Background(), creationInfo, nil)
 	assert.NoError(err)
 	dbBuild, err := build.FindOne(db.Q{})
 	assert.NoError(err)
 	assert.NotNil(dbBuild)
 	assert.Len(dbBuild.Tasks, 2)
 
-	_, err = addNewTasks(context.Background(), specificActivationInfo{}, v, proj, &ref, tasks, []build.Build{*dbBuild}, p.SyncAtEndOpts, "")
+	_, err = addNewTasks(context.Background(), creationInfo, []build.Build{*dbBuild})
 	assert.NoError(err)
 	dbTasks, err := task.FindAll(db.Query(task.ByBuildId(dbBuild.Id)))
 	assert.NoError(err)
@@ -739,13 +745,13 @@ func TestAddNewPatchWithMissingBaseVersion(t *testing.T) {
 	proj := &Project{
 		Identifier: "project",
 		BuildVariants: []BuildVariant{
-			BuildVariant{
+			{
 				Name: "variant",
 				Tasks: []BuildVariantTaskUnit{
-					{Name: "task1"}, {Name: "task2"}, {Name: "task3"},
+					{Name: "task1", Variant: "variant"}, {Name: "task2", Variant: "variant"}, {Name: "task3", Variant: "variant"},
 				},
 				DisplayTasks: []patch.DisplayTask{
-					patch.DisplayTask{
+					{
 						Name:      "displaytask1",
 						ExecTasks: []string{"task1", "task2"},
 					},
@@ -754,28 +760,37 @@ func TestAddNewPatchWithMissingBaseVersion(t *testing.T) {
 			},
 		},
 		Tasks: []ProjectTask{
-			ProjectTask{Name: "task1"}, ProjectTask{Name: "task2"}, ProjectTask{Name: "task3"},
+			{Name: "task1"}, {Name: "task2"}, {Name: "task3"},
 		},
 	}
 	tasks := VariantTasksToTVPairs([]patch.VariantTasks{
-		patch.VariantTasks{
+		{
 			Variant: "variant",
 			Tasks:   []string{"task1", "task2", "task3"},
 			DisplayTasks: []patch.DisplayTask{
-				patch.DisplayTask{
+				{
 					Name: "displaytask1",
 				},
 			},
 		},
 	})
-	_, err := addNewBuilds(context.Background(), specificActivationInfo{}, v, proj, tasks, nil, p.SyncAtEndOpts, &ref, "")
+	creationInfo := TaskCreationInfo{
+		Project:        proj,
+		ProjectRef:     &ref,
+		Version:        v,
+		Pairs:          tasks,
+		ActivationInfo: specificActivationInfo{},
+		SyncAtEndOpts:  p.SyncAtEndOpts,
+		GeneratedBy:    "",
+	}
+	_, err := addNewBuilds(context.Background(), creationInfo, nil)
 	assert.NoError(err)
 	dbBuild, err := build.FindOne(db.Q{})
 	assert.NoError(err)
 	assert.NotNil(dbBuild)
 	assert.Len(dbBuild.Tasks, 2)
 
-	_, err = addNewTasks(context.Background(), specificActivationInfo{}, v, proj, &ref, tasks, []build.Build{*dbBuild}, p.SyncAtEndOpts, "")
+	_, err = addNewTasks(context.Background(), creationInfo, []build.Build{*dbBuild})
 	assert.NoError(err)
 	dbTasks, err := task.FindAll(db.Query(task.ByBuildId(dbBuild.Id)))
 	assert.NoError(err)
@@ -884,15 +899,14 @@ func TestRetryCommitQueueItems(t *testing.T) {
 			require.Len(t, cq.Queue, 1)
 			assert.Equal(t, "123", cq.Queue[0].Issue)
 		},
-		"UnstartedPatch": func(*testing.T) {
+		"FinishedPatch": func(*testing.T) {
 			assert.NoError(t, projectRef.Insert())
 
-			// not started but terminated within time range
 			p := patch.Patch{
 				Id:         mgobson.NewObjectId(),
 				Project:    projectRef.Id,
 				Githash:    patchedRevision,
-				StartTime:  time.Time{},
+				StartTime:  startTime.Add(-30 * time.Minute), // started out of range
 				FinishTime: startTime.Add(30 * time.Minute),
 				Status:     evergreen.PatchFailed,
 				Alias:      evergreen.CommitQueueAlias,
@@ -925,19 +939,6 @@ func TestRetryCommitQueueItems(t *testing.T) {
 					Author:      "me",
 					GithubPatchData: thirdparty.GithubPatch{
 						PRNumber: 123,
-					},
-					Patches: []patch.ModulePatch{
-						{
-							Githash:    "revision",
-							ModuleName: "name",
-							PatchSet: patch.PatchSet{
-								Patch: "456",
-								Summary: []thirdparty.Summary{
-									{Name: configFilePath, Additions: 4, Deletions: 80},
-									{Name: "random.txt", Additions: 6, Deletions: 0},
-								},
-							},
-						},
 					},
 				},
 				{ // within time frame, not failed
@@ -999,4 +1000,114 @@ func TestAddDisplayTasksToPatchReq(t *testing.T) {
 	assert.Len(t, req.VariantsTasks[0].Tasks, 1)
 	assert.Equal(t, "t1", req.VariantsTasks[0].Tasks[0])
 	assert.Len(t, req.VariantsTasks[0].DisplayTasks, 2)
+}
+
+func TestAbortPatchesWithGithubPatchData(t *testing.T) {
+	defer func() {
+		assert.NoError(t, db.ClearCollections(commitqueue.Collection, patch.Collection, task.Collection, VersionCollection))
+	}()
+	for tName, tCase := range map[string]func(t *testing.T, p *patch.Patch, v *Version, tsk *task.Task){
+		"AbortsGitHubPRPatch": func(t *testing.T, p *patch.Patch, v *Version, tsk *task.Task) {
+			require.NoError(t, p.Insert())
+			require.NoError(t, tsk.Insert())
+
+			require.NoError(t, AbortPatchesWithGithubPatchData(time.Now(), false, "", p.GithubPatchData.BaseOwner, p.GithubPatchData.BaseRepo, p.GithubPatchData.PRNumber))
+
+			dbTask, err := task.FindOneId(tsk.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbTask)
+			assert.True(t, dbTask.Aborted)
+		},
+		"IgnoresGitHubPRPatchCreatedAfterTimestamp": func(t *testing.T, p *patch.Patch, v *Version, tsk *task.Task) {
+			p.CreateTime = time.Now()
+			require.NoError(t, p.Insert())
+			require.NoError(t, tsk.Insert())
+
+			require.NoError(t, AbortPatchesWithGithubPatchData(time.Now().Add(-time.Hour), false, "", p.GithubPatchData.BaseOwner, p.GithubPatchData.BaseRepo, p.GithubPatchData.PRNumber))
+
+			dbTask, err := task.FindOneId(tsk.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbTask)
+			assert.False(t, dbTask.Aborted)
+		},
+		"AbortsNonMergingCommitQueueItemForGitHubPR": func(t *testing.T, p *patch.Patch, v *Version, tsk *task.Task) {
+			p.Alias = evergreen.CommitQueueAlias
+			require.NoError(t, p.Insert())
+			tsk.CommitQueueMerge = true
+			tsk.Status = evergreen.TaskUndispatched
+			require.NoError(t, tsk.Insert())
+			cq := commitqueue.CommitQueue{
+				ProjectID: p.Project,
+				Queue: []commitqueue.CommitQueueItem{{
+					Issue:   p.Id.Hex(),
+					PatchId: p.Id.Hex(),
+					Version: v.Id,
+				}},
+			}
+			require.NoError(t, commitqueue.InsertQueue(&cq))
+
+			require.NoError(t, AbortPatchesWithGithubPatchData(time.Now(), false, "", p.GithubPatchData.BaseOwner, p.GithubPatchData.BaseRepo, p.GithubPatchData.PRNumber))
+
+			dbCommitQueue, err := commitqueue.FindOneId(cq.ProjectID)
+			require.NoError(t, err)
+			require.NotZero(t, dbCommitQueue)
+			assert.Empty(t, dbCommitQueue.Queue)
+		},
+		"SkipMergingCommitQueueItemForGitHubPR": func(t *testing.T, p *patch.Patch, v *Version, tsk *task.Task) {
+			p.Alias = evergreen.CommitQueueAlias
+			require.NoError(t, p.Insert())
+			tsk.CommitQueueMerge = true
+			tsk.Status = evergreen.TaskStarted
+			require.NoError(t, tsk.Insert())
+			cq := commitqueue.CommitQueue{
+				ProjectID: p.Project,
+				Queue: []commitqueue.CommitQueueItem{{
+					Issue:   p.Id.Hex(),
+					PatchId: p.Id.Hex(),
+					Version: v.Id,
+				}},
+			}
+			require.NoError(t, commitqueue.InsertQueue(&cq))
+
+			require.NoError(t, AbortPatchesWithGithubPatchData(time.Now(), false, "", p.GithubPatchData.BaseOwner, p.GithubPatchData.BaseRepo, p.GithubPatchData.PRNumber))
+
+			dbCommitQueue, err := commitqueue.FindOneId(cq.ProjectID)
+			require.NoError(t, err)
+			require.NotZero(t, dbCommitQueue)
+			assert.Len(t, dbCommitQueue.Queue, 1)
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			require.NoError(t, db.ClearCollections(commitqueue.Collection, patch.Collection, task.Collection, VersionCollection))
+			id := mgobson.NewObjectId()
+			v := Version{
+				Id:        id.Hex(),
+				Status:    evergreen.VersionStarted,
+				Activated: utility.TruePtr(),
+			}
+			require.NoError(t, v.Insert())
+			p := patch.Patch{
+				Id:         id,
+				Version:    v.Id,
+				Status:     evergreen.PatchStarted,
+				Activated:  true,
+				Project:    "project",
+				CreateTime: time.Now().Add(-time.Hour),
+				GithubPatchData: thirdparty.GithubPatch{
+					BaseOwner: "owner",
+					BaseRepo:  "repo",
+					PRNumber:  12345,
+				},
+			}
+			tsk := task.Task{
+				Id:        "task",
+				Version:   v.Id,
+				Status:    evergreen.TaskStarted,
+				Project:   p.Project,
+				Activated: true,
+			}
+
+			tCase(t, &p, &v, &tsk)
+		})
+	}
 }

@@ -98,7 +98,7 @@ func (r *processRegistry) getJob(taskId string) (*Job, error) {
 		var err error
 		j, err = NewJob(taskId)
 		if err != nil {
-			return nil, errors.Wrapf(err, "problem creating job object for %s", taskId)
+			return nil, errors.Wrapf(err, "creating job object for task '%s'", taskId)
 		}
 
 		r.jobs[taskId] = j
@@ -120,7 +120,7 @@ func (r *processRegistry) removeJob(taskId string) error {
 
 	var err error
 	defer func() {
-		err = errors.Wrapf(job.Close(), "problem closing job for task %s", taskId)
+		err = errors.Wrapf(job.Close(), "closing job object for task '%s'", taskId)
 	}()
 
 	delete(r.jobs, taskId)
@@ -141,14 +141,14 @@ func (r *processRegistry) removeJob(taskId string) error {
 func TrackProcess(taskId string, pid int, logger grip.Journaler) {
 	job, err := processMapping.getJob(taskId)
 	if err != nil {
-		logger.Errorf("failed creating job object: %v", err)
+		logger.Errorf("Failed to get job object: %s", err)
 		return
 	}
 
-	logger.Infof("tracking process with pid %d", pid)
+	logger.Infof("Tracking process with PID %d.", pid)
 
 	if err = job.AssignProcess(uint(pid)); err != nil {
-		logger.Errorf("failed assigning process %d to job object: %v", pid, err)
+		logger.Errorf("Failed assigning process with PID %d to job object: %s.", pid, err)
 		return
 	}
 }
@@ -163,12 +163,11 @@ func KillSpawnedProcs(ctx context.Context, key, workingDir string, logger grip.J
 	}
 
 	if err := job.Terminate(0); err != nil {
-		logger.Errorf("terminating job object [%s] failed: %v", key, err)
-		return errors.WithStack(err)
+		logger.Errorf("Failed to terminate job object '%s': %s.", key, err)
+		return errors.Wrapf(err, "terminating job object '%s'", key)
 	}
 
-	return errors.Wrap(processMapping.removeJob(key),
-		"problem removing job object from internal evergreen tracking mechanism")
+	return errors.Wrapf(processMapping.removeJob(key), "removing job object '%s' from internal Evergreen tracking mechanism", key)
 }
 
 ///////////////////////////////////////////////////////////////////////////////////////////
@@ -229,20 +228,20 @@ func NewJob(name string) (*Job, error) {
 	return &Job{handle: hJob}, nil
 }
 
-func (self *Job) AssignProcess(pid uint) error {
+func (j *Job) AssignProcess(pid uint) error {
 	hProcess, err := OpenProcess(PROCESS_ALL_ACCESS, false, uint32(pid))
 	if err != nil {
 		return NewWindowsError("OpenProcess", err)
 	}
 	defer CloseHandle(hProcess)
-	if err := AssignProcessToJobObject(self.handle, hProcess); err != nil {
+	if err := AssignProcessToJobObject(j.handle, hProcess); err != nil {
 		return NewWindowsError("AssignProcessToJobObject", err)
 	}
 	return nil
 }
 
-func (self *Job) Terminate(exitCode uint) error {
-	if err := TerminateJobObject(self.handle, uint32(exitCode)); err != nil {
+func (j *Job) Terminate(exitCode uint) error {
+	if err := TerminateJobObject(j.handle, uint32(exitCode)); err != nil {
 		return NewWindowsError("TerminateJobObject", err)
 	}
 	return nil
@@ -269,12 +268,12 @@ func OpenProcess(desiredAccess uint32, inheritHandle bool, processId uint32) (sy
 	return syscall.Handle(r1), nil
 }
 
-func (self *Job) Close() error {
-	if self.handle != 0 {
-		if err := CloseHandle(self.handle); err != nil {
+func (j *Job) Close() error {
+	if j.handle != 0 {
+		if err := CloseHandle(j.handle); err != nil {
 			return NewWindowsError("CloseHandle", err)
 		}
-		self.handle = 0
+		j.handle = 0
 	}
 	return nil
 }
@@ -358,14 +357,14 @@ func NewWindowsError(functionName string, innerError error) *WindowsError {
 	return &WindowsError{functionName, innerError}
 }
 
-func (self *WindowsError) FunctionName() string {
-	return self.functionName
+func (we *WindowsError) FunctionName() string {
+	return we.functionName
 }
 
-func (self *WindowsError) InnerError() error {
-	return self.innerError
+func (we *WindowsError) InnerError() error {
+	return we.innerError
 }
 
-func (self *WindowsError) Error() string {
-	return fmt.Sprintf("gowin32: %s failed: %v", self.functionName, self.innerError)
+func (we *WindowsError) Error() string {
+	return fmt.Sprintf("gowin32: %s failed: %v", we.functionName, we.innerError)
 }

@@ -20,7 +20,7 @@ func TestProjectEventSuite(t *testing.T) {
 }
 
 func (s *ProjectEventSuite) SetupTest() {
-	s.Require().NoError(db.ClearCollections(event.AllLogCollection))
+	s.Require().NoError(db.ClearCollections(event.EventCollection))
 }
 
 const (
@@ -31,11 +31,12 @@ const (
 func getMockProjectSettings() ProjectSettings {
 	return ProjectSettings{
 		ProjectRef: ProjectRef{
-			Owner:   "admin",
-			Enabled: utility.TruePtr(),
-			Private: utility.TruePtr(),
-			Id:      projectId,
-			Admins:  []string{},
+			Owner:          "admin",
+			Enabled:        true,
+			Private:        utility.TruePtr(),
+			Id:             projectId,
+			Admins:         []string{},
+			PeriodicBuilds: nil,
 		},
 		GithubHooksEnabled: true,
 		Vars: ProjectVars{
@@ -45,11 +46,12 @@ func getMockProjectSettings() ProjectSettings {
 			AdminOnlyVars: map[string]bool{},
 		},
 		Aliases: []ProjectAlias{ProjectAlias{
-			ID:        mgobson.ObjectIdHex("5bedc72ee4055d31f0340b1d"),
-			ProjectID: projectId,
-			Alias:     "alias1",
-			Variant:   "ubuntu",
-			Task:      "subcommand",
+			ID:          mgobson.ObjectIdHex("5bedc72ee4055d31f0340b1d"),
+			ProjectID:   projectId,
+			Alias:       "alias1",
+			Variant:     "ubuntu",
+			Task:        "subcommand",
+			Description: "Description Here",
 		},
 		},
 		Subscriptions: []event.Subscription{event.Subscription{
@@ -68,7 +70,7 @@ func getMockProjectSettings() ProjectSettings {
 func (s *ProjectEventSuite) TestModifyProjectEvent() {
 	before := getMockProjectSettings()
 	after := getMockProjectSettings()
-	after.ProjectRef.Enabled = utility.FalsePtr()
+	after.ProjectRef.Enabled = false
 
 	s.NoError(LogProjectModified(projectId, username, &before, &after))
 
@@ -89,6 +91,7 @@ func (s *ProjectEventSuite) TestModifyProjectEvent() {
 	s.Empty(before.ProjectRef.Triggers, eventData.Before.ProjectRef.Triggers)
 	s.Equal(before.ProjectRef.Id, eventData.Before.ProjectRef.Id)
 	s.Equal(before.ProjectRef.Admins, eventData.Before.ProjectRef.Admins)
+	s.True(eventData.Before.PeriodicBuildsDefault)
 	s.Equal(before.GithubHooksEnabled, eventData.Before.GithubHooksEnabled)
 	s.Equal(before.Vars, eventData.Before.Vars)
 	s.Equal(before.Aliases, eventData.Before.Aliases)

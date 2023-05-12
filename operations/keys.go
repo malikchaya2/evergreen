@@ -2,7 +2,7 @@ package operations
 
 import (
 	"context"
-	"io/ioutil"
+	"os"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/utility"
@@ -15,7 +15,7 @@ func Keys() cli.Command {
 	return cli.Command{
 		Name:    "keys",
 		Aliases: []string{"key", "pubkey"},
-		Usage:   "manage your public keys with the evergreen service",
+		Usage:   "manage your public keys with the Evergreen service",
 		Subcommands: []cli.Command{
 			keysAdd(),
 			keysList(),
@@ -63,15 +63,18 @@ func keysAdd() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
 
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
-			keyFileContents, err := ioutil.ReadFile(keyFile)
+			keyFileContents, err := os.ReadFile(keyFile)
 			if err != nil {
-				return errors.Wrap(err, "can't read public key file")
+				return errors.Wrapf(err, "reading public key file '%s'", keyFile)
 			}
 
 			pubKey := string(keyFileContents)
@@ -102,15 +105,18 @@ func keysList() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
 
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, false)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			keys, err := client.GetCurrentUsersKeys(ctx)
 			if err != nil {
-				return errors.Wrap(err, "problem fetching keys")
+				return errors.Wrap(err, "fetching keys")
 			}
 
 			if len(keys) == 0 {
@@ -150,16 +156,19 @@ func keysDelete() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
 
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			keyName := c.Args().Get(0)
 
 			if err := client.DeletePublicKey(ctx, keyName); err != nil {
-				return errors.Wrap(err, "problem deleting public key")
+				return errors.Wrap(err, "deleting public key")
 			}
 
 			grip.Infof("Successfully deleted key: '%s'\n", keyName)

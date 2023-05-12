@@ -12,7 +12,7 @@ var (
 	ConfigDocID      = "global"
 )
 
-//nolint: deadcode, unused
+//nolint:unused
 var (
 	idKey                 = bsonutil.MustHaveTag(Settings{}, "Id")
 	bannerKey             = bsonutil.MustHaveTag(Settings{}, "Banner")
@@ -20,6 +20,7 @@ var (
 	serviceFlagsKey       = bsonutil.MustHaveTag(Settings{}, "ServiceFlags")
 	configDirKey          = bsonutil.MustHaveTag(Settings{}, "ConfigDir")
 	apiUrlKey             = bsonutil.MustHaveTag(Settings{}, "ApiUrl")
+	awsInstanceRoleKey    = bsonutil.MustHaveTag(Settings{}, "AWSInstanceRole")
 	cedarKey              = bsonutil.MustHaveTag(Settings{}, "Cedar")
 	clientBinariesDirKey  = bsonutil.MustHaveTag(Settings{}, "ClientBinariesDir")
 	hostJasperKey         = bsonutil.MustHaveTag(Settings{}, "HostJasper")
@@ -93,6 +94,7 @@ var (
 	backgroundCleanupDisabledKey       = bsonutil.MustHaveTag(ServiceFlags{}, "BackgroundCleanupDisabled")
 	cloudCleanupDisabledKey            = bsonutil.MustHaveTag(ServiceFlags{}, "CloudCleanupDisabled")
 	containerConfigurationsDisabledKey = bsonutil.MustHaveTag(ServiceFlags{}, "ContainerConfigurationsDisabled")
+	legacyUIPublicAccessDisabledKey    = bsonutil.MustHaveTag(ServiceFlags{}, "LegacyUIPublicAccessDisabled")
 	unrecognizedPodCleanupDisabledKey  = bsonutil.MustHaveTag(ServiceFlags{}, "UnrecognizedPodCleanupDisabled")
 
 	// ContainerPoolsConfig keys
@@ -107,13 +109,13 @@ var (
 	hostInitMaxTotalDynamicHostsKey = bsonutil.MustHaveTag(HostInitConfig{}, "MaxTotalDynamicHosts")
 	hostInitS3BaseURLKey            = bsonutil.MustHaveTag(HostInitConfig{}, "S3BaseURL")
 
-	podInitS3BaseURLKey              = bsonutil.MustHaveTag(PodInitConfig{}, "S3BaseURL")
-	podInitMaxParallelPodRequestsKey = bsonutil.MustHaveTag(PodInitConfig{}, "MaxParallelPodRequests")
-
 	// Spawnhost keys
 	unexpirableHostsPerUserKey   = bsonutil.MustHaveTag(SpawnHostConfig{}, "UnexpirableHostsPerUser")
 	unexpirableVolumesPerUserKey = bsonutil.MustHaveTag(SpawnHostConfig{}, "UnexpirableVolumesPerUser")
 	spawnhostsPerUserKey         = bsonutil.MustHaveTag(SpawnHostConfig{}, "SpawnHostsPerUser")
+
+	tracerEnabledKey        = bsonutil.MustHaveTag(TracerConfig{}, "Enabled")
+	tracerCollectorEndpoint = bsonutil.MustHaveTag(TracerConfig{}, "CollectorEndpoint")
 )
 
 func byId(id string) bson.M {

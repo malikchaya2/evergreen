@@ -1,7 +1,6 @@
 package operations
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -119,12 +118,10 @@ func TestSetDefaultAlias(t *testing.T) {
 }
 
 func TestNewClientSettings(t *testing.T) {
-	tmpdir, err := ioutil.TempDir("", "newclientsettings")
-	assert.NoError(t, err)
-	defer os.RemoveAll(tmpdir)
+	tmpdir := t.TempDir()
 
 	globalTestConfigPath := filepath.Join(tmpdir, ".evergreen.test.yml")
-	err = ioutil.WriteFile(globalTestConfigPath,
+	err := os.WriteFile(globalTestConfigPath,
 		[]byte(`api_server_host: https://some.evergreen.api
 ui_server_host: https://some.evergreen.ui
 api_key: not-a-valid-token
@@ -132,9 +129,9 @@ user: myusername
 projects:
 - name: my-primary-project
   default: true
-  tasks: 
+  tasks:
     - all
-  local_aliases: 
+  local_aliases:
     - alias: "bynn"
       variant: ".*"
       task: ".*"
@@ -166,17 +163,17 @@ projects:
 		},
 	}, *clientSettings)
 
-	err = ioutil.WriteFile(localConfigPath,
+	err = os.WriteFile(localConfigPath,
 		[]byte(`
 user: some-other-username
 projects:
 - name: my-other-project
   default: true
-  tasks: 
+  tasks:
     - all
-  variants: 
+  variants:
     - all
-  local_aliases: 
+  local_aliases:
     - alias: "other one"
       variant: ".*"
       task: ".*"
@@ -225,14 +222,12 @@ func TestLoadWorkingChangesFromFile(t *testing.T) {
 	require := require.New(t)
 	assert := assert.New(t)
 
-	tmpdir, err := ioutil.TempDir("", "clientsettings")
-	assert.NoError(err)
-	defer os.RemoveAll(tmpdir)
+	tmpdir := t.TempDir()
 	globalTestConfigPath := filepath.Join(tmpdir, ".evergreen.test.yml")
 
 	//Uncommitted changes : true
 	fileContents := `patch_uncommitted_changes: true`
-	require.NoError(ioutil.WriteFile(globalTestConfigPath, []byte(fileContents), 0644))
+	require.NoError(os.WriteFile(globalTestConfigPath, []byte(fileContents), 0644))
 	conf, err := NewClientSettings(globalTestConfigPath)
 	require.NoError(err)
 
@@ -242,7 +237,7 @@ func TestLoadWorkingChangesFromFile(t *testing.T) {
 	fileContents = `projects:
 - name: mci
   default: true`
-	require.NoError(ioutil.WriteFile(globalTestConfigPath, []byte(fileContents), 0644))
+	require.NoError(os.WriteFile(globalTestConfigPath, []byte(fileContents), 0644))
 	conf, err = NewClientSettings(globalTestConfigPath)
 	require.NoError(err)
 

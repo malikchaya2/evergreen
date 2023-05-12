@@ -26,6 +26,7 @@ var (
 	PodIDsKey            = bsonutil.MustHaveTag(PodDispatcher{}, "PodIDs")
 	TaskIDsKey           = bsonutil.MustHaveTag(PodDispatcher{}, "TaskIDs")
 	ModificationCountKey = bsonutil.MustHaveTag(PodDispatcher{}, "ModificationCount")
+	LastModifiedKey      = bsonutil.MustHaveTag(PodDispatcher{}, "LastModified")
 )
 
 // FindOne finds one pod dispatcher for the given query.
@@ -103,20 +104,39 @@ func Allocate(ctx context.Context, env evergreen.Environment, t *task.Task, p *p
 			newDispatcher := NewPodDispatcher(groupID, []string{t.Id}, []string{p.ID})
 			pd = &newDispatcher
 		} else {
-			pd.PodIDs = append(pd.PodIDs, p.ID)
-
 			if !utility.StringSliceContains(pd.TaskIDs, t.Id) {
 				pd.TaskIDs = append(pd.TaskIDs, t.Id)
 			}
+
+			if len(pd.TaskIDs) > len(pd.PodIDs) {
+				// Avoid allocating another pod if it's not necessary. The
+				// number of pods allocated to run the pod dispatchers' tasks
+				// should not exceed the number of tasks that need to be run.
+				pd.PodIDs = append(pd.PodIDs, p.ID)
+			}
 		}
 
-		if _, err := env.DB().Collection(Collection).UpdateOne(sessCtx, pd.atomicUpsertQuery(), pd.atomicUpsertUpdate(), options.Update().SetUpsert(true)); err != nil {
+		lastModified := utility.BSONTime(time.Now())
+		res, err := env.DB().Collection(Collection).UpdateOne(sessCtx, pd.atomicUpsertQuery(), pd.atomicUpsertUpdate(lastModified), options.Update().SetUpsert(true))
+		if err != nil {
 			return nil, errors.Wrap(err, "upserting pod dispatcher")
 		}
-		pd.ModificationCount++
+		if res.ModifiedCount == 0 && res.UpsertedCount == 0 {
+			// This can occur due to the pod dispatcher being concurrently
+			// updated elsewhere (such as when dispatching a task to a pod),
+			// which is a transient issue.
+			return nil, errors.Errorf("pod dispatcher was not upserted")
+		}
 
-		if err := p.InsertWithContext(sessCtx, env); err != nil {
-			return nil, errors.Wrap(err, "inserting new intent pod")
+		pd.ModificationCount++
+		pd.LastModified = lastModified
+
+		if utility.StringSliceContains(pd.PodIDs, p.ID) {
+			// A pod will only be allocated if the dispatcher is actually in
+			// need of another pod to run its tasks.
+			if err := p.InsertWithContext(sessCtx, env); err != nil {
+				return nil, errors.Wrap(err, "inserting new intent pod")
+			}
 		}
 
 		if err := t.MarkAsContainerAllocated(ctx, env); err != nil {

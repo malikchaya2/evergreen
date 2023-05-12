@@ -2,7 +2,6 @@ package trigger
 
 import (
 	"context"
-	"time"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/model"
@@ -15,19 +14,14 @@ import (
 // and will go through the process of version creation given a triggering version
 func TriggerDownstreamVersion(args ProcessorArgs) (*model.Version, error) {
 	if args.SourceVersion == nil {
-		return nil, errors.Errorf("unable to find source version in project %s", args.DownstreamProject.Id)
+		return nil, errors.Errorf("unable to find source version in downstream project '%s'", args.DownstreamProject.Id)
 	}
 
 	// propagate version metadata to the downstream version
-	metadata, err := metadataFromVersion(*args.SourceVersion, args.DownstreamProject)
+	metadata, err := metadataFromVersion(args)
 	if err != nil {
 		return nil, err
 	}
-	metadata.TriggerID = args.TriggerID
-	metadata.TriggerType = args.TriggerType
-	metadata.EventID = args.EventID
-	metadata.TriggerDefinitionID = args.DefinitionID
-	metadata.Alias = args.Alias
 
 	// get the downstream config
 	projectInfo := model.ProjectInfo{}
@@ -44,7 +38,7 @@ func TriggerDownstreamVersion(args ProcessorArgs) (*model.Version, error) {
 	projectInfo.Ref = &args.DownstreamProject
 	v, err := repotracker.CreateVersionFromConfig(context.Background(), &projectInfo, metadata, false, nil)
 	if err != nil {
-		return nil, errors.Wrap(err, "error creating version")
+		return nil, errors.Wrap(err, "creating version")
 	}
 	err = args.SourceVersion.AddSatisfiedTrigger(args.DefinitionID)
 	if err != nil {
@@ -52,19 +46,19 @@ func TriggerDownstreamVersion(args ProcessorArgs) (*model.Version, error) {
 	}
 	settings, err := evergreen.GetConfig()
 	if err != nil {
-		return nil, errors.Wrap(err, "error getting evergreen settings")
+		return nil, errors.Wrap(err, "getting Evergreen settings")
 	}
 	upstreamProject, err := model.FindMergedProjectRef(args.SourceVersion.Identifier, args.SourceVersion.Id, true)
 	if err != nil {
-		return nil, errors.Wrap(err, "error finding project ref")
+		return nil, errors.Wrapf(err, "finding project ref '%s' for source version '%s'", args.SourceVersion.Identifier, args.SourceVersion.Id)
 	}
 	if upstreamProject == nil {
-		return nil, errors.Errorf("project %s not found", args.SourceVersion.Identifier)
+		return nil, errors.Errorf("upstream project '%s' not found", args.SourceVersion.Identifier)
 	}
 	for _, module := range projectInfo.Project.Modules {
 		owner, repo := module.GetRepoOwnerAndName()
 		if owner == upstreamProject.Owner && repo == upstreamProject.Repo && module.Branch == upstreamProject.Branch {
-			_, err = repotracker.CreateManifest(*v, projectInfo.Project, upstreamProject, settings)
+			_, err = model.CreateManifest(v, projectInfo.Project, upstreamProject, settings)
 			if err != nil {
 				return nil, errors.WithStack(err)
 			}
@@ -73,38 +67,39 @@ func TriggerDownstreamVersion(args ProcessorArgs) (*model.Version, error) {
 	}
 	err = model.UpdateLastRevision(v.Identifier, v.Revision)
 	if err != nil {
-		return nil, errors.Wrap(err, "error updating last revision")
+		return nil, errors.Wrap(err, "updating last revision")
 	}
 	err = repotracker.AddBuildBreakSubscriptions(v, &args.DownstreamProject)
 	if err != nil {
-		return nil, errors.Wrap(err, "error adding build break subscriptions")
+		return nil, errors.Wrap(err, "adding build break subscriptions")
 	}
-	_, err = model.DoProjectActivation(args.DownstreamProject.Id, time.Now())
-	if err != nil {
-		return nil, errors.Wrapf(err, "error activating project %s", args.DownstreamProject.Id)
-	}
-
 	return v, nil
 }
 
-func metadataFromVersion(source model.Version, ref model.ProjectRef) (model.VersionMetadata, error) {
+func metadataFromVersion(args ProcessorArgs) (model.VersionMetadata, error) {
 	metadata := model.VersionMetadata{
-		SourceVersion: &source,
+		SourceVersion:       args.SourceVersion,
+		Activate:            true,
+		TriggerID:           args.TriggerID,
+		TriggerType:         args.TriggerType,
+		EventID:             args.EventID,
+		TriggerDefinitionID: args.DefinitionID,
+		Alias:               args.Alias,
 	}
 	metadata.Revision = model.Revision{
-		Author:          source.Author,
-		AuthorEmail:     source.AuthorEmail,
-		CreateTime:      source.CreateTime,
-		RevisionMessage: source.Message,
+		Author:          args.SourceVersion.Author,
+		AuthorEmail:     args.SourceVersion.AuthorEmail,
+		CreateTime:      args.SourceVersion.CreateTime,
+		RevisionMessage: args.SourceVersion.Message,
 	}
-	repo, err := model.FindRepository(ref.Id)
+	repo, err := model.FindRepository(args.DownstreamProject.Id)
 	if err != nil {
-		return metadata, errors.Wrap(err, "error finding most recent revision")
+		return metadata, errors.Wrap(err, "finding most recent revision")
 	}
 	metadata.Revision.Revision = repo.LastRevision
-	author, err := user.FindOneById(source.AuthorID)
+	author, err := user.FindOneById(args.SourceVersion.AuthorID)
 	if err != nil {
-		return metadata, errors.Wrap(err, "error finding version author")
+		return metadata, errors.Wrapf(err, "finding version author '%s'", args.SourceVersion.AuthorID)
 	}
 	if author != nil {
 		metadata.Revision.AuthorGithubUID = author.Settings.GithubUser.UID
@@ -121,14 +116,12 @@ func makeDownstreamProjectFromFile(ref model.ProjectRef, file string) (model.Pro
 	}
 	settings, err := evergreen.GetConfig()
 	if err != nil {
-		return model.ProjectInfo{}, errors.Wrap(err, "error getting evergreen settings")
+		return model.ProjectInfo{}, errors.Wrap(err, "getting Evergreen settings")
 	}
 	opts.Token, err = settings.GetGithubOauthToken()
 	if err != nil {
 		return model.ProjectInfo{}, err
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 1*time.Minute)
-	defer cancel()
-	return model.GetProjectFromFile(ctx, opts)
+	return model.GetProjectFromFile(context.Background(), opts)
 }

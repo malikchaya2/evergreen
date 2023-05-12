@@ -12,6 +12,7 @@ func TestFullUserSettings(t *testing.T) {
 		Timezone:         "east",
 		Region:           "us-west-1",
 		SlackUsername:    "me",
+		SlackMemberId:    "NOTES25BA",
 		UseSpruceOptions: user.UseSpruceOptions{},
 		GithubUser: user.GithubUser{
 			UID:         5,
@@ -48,14 +49,12 @@ func TestPartialSettings(t *testing.T) {
 func runTests(t *testing.T, in user.UserSettings) {
 	assert := assert.New(t)
 	apiSettings := APIUserSettings{}
-	err := apiSettings.BuildFromService(in)
-	assert.NoError(err)
+	apiSettings.BuildFromService(in)
 
 	origSettings, err := apiSettings.ToService()
 	assert.NoError(err)
 	assert.EqualValues(in, origSettings)
 
-	finalAPISettings, err := ApplyUserChanges(user.UserSettings{}, apiSettings)
-	assert.NoError(err)
+	finalAPISettings := applyUserChanges(user.UserSettings{}, apiSettings)
 	assert.EqualValues(apiSettings, finalAPISettings)
 }

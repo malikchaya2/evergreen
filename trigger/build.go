@@ -13,7 +13,6 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/utility"
-	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
@@ -21,78 +20,6 @@ import (
 func init() {
 	registry.registerEventHandler(event.ResourceTypeBuild, event.BuildStateChange, makeBuildTriggers)
 	registry.registerEventHandler(event.ResourceTypeBuild, event.BuildGithubCheckFinished, makeBuildTriggers)
-}
-
-func (t *buildTriggers) taskStatusToDesc() string {
-	success := 0
-	failed := 0
-	systemError := 0
-	other := 0
-	noReport := 0
-	for _, t := range t.tasks {
-		switch {
-		case t.Status == evergreen.TaskSucceeded:
-			success++
-
-		case t.Status == evergreen.TaskFailed:
-			failed++
-
-		case statusIsSystemFailure(t.Status):
-			systemError++
-
-		case utility.StringSliceContains(evergreen.TaskUncompletedStatuses, t.Status):
-			noReport++
-
-		default:
-			other++
-		}
-	}
-
-	grip.ErrorWhen(other > 0, message.Fields{
-		"source":   "status updates",
-		"message":  "unknown task status",
-		"build_id": t.build.Id,
-	})
-
-	if success == 0 && failed == 0 && systemError == 0 && other == 0 {
-		return "no tasks were run"
-	}
-
-	desc := fmt.Sprintf("%s, %s", taskStatusSubformat(success, "succeeded"),
-		taskStatusSubformat(failed, "failed"))
-	if systemError > 0 {
-		desc += fmt.Sprintf(", %d internal errors", systemError)
-	}
-	if other > 0 {
-		desc += fmt.Sprintf(", %d other", other)
-	}
-
-	return appendTime(t.build, desc)
-}
-
-func statusIsSystemFailure(status string) bool {
-	systemFailures := []string{evergreen.TaskSystemFailed,
-		evergreen.TaskTimedOut,
-		evergreen.TaskSystemUnresponse,
-		evergreen.TaskSystemTimedOut,
-		evergreen.TaskTestTimedOut,
-	}
-	return utility.StringSliceContains(systemFailures, status)
-}
-
-func taskStatusSubformat(n int, verb string) string {
-	if n == 0 {
-		return fmt.Sprintf("none %s", verb)
-	}
-	return fmt.Sprintf("%d %s", n, verb)
-}
-
-func appendTime(b *build.Build, txt string) string {
-	finish := b.FinishTime
-	if utility.IsZeroTime(b.FinishTime) { // in case the build is actually blocked, but we are triggering the finish event
-		finish = time.Now()
-	}
-	return fmt.Sprintf("%s in %s", txt, finish.Sub(b.StartTime).String())
 }
 
 type buildTriggers struct {
@@ -121,15 +48,15 @@ func makeBuildTriggers() eventHandler {
 func (t *buildTriggers) Fetch(e *event.EventLogEntry) error {
 	var err error
 	if err = t.uiConfig.Get(evergreen.GetEnvironment()); err != nil {
-		return errors.Wrap(err, "Failed to fetch ui config")
+		return errors.Wrap(err, "fetching UI config")
 	}
 
 	t.build, err = build.FindOne(build.ById(e.ResourceId))
 	if err != nil {
-		return errors.Wrap(err, "failed to fetch build")
+		return errors.Wrapf(err, "finding build '%s'", e.ResourceId)
 	}
 	if t.build == nil {
-		return errors.New("couldn't find build")
+		return errors.Errorf("build '%s' not found", e.ResourceId)
 	}
 
 	var tasks []task.Task
@@ -137,13 +64,13 @@ func (t *buildTriggers) Fetch(e *event.EventLogEntry) error {
 		query := db.Query(task.ByBuildIdAndGithubChecks(t.build.Id)).WithFields(task.StatusKey, task.DependsOnKey)
 		tasks, err = task.FindAll(query)
 		if err != nil {
-			return errors.Wrapf(err, "failed to fetch tasks for github check")
+			return errors.Wrapf(err, "finding tasks in build '%s' for GitHub check", t.build.Id)
 		}
 	} else {
 		query := db.Query(task.ByBuildId(t.build.Id)).WithFields(task.StatusKey, task.DependsOnKey)
 		tasks, err = task.FindAll(query)
 		if err != nil {
-			return errors.Wrap(err, "failed to fetch tasks")
+			return errors.Wrapf(err, "finding tasks in build '%s'", t.build.Id)
 		}
 	}
 
@@ -220,11 +147,11 @@ func (t *buildTriggers) buildExceedsDuration(sub *event.Subscription) (*notifica
 	}
 	thresholdString, ok := sub.TriggerData[event.BuildDurationKey]
 	if !ok {
-		return nil, fmt.Errorf("subscription %s has no build time threshold", sub.ID)
+		return nil, errors.Errorf("subscription '%s' has no build time threshold", sub.ID)
 	}
 	threshold, err := strconv.Atoi(thresholdString)
 	if err != nil {
-		return nil, fmt.Errorf("subscription %s has an invalid time threshold", sub.ID)
+		return nil, errors.Errorf("subscription '%s' has an invalid time threshold", sub.ID)
 	}
 
 	maxDuration := time.Duration(threshold) * time.Second
@@ -240,16 +167,16 @@ func (t *buildTriggers) buildRuntimeChange(sub *event.Subscription) (*notificati
 	}
 	percentString, ok := sub.TriggerData[event.BuildPercentChangeKey]
 	if !ok {
-		return nil, fmt.Errorf("subscription %s has no percentage increase", sub.ID)
+		return nil, errors.Errorf("subscription '%s' has no percentage increase", sub.ID)
 	}
 	percent, err := strconv.ParseFloat(percentString, 64)
 	if err != nil {
-		return nil, fmt.Errorf("subscription %s has an invalid percentage", sub.ID)
+		return nil, errors.Wrapf(err, "subscription '%s' has an invalid percentage", sub.ID)
 	}
 
 	lastGreen, err := t.build.PreviousSuccessful()
 	if err != nil {
-		return nil, errors.Wrap(err, "error retrieving last green build")
+		return nil, errors.Wrap(err, "retrieving last green build")
 	}
 	if lastGreen == nil {
 		return nil, nil
@@ -265,9 +192,7 @@ func (t *buildTriggers) buildRuntimeChange(sub *event.Subscription) (*notificati
 
 func (t *buildTriggers) makeData(sub *event.Subscription, pastTenseOverride string) (*commonTemplateData, error) {
 	api := restModel.APIBuild{}
-	if err := api.BuildFromService(*t.build); err != nil {
-		return nil, errors.Wrap(err, "error building json model")
-	}
+	api.BuildFromService(*t.build, nil)
 	projectName := t.build.Project
 	if api.ProjectIdentifier != nil {
 		projectName = utility.FromStringPtr(api.ProjectIdentifier)
@@ -280,7 +205,7 @@ func (t *buildTriggers) makeData(sub *event.Subscription, pastTenseOverride stri
 		DisplayName:     t.build.DisplayName,
 		Object:          event.ObjectBuild,
 		Project:         projectName,
-		URL:             buildLink(t.uiConfig.Url, t.build.Id, evergreen.IsPatchRequester(t.build.Requester)),
+		URL:             t.build.GetURL(t.uiConfig.Url),
 		PastTenseStatus: t.data.Status,
 		apiModel:        &api,
 	}
@@ -290,7 +215,7 @@ func (t *buildTriggers) makeData(sub *event.Subscription, pastTenseOverride stri
 	}
 	if t.build.Requester == evergreen.GithubPRRequester || t.build.Requester == evergreen.RepotrackerVersionRequester {
 		data.githubContext = fmt.Sprintf("evergreen/%s", t.build.BuildVariant)
-		data.githubDescription = t.taskStatusToDesc()
+		data.githubDescription = t.build.GetFinishedNotificationDescription(t.tasks)
 	}
 	if data.PastTenseStatus == evergreen.BuildFailed {
 		data.githubState = message.GithubStateFailure
@@ -313,7 +238,7 @@ func (t *buildTriggers) buildAttachments(data *commonTemplateData) []message.Sla
 	attachments = append(attachments, message.SlackAttachment{
 		Title:     fmt.Sprintf("Build: %s", t.build.DisplayName),
 		TitleLink: data.URL,
-		Text:      t.taskStatusToDesc(),
+		Text:      t.build.GetFinishedNotificationDescription(t.tasks),
 		Fields: []*message.SlackAttachmentField{
 			{
 				Title: "Version",
@@ -373,12 +298,12 @@ func (t *buildTriggers) buildAttachments(data *commonTemplateData) []message.Sla
 func (t *buildTriggers) generate(sub *event.Subscription, pastTenseOverride string) (*notification.Notification, error) {
 	data, err := t.makeData(sub, pastTenseOverride)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to collect build data")
+		return nil, errors.Wrap(err, "collecting build data")
 	}
 
 	payload, err := makeCommonPayload(sub, t.Attributes(), data)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to build notification")
+		return nil, errors.Wrap(err, "building notification")
 	}
 
 	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)

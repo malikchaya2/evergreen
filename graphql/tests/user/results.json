@@ -7,7 +7,16 @@
           "user": {
             "displayName": "testuser",
             "userId": "testuser",
-            "emailAddress": "testuser@mongodb.com"
+            "emailAddress": "testuser@mongodb.com",
+            "subscriptions": [
+              {
+                "id": "61326406a620e4737f57003e",
+                "resourceType": "VERSION",
+                "subscriber": {
+                  "type": "slack"
+                }
+              }
+            ]
           }
         }
       }
@@ -47,12 +56,14 @@
               "patches": [
                 {
                   "status": "failed",
+                  "projectIdentifier": "myProjectIdentifier",
                   "id": "5e4ff3abe3c3317e352062e7",
                   "description": "222",
                   "alias": "__github"
                 },
                 {
                   "status": "failed",
+                  "projectIdentifier": "myProjectIdentifier",
                   "id": "5e4ff3abe3c3317e352062e9",
                   "description": "222",
                   "alias": "__github"

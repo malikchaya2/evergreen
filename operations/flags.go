@@ -1,6 +1,7 @@
 package operations
 
 import (
+	"fmt"
 	"strings"
 	"time"
 
@@ -69,7 +70,7 @@ func joinFlagNames(ids ...string) string { return strings.Join(ids, ", ") }
 func addPathFlag(flags ...cli.Flag) []cli.Flag {
 	return append(flags, cli.StringFlag{
 		Name:  joinFlagNames(pathFlagName, "filename", "file", "f"),
-		Usage: "path to an evergreen project configuration file",
+		Usage: "path to an Evergreen project configuration file",
 	})
 }
 
@@ -81,16 +82,17 @@ func serviceConfigFlags(flags ...cli.Flag) []cli.Flag {
 		},
 		cli.BoolFlag{
 			Name:  overwriteConfFlagName,
-			Usage: "overwrite the configuration in the db with the file",
+			Usage: "overwrite the configuration in the DB with the file",
 		})
 }
 
 func addProjectFlag(flags ...cli.Flag) []cli.Flag {
 	return append(flags, cli.StringFlag{
 		Name:  joinFlagNames(projectFlagName, "p"),
-		Usage: "specify the name of an existing evergreen project",
+		Usage: "specify the name of an existing Evergreen project",
 	})
 }
+
 func addLargeFlag(flags ...cli.Flag) []cli.Flag {
 	return append(flags, cli.BoolFlag{
 		Name:  joinFlagNames(largeFlagName, "l"),
@@ -116,7 +118,7 @@ func addPatchFinalizeFlag(flags ...cli.Flag) []cli.Flag {
 func addPatchBrowseFlag(flags ...cli.Flag) []cli.Flag {
 	return append(flags, cli.BoolFlag{
 		Name:  joinFlagNames(patchBrowseFlagName),
-		Usage: "open patch url in browser",
+		Usage: "open patch URL in browser",
 	})
 }
 
@@ -246,7 +248,7 @@ func addDbSettingsFlags(flags ...cli.Flag) []cli.Flag {
 		cli.StringFlag{
 			Name:  dbUrlFlagName,
 			Usage: "Database URL(s). For a replica set, list all members separated by a comma.",
-			Value: evergreen.DefaultDatabaseUrl,
+			Value: evergreen.DefaultDatabaseURL,
 		},
 		cli.StringFlag{
 			Name:   dbCredsFileFlagName,
@@ -295,6 +297,23 @@ func addUncommittedChangesFlag(flags ...cli.Flag) []cli.Flag {
 		Name:  joinFlagNames(uncommittedChangesFlag, "u"),
 		Usage: "include uncommitted changes",
 	})
+}
+
+func addReuseFlags(flags ...cli.Flag) []cli.Flag {
+	message := "repeat %s: use the %s tasks/variants defined for the %s patch"
+	res := append(flags, cli.BoolFlag{
+		Name:  joinFlagNames(repeatDefinitionFlag, "reuse"),
+		Usage: fmt.Sprintf(message, "latest", "same", "latest"),
+	})
+	res = append(res, cli.BoolFlag{
+		Name:  joinFlagNames(repeatFailedDefinitionFlag, "rf"),
+		Usage: fmt.Sprintf(message, "latest failed", "failed", "latest"),
+	})
+	res = append(res, cli.StringFlag{
+		Name:  joinFlagNames(repeatPatchIdFlag, "reuse-patch"),
+		Usage: fmt.Sprintf(message, "specific patch", "same", "given"),
+	})
+	return res
 }
 
 func addPreserveCommitsFlag(flags ...cli.Flag) []cli.Flag {

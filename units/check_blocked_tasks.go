@@ -43,9 +43,9 @@ func makeCheckBlockedTasksJob() *checkBlockedTasksJob {
 	return j
 }
 
-// NewCheckBlockedTasksJob creates a job to run repotracker against a repository.
-// The code creating this job is responsible for verifying that the project
-// should track push events. We want to limit this job to once an hour for each distro.
+// NewCheckBlockedTasksJob creates a job to audit the dependency state for tasks
+// in the task queues. If it finds any mismatches in dependency state, it fixes
+// them.
 func NewCheckBlockedTasksJob(distroId string, ts time.Time) amboy.Job {
 	job := makeCheckBlockedTasksJob()
 	job.DistroId = distroId
@@ -56,22 +56,20 @@ func NewCheckBlockedTasksJob(distroId string, ts time.Time) amboy.Job {
 func (j *checkBlockedTasksJob) Run(ctx context.Context) {
 	queue, err := model.FindDistroTaskQueue(j.DistroId)
 	if err != nil {
-		j.AddError(errors.Wrapf(err, "error getting task queue for distro '%s'", j.DistroId))
+		j.AddError(errors.Wrapf(err, "getting task queue for distro '%s'", j.DistroId))
 	}
-	aliasQueue, err := model.FindDistroAliasTaskQueue(j.DistroId)
+	secondaryQueue, err := model.FindDistroSecondaryTaskQueue(j.DistroId)
 	if err != nil {
-		j.AddError(errors.Wrapf(err, "error getting alias task queue for distro '%s'", j.DistroId))
+		j.AddError(errors.Wrapf(err, "getting alias task queue for distro '%s'", j.DistroId))
 	}
 	taskIds := []string{}
-	lenQueue := len(queue.Queue)
 	for _, item := range queue.Queue {
 		if !item.IsDispatched && len(item.Dependencies) > 0 {
 			taskIds = append(taskIds, item.Id)
 		}
 	}
 
-	lenAliasQueue := len(aliasQueue.Queue)
-	for _, item := range aliasQueue.Queue {
+	for _, item := range secondaryQueue.Queue {
 		if !item.IsDispatched && len(item.Dependencies) > 0 {
 			taskIds = append(taskIds, item.Id)
 		}
@@ -79,19 +77,19 @@ func (j *checkBlockedTasksJob) Run(ctx context.Context) {
 
 	if len(taskIds) == 0 {
 		grip.Debug(message.Fields{
-			"message":         "no task IDs found for distro",
-			"len_queue":       lenQueue,
-			"len_alias_queue": lenAliasQueue,
-			"distro":          j.DistroId,
-			"job":             j.ID(),
-			"source":          checkBlockedTasks,
+			"message":             "no task IDs found for distro",
+			"len_queue":           len(queue.Queue),
+			"len_secondary_queue": len(secondaryQueue.Queue),
+			"distro":              j.DistroId,
+			"job":                 j.ID(),
+			"source":              checkBlockedTasks,
 		})
 		return
 	}
 
 	tasksToCheck, err := task.Find(task.ByIds(taskIds))
 	if err != nil {
-		j.AddError(errors.Wrap(err, "error getting tasks to check"))
+		j.AddError(errors.Wrapf(err, "getting tasks to check in distro '%s'", j.DistroId))
 		return
 	}
 
@@ -106,19 +104,6 @@ func (j *checkBlockedTasksJob) Run(ctx context.Context) {
 			numChecksThatUpdatedTasks++
 		}
 	}
-	grip.Debug(message.Fields{
-		"message":             "finished check blocked tasks job",
-		"len_queue":           lenQueue,
-		"len_alias_queue":     lenAliasQueue,
-		"len_tasks":           len(tasksToCheck),
-		"len_task_ids":        len(taskIds),
-		"task_ids":            taskIds,
-		"num_tasks_modified":  numTasksModified,
-		"num_updating_checks": numChecksThatUpdatedTasks,
-		"job":                 j.ID(),
-		"source":              checkBlockedTasks,
-		"distro":              j.DistroId,
-	})
 }
 
 func checkUnmarkedBlockingTasks(t *task.Task, dependencyCaches map[string]task.Task) (int, error) {

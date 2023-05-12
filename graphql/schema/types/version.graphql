@@ -1,0 +1,134 @@
+###### INPUTS ######
+"""
+VersionToRestart is the input to the restartVersions mutation.
+It contains an array of taskIds to restart for a given versionId.
+"""
+input VersionToRestart {
+  versionId: String!
+  taskIds: [String!]!
+}
+
+"""
+TaskFilterOptions defines the parameters that are used when fetching tasks from a Version.
+"""
+input TaskFilterOptions {
+  baseStatuses: [String!] = []
+  includeEmptyActivation: Boolean = false
+    @deprecated(reason: "Use includeNeverActivatedTasks instead")
+  includeNeverActivatedTasks: Boolean = false
+  limit: Int = 0
+  page: Int = 0
+  sorts: [SortOrder!]
+  statuses: [String!] = []
+  taskName: String
+  variant: String
+}
+
+"""
+SortOrder[] is an input value for version.tasks. It is used to define whether to sort by ASC/DEC for a given sort key.
+"""
+input SortOrder {
+  Direction: SortDirection!
+  Key: TaskSortCategory!
+}
+
+###### TYPES ######
+"""
+Version models a commit within a project.
+"""
+type Version {
+  id: String!
+  activated: Boolean
+  author: String!
+  baseTaskStatuses: [String!]!
+  baseVersion: Version
+  branch: String!
+  buildVariants(options: BuildVariantOptions!): [GroupedBuildVariant]
+  buildVariantStats(options: BuildVariantOptions!): [GroupedTaskStatusCount!]
+  childVersions: [Version]
+  createTime: Time!
+  errors: [String!]!
+  finishTime: Time
+  isPatch: Boolean!
+  manifest: Manifest
+  message: String!
+  order: Int!
+  parameters: [Parameter!]!
+  patch: Patch
+  previousVersion: Version
+  project: String!
+  projectIdentifier: String!
+  projectMetadata: Project
+  repo: String!
+  requester: String!
+  revision: String!
+  startTime: Time
+  status: String!
+  taskCount: Int
+  tasks(options: TaskFilterOptions!): VersionTasks!
+  taskStatuses: [String!]!
+  taskStatusStats(options: BuildVariantOptions!): TaskStats
+  upstreamProject: UpstreamProject
+  versionTiming: VersionTiming
+  externalLinksForMetadata: [ExternalLinkForMetadata!]!
+  warnings: [String!]!
+}
+
+type VersionTasks {
+  count: Int!
+  data: [Task!]!
+}
+
+type TaskStats {
+  counts: [StatusCount!]
+  eta: Time
+}
+
+type StatusCount {
+  count: Int!
+  status: String!
+}
+
+type GroupedBuildVariant {
+  displayName: String!
+  tasks: [Task]
+  variant: String!
+}
+
+type GroupedTaskStatusCount {
+  displayName: String!
+  statusCounts: [StatusCount!]!
+  variant: String!
+}
+
+type VersionTiming {
+  makespan: Duration
+  timeTaken: Duration
+}
+
+type Manifest {
+  id: String!
+  branch: String!
+  isBase: Boolean!
+  moduleOverrides: StringMap
+  modules: Map
+  project: String!
+  revision: String!
+}
+
+type UpstreamProject {
+  owner: String!
+  project: String!
+  repo: String!
+  resourceID: String! # ID of the UI linkable resource that triggered the upstream version (corresponds to a task ID or version ID)
+  revision: String!
+  task: Task
+  triggerID: String! # ID of the trigger that created the upstream version (corresponds to a task ID or build ID)
+  triggerType: String!
+  version: Version
+}
+
+type ExternalLinkForMetadata {
+  url: String!
+  displayName: String!
+}

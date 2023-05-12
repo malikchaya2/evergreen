@@ -61,8 +61,10 @@ type UserSettings struct {
 	Region           string                  `json:"region" bson:"region"`
 	GithubUser       GithubUser              `json:"github_user" bson:"github_user,omitempty"`
 	SlackUsername    string                  `bson:"slack_username,omitempty" json:"slack_username,omitempty"`
+	SlackMemberId    string                  `bson:"slack_member_id,omitempty" json:"slack_member_id,omitempty"`
 	Notifications    NotificationPreferences `bson:"notifications,omitempty" json:"notifications,omitempty"`
 	UseSpruceOptions UseSpruceOptions        `json:"use_spruce_options" bson:"use_spruce_options"`
+	DateFormat       string                  `json:"date_format" bson:"date_format"`
 }
 
 type UseSpruceOptions struct {
@@ -379,6 +381,22 @@ func (u *DBUser) HasPermission(opts gimlet.PermissionOpts) bool {
 	return false
 }
 
+// HasProjectCreatePermission returns true if the user is an admin for any existing project.
+func (u *DBUser) HasProjectCreatePermission() (bool, error) {
+	roleManager := evergreen.GetEnvironment().RoleManager()
+	roles, err := roleManager.GetRoles(u.Roles())
+	if err != nil {
+		return false, errors.Wrap(err, "getting roles")
+	}
+	for _, role := range roles {
+		level, hasPermission := role.Permissions[evergreen.PermissionProjectSettings]
+		if hasPermission && level >= evergreen.ProjectSettingsEdit.Value {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func (u *DBUser) DeleteAllRoles() error {
 	info, err := db.FindAndModify(
 		Collection,
@@ -452,4 +470,17 @@ func IsValidSubscriptionPreference(in string) bool {
 	default:
 		return false
 	}
+}
+
+func GetSlackMemberId(username string) (string, error) {
+	u, err := FindBySlackUsername(username)
+	if err != nil {
+		return "", errors.Wrapf(err, "finding user by slack username '%s'", username)
+	}
+
+	if u == nil {
+		return "", errors.Wrapf(err, "user with id '%s' not found", username)
+	}
+
+	return u.Settings.SlackMemberId, nil
 }

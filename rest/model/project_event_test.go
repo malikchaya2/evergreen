@@ -20,7 +20,7 @@ func getMockProjectSettings() model.ProjectSettings {
 	return model.ProjectSettings{
 		ProjectRef: model.ProjectRef{
 			Owner:   "admin",
-			Enabled: utility.TruePtr(),
+			Enabled: true,
 			Private: utility.TruePtr(),
 			Id:      projectId,
 			Admins:  []string{},
@@ -72,13 +72,17 @@ func (s *ProjectEventSuite) SetupTest() {
 	h := model.ProjectChangeEventEntry{
 		EventLogEntry: event.EventLogEntry{
 			Timestamp:    time.Now(),
-			ResourceType: model.EventResourceTypeProject,
-			EventType:    model.EventTypeProjectModified,
+			ResourceType: event.EventResourceTypeProject,
+			EventType:    event.EventTypeProjectModified,
 			ResourceId:   projectId,
 			Data: &model.ProjectChangeEvent{
-				User:   username,
-				Before: before,
-				After:  after,
+				User: username,
+				Before: model.ProjectSettingsEvent{
+					ProjectSettings: before,
+				},
+				After: model.ProjectSettingsEvent{
+					ProjectSettings: after,
+				},
 			},
 		},
 	}
@@ -128,7 +132,7 @@ func checkProjRef(suite *ProjectEventSuite, in model.ProjectRef, out APIProjectR
 	suite.Equal(in.Owner, utility.FromStringPtr(out.Owner))
 	suite.Equal(in.Repo, utility.FromStringPtr(out.Repo))
 	suite.Equal(in.Branch, utility.FromStringPtr(out.Branch))
-	suite.Equal(in.Enabled, out.Enabled)
+	suite.Equal(in.Enabled, utility.FromBoolPtr(out.Enabled))
 	suite.Equal(in.Private, out.Private)
 	suite.Equal(in.BatchTime, out.BatchTime)
 	suite.Equal(in.RemotePath, utility.FromStringPtr(out.RemotePath))

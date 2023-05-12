@@ -89,10 +89,13 @@ func (j *hostExecuteJob) Run(ctx context.Context) {
 				args = append(args, fmt.Sprintf("--user=%s", j.SudoUser))
 			}
 		}
-		args = append(args, j.host.Distro.ShellBinary(), "-l", "-c", j.Script)
+		// We read the shell script verbatim from stdin  (i.e. with "bash -s"
+		// instead of "bash -c") to avoid a Windows limitation on exec string length.
+		args = append(args, j.host.Distro.ShellBinary(), "-s", "-l")
 		var output []string
 		output, err := j.host.RunJasperProcess(ctx, j.env, &options.Create{
-			Args: args,
+			Args:               args,
+			StandardInputBytes: []byte(j.Script),
 		})
 		if err != nil {
 			event.LogHostScriptExecuteFailed(j.host.Id, err)
@@ -141,10 +144,10 @@ func (j *hostExecuteJob) populateIfUnset() error {
 	if j.host == nil {
 		h, err := host.FindOneId(j.HostID)
 		if err != nil {
-			return errors.Wrapf(err, "could not find host %s for job %s", j.HostID, j.ID())
+			return errors.Wrapf(err, "finding host '%s'", j.HostID)
 		}
 		if h == nil {
-			return errors.Errorf("could not find host %s for job %s", j.HostID, j.ID())
+			return errors.Errorf("host '%s' not found", j.HostID)
 		}
 		j.host = h
 	}

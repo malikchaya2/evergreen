@@ -2,7 +2,6 @@ package operations
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -59,12 +58,15 @@ func hostProvision() cli.Command {
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
-			comm := client.NewCommunicator(c.String(apiServerURLFlagName))
+			comm, err := client.NewCommunicator(c.String(apiServerURLFlagName))
+			if err != nil {
+				return errors.Wrap(err, "initializing client")
+			}
 			defer comm.Close()
 
 			opts, err := comm.GetHostProvisioningOptions(ctx, c.String(hostIDFlagName), c.String(hostSecretFlagName))
 			if err != nil {
-				return errors.Wrap(err, "failed to get host provisioning script")
+				return errors.Wrap(err, "getting host provisioning script")
 			}
 
 			workingDir := c.String(workingDirFlagName)
@@ -88,11 +90,11 @@ func hostProvision() cli.Command {
 // makeHostProvisioningScriptFile creates the working directory with the host
 // provisioning script in it. Returns the absolute path to the script.
 // Note: we have to write the host provisioning script to a file instead of
-// running it directly like with 'sh -c "<script>"' because the script will exit
-// before it finishes executing on Windows.
+// running it directly (like with 'sh -c "<script>"') because the script will
+// exit before it finishes executing on Windows.
 func makeHostProvisioningScriptFile(workingDir string, content string) (string, error) {
 	if err := os.MkdirAll(workingDir, 0755); err != nil {
-		return "", errors.Wrap(err, "creating working directory")
+		return "", errors.Wrapf(err, "creating working directory '%s'", workingDir)
 	}
 
 	scriptPath, err := filepath.Abs(filepath.Join(workingDir, "host_provisioning"))
@@ -102,7 +104,7 @@ func makeHostProvisioningScriptFile(workingDir string, content string) (string, 
 	// Cygwin shell requires back slashes ('\') to be escaped, so use forward
 	// slashes ('/') instead as the path separator.
 	scriptPath = util.ConsistentFilepath(scriptPath)
-	if err = ioutil.WriteFile(scriptPath, []byte(content), 0700); err != nil {
+	if err = os.WriteFile(scriptPath, []byte(content), 0700); err != nil {
 		return "", errors.Wrapf(err, "writing script file '%s'", scriptPath)
 	}
 	return scriptPath, nil

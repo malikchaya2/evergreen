@@ -49,7 +49,6 @@ func buildApp() *cli.App {
 		operations.Volume(),
 		operations.Notification(),
 		operations.Buildlogger(),
-		operations.Generate(),
 
 		// Top-level commands.
 		operations.Keys(),
@@ -62,6 +61,7 @@ func buildApp() *cli.App {
 		operations.Subscriptions(),
 		operations.CommitQueue(),
 		operations.Scheduler(),
+		operations.Client(),
 
 		// Patch creation and management commands (top-level)
 		operations.Patch(),

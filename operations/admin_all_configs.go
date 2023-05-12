@@ -2,7 +2,7 @@ package operations
 
 import (
 	"context"
-	"io/ioutil"
+	"os"
 
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/mongodb/grip"
@@ -24,7 +24,7 @@ func fetchAllProjectConfigs() cli.Command {
 				Usage: "include disabled projects",
 			},
 		},
-		Usage:  "download the configuration files of all evergreen projects to the current directory",
+		Usage:  "download the configuration files of all Evergreen projects to the current directory",
 		Before: setPlainLogger,
 		Action: func(c *cli.Context) error {
 			includeDisabled := c.BoolT(includeDisabledFlagName)
@@ -36,17 +36,20 @@ func fetchAllProjectConfigs() cli.Command {
 				return err
 			}
 
-			client := settings.setupRestCommunicator(ctx)
+			client, err := settings.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			ac, rc, err := settings.getLegacyClients()
 			if err != nil {
-				return errors.Wrap(err, "problem accessing evergreen service")
+				return errors.Wrap(err, "setting up legacy Evergreen client")
 			}
 
 			projects, err := ac.ListProjects()
 			if err != nil {
-				return errors.Wrap(err, "can't fetch projects from evergreen")
+				return errors.Wrap(err, "fetching projects from Evergreen")
 			}
 
 			return fetchAndWriteConfigs(rc, projects, includeDisabled)
@@ -66,7 +69,7 @@ func fetchAndWriteConfigs(c *legacyClient, projects []model.ProjectRef, includeD
 	}
 	configDownloaded := map[projectRepo]bool{}
 	for _, p := range projects {
-		if !p.IsEnabled() && !includeDisabled {
+		if !p.Enabled && !includeDisabled {
 			continue
 		}
 		repo := projectRepo{
@@ -82,7 +85,7 @@ func fetchAndWriteConfigs(c *legacyClient, projects []model.ProjectRef, includeD
 		grip.Infof("Downloading configuration for '%s'", p.Identifier)
 		versions, err := c.GetRecentVersions(p.Id)
 		if err != nil {
-			catcher.Wrapf(err, "failed to fetch recent versions for '%s'", p.Identifier)
+			catcher.Wrapf(err, "fetching recent versions for '%s'", p.Identifier)
 			continue
 		}
 		if len(versions) == 0 {
@@ -92,14 +95,14 @@ func fetchAndWriteConfigs(c *legacyClient, projects []model.ProjectRef, includeD
 
 		config, err := c.GetConfig(versions[0])
 		if err != nil {
-			catcher.Wrapf(err, "failed to fetch config for project '%s', version '%s'", p.Identifier, versions[0])
+			catcher.Wrapf(err, "fetching config for project '%s', version '%s'", p.Identifier, versions[0])
 			continue
 		}
 		configDownloaded[repo] = true
 
-		err = ioutil.WriteFile(p.Identifier+".yml", config, 0644)
+		err = os.WriteFile(p.Identifier+".yml", config, 0644)
 		if err != nil {
-			catcher.Wrapf(err, "failed to write configuration for project '%s'", p.Identifier)
+			catcher.Wrapf(err, "writing configuration for project '%s'", p.Identifier)
 		}
 	}
 

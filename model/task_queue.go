@@ -4,7 +4,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model/host"
 	"github.com/evergreen-ci/evergreen/model/task"
@@ -18,8 +17,8 @@ import (
 )
 
 const (
-	TaskQueuesCollection      = "task_queues"
-	TaskAliasQueuesCollection = "task_alias_queues"
+	TaskQueuesCollection          = "task_queues"
+	TaskSecondaryQueuesCollection = "task_alias_queues"
 )
 
 type TaskGroupInfo struct {
@@ -43,7 +42,9 @@ type DistroQueueInfo struct {
 	DurationOverThreshold      time.Duration   `bson:"duration_over_threshold" json:"duration_over_threshold"`
 	CountWaitOverThreshold     int             `bson:"count_wait_over_threshold" json:"count_wait_over_threshold"`
 	TaskGroupInfos             []TaskGroupInfo `bson:"task_group_infos" json:"task_group_infos"`
-	AliasQueue                 bool            `bson:"alias_queue" json:"alias_queue"`
+	// SecondaryQueue refers to whether or not this info refers to a secondary queue.
+	// Tags don't match due to outdated naming convention.
+	SecondaryQueue bool `bson:"alias_queue" json:"alias_queue"`
 }
 
 func GetDistroQueueInfo(distroID string) (DistroQueueInfo, error) {
@@ -51,8 +52,8 @@ func GetDistroQueueInfo(distroID string) (DistroQueueInfo, error) {
 	return rval, err
 }
 
-func GetDistroAliasQueueInfo(distroID string) (DistroQueueInfo, error) {
-	rval, err := getDistroQueueInfoCollection(distroID, TaskAliasQueuesCollection)
+func GetDistroSecondaryQueueInfo(distroID string) (DistroQueueInfo, error) {
+	rval, err := getDistroQueueInfoCollection(distroID, TaskSecondaryQueuesCollection)
 	return rval, err
 }
 
@@ -73,15 +74,15 @@ func RemoveTaskQueues(distroID string) error {
 	catcher := grip.NewBasicCatcher()
 	err := db.RemoveAllQ(TaskQueuesCollection, query)
 	catcher.AddWhen(!adb.ResultsNotFound(err), errors.Wrapf(err, "removing task queue for distro '%s'", distroID))
-	err = db.RemoveAllQ(TaskAliasQueuesCollection, query)
+	err = db.RemoveAllQ(TaskSecondaryQueuesCollection, query)
 	catcher.AddWhen(!adb.ResultsNotFound(err), errors.Wrapf(err, "removing task alias queue for distro '%s'", distroID))
 	return catcher.Resolve()
 }
 
 // GetQueueCollection returns the collection associated with this queue.
 func (q *DistroQueueInfo) GetQueueCollection() string {
-	if q.AliasQueue {
-		return TaskAliasQueuesCollection
+	if q.SecondaryQueue {
+		return TaskSecondaryQueuesCollection
 	}
 
 	return TaskQueuesCollection
@@ -169,19 +170,19 @@ func LoadTaskQueue(distro string) (*TaskQueue, error) {
 	return findTaskQueueForDistro(taskQueueQuery{DistroID: distro, Collection: TaskQueuesCollection})
 }
 
-func LoadDistroAliasTaskQueue(distroID string) (*TaskQueue, error) {
-	return findTaskQueueForDistro(taskQueueQuery{DistroID: distroID, Collection: TaskAliasQueuesCollection})
+func LoadDistroSecondaryTaskQueue(distroID string) (*TaskQueue, error) {
+	return findTaskQueueForDistro(taskQueueQuery{DistroID: distroID, Collection: TaskSecondaryQueuesCollection})
 }
 
-func (self *TaskQueue) Length() int {
-	if self == nil {
+func (tq *TaskQueue) Length() int {
+	if tq == nil {
 		return 0
 	}
-	return len(self.Queue)
+	return len(tq.Queue)
 }
 
-func (self *TaskQueue) NextTask() *TaskQueueItem {
-	return &self.Queue[0]
+func (tq *TaskQueue) NextTask() *TaskQueueItem {
+	return &tq.Queue[0]
 }
 
 // shouldRunTaskGroup returns true if the number of hosts running a task is less than the maximum for that task group.
@@ -235,72 +236,21 @@ func ValidateNewGraph(t *task.Task, tasksToBlock []task.Task) error {
 	return catcher.Resolve()
 }
 
-func BlockTaskGroupTasks(taskID string) error {
-	t, err := task.FindOneId(taskID)
-	if err != nil {
-		return errors.Wrapf(err, "finding task '%s'", taskID)
-	}
-	if t == nil {
-		return errors.Errorf("task '%s' not found", taskID)
+func (tq *TaskQueue) Save() error {
+	if len(tq.Queue) > 10000 {
+		tq.Queue = tq.Queue[:10000]
 	}
 
-	p, err := FindProjectFromVersionID(t.Version)
-	if err != nil {
-		return errors.Wrapf(err, "getting project for task '%s'", t.Id)
-	}
-	tg := p.FindTaskGroup(t.TaskGroup)
-	if tg == nil {
-		return errors.Errorf("unable to find task group '%s' for task '%s'", t.TaskGroup, taskID)
-	}
-	indexOfTask := -1
-	for i, tgTask := range tg.Tasks {
-		if t.DisplayName == tgTask {
-			indexOfTask = i
-			break
-		}
-	}
-	if indexOfTask == -1 {
-		return errors.Errorf("could not find task '%s' in task group", t.DisplayName)
-	}
-	taskNamesToBlock := []string{}
-	for i := indexOfTask + 1; i < len(tg.Tasks); i++ {
-		taskNamesToBlock = append(taskNamesToBlock, tg.Tasks[i])
-	}
-	tasksToBlock, err := task.Find(task.ByVersionsForNameAndVariant([]string{t.Version}, taskNamesToBlock, t.BuildVariant))
-	if err != nil {
-		return errors.Wrapf(err, "finding tasks '%s'", strings.Join(taskNamesToBlock, ", "))
-	}
-	if err = ValidateNewGraph(t, tasksToBlock); err != nil {
-		return errors.Wrap(err, "validating proposed dependencies")
-	}
-
-	catcher := grip.NewBasicCatcher()
-	for _, taskToBlock := range tasksToBlock {
-		catcher.Add(taskToBlock.AddDependency(task.Dependency{TaskId: taskID, Status: evergreen.TaskSucceeded, Unattainable: true}))
-		err = dequeue(taskToBlock.Id, taskToBlock.DistroId)
-		catcher.AddWhen(!adb.ResultsNotFound(err), err) // it's not an error if the task already isn't on the queue
-		// this operation is recursive, maybe be refactorable
-		// to use some kind of cache.
-		catcher.Add(UpdateBlockedDependencies(&taskToBlock))
-	}
-	return catcher.Resolve()
+	return updateTaskQueue(tq.Distro, tq.Queue, tq.DistroQueueInfo)
 }
 
-func (self *TaskQueue) Save() error {
-	if len(self.Queue) > 10000 {
-		self.Queue = self.Queue[:10000]
-	}
-
-	return updateTaskQueue(self.Distro, self.Queue, self.DistroQueueInfo)
-}
-
-func (self *TaskQueue) FindNextTask(spec TaskSpec) (*TaskQueueItem, []string) {
-	if self.Length() == 0 {
+func (tq *TaskQueue) FindNextTask(spec TaskSpec) (*TaskQueueItem, []string) {
+	if tq.Length() == 0 {
 		return nil, nil
 	}
 	// With a spec, find a matching task.
 	if spec.Group != "" && spec.Project != "" && spec.BuildVariant != "" && spec.Version != "" {
-		for _, it := range self.Queue {
+		for _, it := range tq.Queue {
 			if it.Project != spec.Project {
 				continue
 			}
@@ -322,7 +272,7 @@ func (self *TaskQueue) FindNextTask(spec TaskSpec) (*TaskQueueItem, []string) {
 
 	// Otherwise, find the next dispatchable task.
 	spec = TaskSpec{}
-	for _, it := range self.Queue {
+	for _, it := range tq.Queue {
 		// Always return a task if the task group is empty.
 		if it.Group == "" {
 			return &it, nil
@@ -380,7 +330,7 @@ func ClearTaskQueue(distroId string) error {
 
 	catcher := grip.NewBasicCatcher()
 
-	// task queue should always exist, so proceed with clearing
+	// Task queue should always exist, so proceed with clearing
 	distroQueueInfo, err := GetDistroQueueInfo(distroId)
 	if err != nil {
 		catcher.Wrap(err, "getting task queue info")
@@ -391,24 +341,24 @@ func ClearTaskQueue(distroId string) error {
 		catcher.Wrap(err, "clearing task queue")
 	}
 
-	// make sure task alias queue actually exists before modifying
-	aliasQuery := bson.M{
+	// Make sure task secondary queue actually exists before modifying
+	secondaryQueueQuery := bson.M{
 		taskQueueDistroKey: distroId,
 	}
-	aliasCount, err := db.Count(TaskAliasQueuesCollection, aliasQuery)
+	aliasCount, err := db.Count(TaskSecondaryQueuesCollection, secondaryQueueQuery)
 	if err != nil {
-		catcher.Wrap(err, "counting task alias queues matching distro")
+		catcher.Wrap(err, "counting secondary queues matching distro")
 	}
-	// want to at least try to clear even in the case of an error
+	// Want to at least try to clear even in the case of an error
 	if aliasCount == 0 && err == nil {
 		grip.Info(message.Fields{
-			"message": "alias task queue not found, skipping",
+			"message": "secondary task queue not found, skipping",
 			"distro":  distroId,
 		})
 		return catcher.Resolve()
 	}
-	distroQueueInfo, err = GetDistroAliasQueueInfo(distroId)
-	catcher.Wrap(err, "getting task alias queue info")
+	distroQueueInfo, err = GetDistroSecondaryQueueInfo(distroId)
+	catcher.Wrap(err, "getting task secondary queue info")
 	distroQueueInfo = clearQueueInfo(distroQueueInfo)
 
 	err = clearTaskQueueCollection(distroId, distroQueueInfo)
@@ -427,7 +377,7 @@ func clearQueueInfo(distroQueueInfo DistroQueueInfo) DistroQueueInfo {
 		CountDurationOverThreshold: 0,
 		CountWaitOverThreshold:     0,
 		TaskGroupInfos:             []TaskGroupInfo{},
-		AliasQueue:                 distroQueueInfo.AliasQueue,
+		SecondaryQueue:             distroQueueInfo.SecondaryQueue,
 	}
 }
 
@@ -561,7 +511,7 @@ func FindMinimumQueuePositionForTask(taskId string) (int, error) {
 		return -1, err
 	}
 
-	return (results[0].Index + 1), err
+	return results[0].Index + 1, err
 }
 
 // FindEnqueuedTaskIDs finds all tasks IDs that are already in a task queue for
@@ -619,10 +569,10 @@ func FindDistroTaskQueue(distroID string) (TaskQueue, error) {
 	return queue, errors.WithStack(err)
 }
 
-func FindDistroAliasTaskQueue(distroID string) (TaskQueue, error) {
+func FindDistroSecondaryTaskQueue(distroID string) (TaskQueue, error) {
 	queue := TaskQueue{}
 	q := db.Query(bson.M{taskQueueDistroKey: distroID})
-	err := db.FindOneQ(TaskAliasQueuesCollection, q, &queue)
+	err := db.FindOneQ(TaskSecondaryQueuesCollection, q, &queue)
 
 	return queue, errors.WithStack(err)
 }
@@ -720,27 +670,23 @@ func FindTaskQueueGenerationRuntime() (map[string]time.Duration, error) {
 	return runDurationMapAggregation(TaskQueuesCollection, taskQueueGenerationRuntimePipeline())
 }
 
-func FindTaskAliasQueueGenerationRuntime() (map[string]time.Duration, error) {
-	return runDurationMapAggregation(TaskAliasQueuesCollection, taskQueueGenerationRuntimePipeline())
-}
-
 func FindTaskQueueLastGenerationTimes() (map[string]time.Time, error) {
 	return runTimeMapAggregation(TaskQueuesCollection, taskQueueGenerationTimesPipeline())
 }
 
-func FindTaskAliasQueueLastGenerationTimes() (map[string]time.Time, error) {
-	return runTimeMapAggregation(TaskAliasQueuesCollection, taskQueueGenerationTimesPipeline())
+func FindTaskSecondaryQueueLastGenerationTimes() (map[string]time.Time, error) {
+	return runTimeMapAggregation(TaskSecondaryQueuesCollection, taskQueueGenerationTimesPipeline())
 }
 
 // pull out the task with the specified id from both the in-memory and db
 // versions of the task queue
-func (self *TaskQueue) DequeueTask(taskId string) error {
+func (tq *TaskQueue) DequeueTask(taskId string) error {
 	// first, remove it from the in-memory queue if it is present
 outer:
 	for {
-		for idx, queueItem := range self.Queue {
+		for idx, queueItem := range tq.Queue {
 			if queueItem.Id == taskId {
-				self.Queue = append(self.Queue[:idx], self.Queue[idx+1:]...)
+				tq.Queue = append(tq.Queue[:idx], tq.Queue[idx+1:]...)
 				continue outer
 			}
 		}
@@ -752,7 +698,7 @@ outer:
 	// only no longer be present after the TTL has passed, and each app server
 	// has re-created its in-memory queue.
 
-	err := dequeue(taskId, self.Distro)
+	err := dequeue(taskId, tq.Distro)
 	if adb.ResultsNotFound(err) {
 		return nil
 	}

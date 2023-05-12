@@ -3,7 +3,7 @@ package plugin
 import (
 	"fmt"
 	"html/template"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 
 	"github.com/evergreen-ci/evergreen/model"
@@ -22,7 +22,7 @@ func (pp *PerfPlugin) Name() string { return "perf" }
 func (pp *PerfPlugin) Configure(map[string]interface{}) error { return nil }
 
 func (pp *PerfPlugin) GetPanelConfig() (*PanelConfig, error) {
-	panelHTML, err := ioutil.ReadFile(filepath.Join(TemplateRoot(pp.Name()), "task_perf_data.html"))
+	panelHTML, err := os.ReadFile(filepath.Join(TemplateRoot(pp.Name()), "task_perf_data.html"))
 	if err != nil {
 		return nil, fmt.Errorf("Can't load panel html file: %v", err)
 	}
@@ -31,13 +31,9 @@ func (pp *PerfPlugin) GetPanelConfig() (*PanelConfig, error) {
 		Panels: []UIPanel{
 			{
 				Includes: []template.HTML{
-					`<script type="text/javascript" src="/static/app/perf/trend_chart.js"></script>`,
 					`<script type="text/javascript" src="/static/app/perf/perf.js"></script>`,
 					`<script type="text/javascript" src="/static/app/common/ApiUtil.js"></script>`,
 					`<script type="text/javascript" src="/static/app/common/ApiTaskdata.js"></script>`,
-					`<script type="text/javascript" src="/static/app/perf/PerfChartService.js"></script>`,
-					`<script type="text/javascript" src="/static/app/perf/TrendSamples.js"></script>`,
-					`<script type="text/javascript" src="/static/app/perf/TestSample.js"></script>`,
 					`<script type="text/javascript" src="/static/thirdparty/numeral.js"></script>`,
 				},
 				Page:      TaskPage,

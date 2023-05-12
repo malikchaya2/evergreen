@@ -66,11 +66,7 @@ func (hph *hostPostHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	hostModel := &model.APIHost{}
-	err = hostModel.BuildFromService(intentHost)
-	if err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "converting created intent host to API model"))
-	}
-
+	hostModel.BuildFromService(intentHost, nil)
 	return gimlet.NewJSONResponse(hostModel)
 }
 
@@ -598,6 +594,8 @@ func (h *createVolumeHandler) Run(ctx context.Context) gimlet.Responder {
 
 	if h.volume.Type == "" {
 		h.volume.Type = evergreen.DefaultEBSType
+		h.volume.IOPS = cloud.Gp2EquivalentIOPSForGp3(h.volume.Size)
+		h.volume.Throughput = cloud.Gp2EquivalentThroughputForGp3(h.volume.Size)
 	}
 	if h.volume.AvailabilityZone == "" {
 		h.volume.AvailabilityZone = evergreen.DefaultEBSAvailabilityZone
@@ -616,11 +614,11 @@ func (h *createVolumeHandler) Run(ctx context.Context) gimlet.Responder {
 	if err != nil {
 		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "creating new volume"))
 	}
-	volumeModel := &model.APIVolume{}
-	err = volumeModel.BuildFromService(res)
-	if err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "converting created volume to API model"))
+	if res == nil {
+		return gimlet.MakeJSONInternalErrorResponder(errors.Errorf("no volume created"))
 	}
+	volumeModel := &model.APIVolume{}
+	volumeModel.BuildFromService(*res)
 
 	return gimlet.NewJSONResponse(volumeModel)
 }
@@ -852,9 +850,7 @@ func (h *getVolumesHandler) Run(ctx context.Context) gimlet.Responder {
 	volumeDocs := []model.APIVolume{}
 	for _, v := range volumes {
 		volumeDoc := model.APIVolume{}
-		if err = volumeDoc.BuildFromService(v); err != nil {
-			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "converting volume '%s' to API model", v.ID))
-		}
+		volumeDoc.BuildFromService(v)
 
 		// if the volume is attached to a host, also return the host ID and volume device name
 		if v.Host != "" {
@@ -911,9 +907,7 @@ func (h *getVolumeByIDHandler) Run(ctx context.Context) gimlet.Responder {
 		})
 	}
 	volumeDoc := &model.APIVolume{}
-	if err = volumeDoc.BuildFromService(v); err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "converting volume '%s' to API model", v.ID))
-	}
+	volumeDoc.BuildFromService(*v)
 	// if the volume is attached to a host, also return the host ID and volume device name
 	if v.Host != "" {
 		attachedHost, err := host.FindOneId(v.Host)
@@ -1127,10 +1121,9 @@ func (h *hostExtendExpirationHandler) Run(ctx context.Context) gimlet.Responder 
 	return gimlet.NewJSONResponse(struct{}{})
 }
 
-////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////
 //
 // POST /rest/v2/host/start_process
-//
 type hostStartProcesses struct {
 	env evergreen.Environment
 
@@ -1219,10 +1212,9 @@ func (hs *hostStartProcesses) Run(ctx context.Context) gimlet.Responder {
 	return response
 }
 
-////////////////////////////////////////////////////////////////////////
+// //////////////////////////////////////////////////////////////////////
 //
 // GET /rest/v2/host/get_process
-//
 type hostGetProcesses struct {
 	env evergreen.Environment
 
@@ -1304,9 +1296,15 @@ func validateID(id string) (string, error) {
 func makeSpawnHostSubscription(hostID, subscriberType string, user *user.DBUser) (model.APISubscription, error) {
 	var subscriber model.APISubscriber
 	if subscriberType == event.SlackSubscriberType {
+
+		target := fmt.Sprintf("@%s", user.Settings.SlackUsername)
+		if user.Settings.SlackMemberId != "" {
+			target = user.Settings.SlackMemberId
+		}
+
 		subscriber = model.APISubscriber{
 			Type:   utility.ToStringPtr(event.SlackSubscriberType),
-			Target: fmt.Sprintf("@%s", user.Settings.SlackUsername),
+			Target: target,
 		}
 	} else if subscriberType == event.EmailSubscriberType {
 		subscriber = model.APISubscriber{

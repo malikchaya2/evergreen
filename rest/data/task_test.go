@@ -220,6 +220,7 @@ func TestTaskConnectorFetchByProjectAndCommitSuite(t *testing.T) {
 					Status:       status,
 					BuildVariant: variant,
 					DisplayName:  fmt.Sprintf("task_%d", tix),
+					Requester:    evergreen.RepotrackerVersionRequester,
 				}
 				assert.NoError(t, testTask.Insert())
 			}
@@ -249,6 +250,32 @@ func (s *TaskConnectorFetchByProjectAndCommitSuite) TestFindByProjectAndCommit()
 			}
 		}
 	}
+}
+
+func (s *TaskConnectorFetchByProjectAndCommitSuite) TestRegexFindByProjectAndCommit() {
+	opts := task.GetTasksByProjectAndCommitOptions{
+		Project:        "project_0",
+		CommitHash:     "commit_0",
+		StartingTaskId: "",
+		Status:         "",
+		TaskName:       "",
+		VariantName:    "",
+		VariantRegex:   "^bv",
+		Limit:          0,
+	}
+	foundTasks, err := FindTasksByProjectAndCommit(opts)
+	s.NoError(err)
+	s.Equal(16, len(foundTasks))
+
+	opts.VariantRegex = "1$"
+	foundTasks, err = FindTasksByProjectAndCommit(opts)
+	s.NoError(err)
+	s.Equal(8, len(foundTasks))
+
+	opts.VariantRegex = "2$"
+	foundTasks, err = FindTasksByProjectAndCommit(opts)
+	s.NoError(err)
+	s.Equal(8, len(foundTasks))
 }
 
 func (s *TaskConnectorFetchByProjectAndCommitSuite) TestFindByProjectFail() {
@@ -391,26 +418,6 @@ func (s *TaskConnectorFetchByProjectAndCommitSuite) TestFindFromMiddle() {
 
 }
 
-func (s *TaskConnectorFetchByProjectAndCommitSuite) TestFindFromMiddleFail() {
-	opts := task.GetTasksByProjectAndCommitOptions{
-		Project:        "project_0",
-		CommitHash:     "commit_0",
-		StartingTaskId: "fake_task",
-		Status:         "",
-		TaskName:       "",
-		VariantName:    "",
-		Limit:          0,
-	}
-	foundTests, err := FindTasksByProjectAndCommit(opts)
-	s.Error(err)
-	s.Equal(0, len(foundTests))
-
-	s.IsType(gimlet.ErrorResponse{}, err)
-	apiErr, ok := err.(gimlet.ErrorResponse)
-	s.True(ok)
-	s.Equal(http.StatusNotFound, apiErr.StatusCode)
-}
-
 func (s *TaskConnectorFetchByProjectAndCommitSuite) TestFindWithLimit() {
 	commitId := "commit_0"
 	projectId := "project_0"
@@ -473,7 +480,7 @@ func TestCheckTaskSecret(t *testing.T) {
 	}
 	code, err := CheckTaskSecret("task1", r)
 	assert.Error(err)
-	assert.Equal(http.StatusUnauthorized, code)
+	assert.Equal(http.StatusConflict, code)
 
 	r.Header.Set(evergreen.TaskSecretHeader, "abcdef")
 	code, err = CheckTaskSecret("task1", r)

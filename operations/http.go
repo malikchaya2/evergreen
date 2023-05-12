@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"net/url"
 	"strings"
@@ -44,20 +43,20 @@ type APIError struct {
 }
 
 func (ae APIError) Error() string {
-	return fmt.Sprintf("Unexpected reply from server (%v): %v", ae.status, ae.body)
+	return fmt.Sprintf("Unexpected reply from server (%s): %s", ae.status, ae.body)
 }
 
 // NewAPIError creates an APIError by reading the body of the response and its status code.
 func NewAPIError(resp *http.Response) APIError {
 	defer resp.Body.Close()
-	bodyBytes, _ := ioutil.ReadAll(resp.Body) // ignore error, request has already failed anyway
+	bodyBytes, _ := io.ReadAll(resp.Body) // ignore error, request has already failed anyway
 	bodyStr := string(bodyBytes)
 	return APIError{bodyStr, resp.Status, resp.StatusCode}
 }
 
 func NewAuthError(resp *http.Response) APIError {
 	apiError := NewAPIError(resp)
-	apiError.body = strings.Join([]string{apiError.body, client.AuthError}, "")
+	apiError.body = fmt.Sprintf("%s (%s)", apiError.body, client.AuthError)
 	return apiError
 }
 
@@ -94,27 +93,27 @@ func (ac *legacyClient) doReq(method, path string, apiVersion int, body io.Reade
 }
 
 func (ac *legacyClient) get(path string, body io.Reader) (*http.Response, error) {
-	return ac.doReq("GET", path, 1, body)
+	return ac.doReq(http.MethodGet, path, 1, body)
 }
 
 func (ac *legacyClient) get2(path string, body io.Reader) (*http.Response, error) {
-	return ac.doReq("GET", path, 2, body)
+	return ac.doReq(http.MethodGet, path, 2, body)
 }
 
 func (ac *legacyClient) delete(path string, body io.Reader) (*http.Response, error) {
-	return ac.doReq("DELETE", path, 1, body)
+	return ac.doReq(http.MethodDelete, path, 1, body)
 }
 
 func (ac *legacyClient) put(path string, body io.Reader) (*http.Response, error) {
-	return ac.doReq("PUT", path, 1, body)
+	return ac.doReq(http.MethodPut, path, 1, body)
 }
 
 func (ac *legacyClient) post(path string, body io.Reader) (*http.Response, error) {
-	return ac.doReq("POST", path, 1, body)
+	return ac.doReq(http.MethodPost, path, 1, body)
 }
 
 func (ac *legacyClient) post2(path string, body io.Reader) (*http.Response, error) {
-	return ac.doReq("POST", path, 2, body)
+	return ac.doReq(http.MethodPost, path, 2, body)
 }
 
 func (ac *legacyClient) modifyExisting(patchId, action string) error {
@@ -251,13 +250,9 @@ func (ac *legacyClient) GetPatch(patchId string) (*patch.Patch, error) {
 	if err = utility.ReadJSON(resp.Body, apiModel); err != nil {
 		return nil, err
 	}
-	i, err := apiModel.ToService()
+	res, err := apiModel.ToService()
 	if err != nil {
-		return nil, errors.Wrapf(err, "error building to patch")
-	}
-	res, ok := i.(patch.Patch)
-	if !ok {
-		return nil, errors.Wrapf(err, "error converting type %T to Patch", res)
+		return nil, errors.Wrapf(err, "converting patch to service model")
 	}
 	return &res, nil
 }
@@ -285,7 +280,7 @@ func (ac *legacyClient) GetProjectRef(projectId string) (*model.ProjectRef, erro
 
 // GetPatchedConfig takes in patch id and returns the patched project config.
 func (ac *legacyClient) GetPatchedConfig(patchId string) (*model.Project, error) {
-	resp, err := ac.get(fmt.Sprintf("patches/%v/config", patchId), nil)
+	resp, err := ac.get(fmt.Sprintf("patches/%s/config", patchId), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -298,7 +293,7 @@ func (ac *legacyClient) GetPatchedConfig(patchId string) (*model.Project, error)
 		return nil, NewAPIError(resp)
 	}
 	ref := &model.Project{}
-	yamlBytes, err := ioutil.ReadAll(resp.Body)
+	yamlBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +305,7 @@ func (ac *legacyClient) GetPatchedConfig(patchId string) (*model.Project, error)
 
 // GetConfig fetches the config yaml from the API server for a given project ID.
 func (ac *legacyClient) GetConfig(versionId string) ([]byte, error) {
-	path := fmt.Sprintf("versions/%v/config", versionId)
+	path := fmt.Sprintf("versions/%s/config", versionId)
 	resp, err := ac.get(path, nil)
 	if err != nil {
 		return nil, err
@@ -323,9 +318,9 @@ func (ac *legacyClient) GetConfig(versionId string) ([]byte, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, NewAPIError(resp)
 	}
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, errors.Wrap(err, "error reading body")
+		return nil, errors.Wrap(err, "reading response body")
 	}
 	return respBytes, nil
 
@@ -333,7 +328,7 @@ func (ac *legacyClient) GetConfig(versionId string) ([]byte, error) {
 
 // GetProject fetches the project details from the API server for a given project ID.
 func (ac *legacyClient) GetProject(versionId string) (*model.Project, error) {
-	resp, err := ac.get(fmt.Sprintf("versions/%v/parser_project", versionId), nil)
+	resp, err := ac.get(fmt.Sprintf("versions/%s/parser_project", versionId), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -345,9 +340,9 @@ func (ac *legacyClient) GetProject(versionId string) (*model.Project, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, NewAPIError(resp)
 	}
-	respBytes, err := ioutil.ReadAll(resp.Body)
+	respBytes, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, errors.Wrap(err, "error reading body")
+		return nil, errors.Wrap(err, "reading response body")
 	}
 
 	return model.GetProjectFromBSON(respBytes)
@@ -360,7 +355,7 @@ func (ac *legacyClient) GetLastGreen(project string, variants []string) (*model.
 		qs = append(qs, url.QueryEscape(v))
 	}
 	q := strings.Join(qs, "&")
-	resp, err := ac.get(fmt.Sprintf("projects/%v/last_green?%v", project, q), nil)
+	resp, err := ac.get(fmt.Sprintf("projects/%s/last_green?%s", project, q), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -381,7 +376,7 @@ func (ac *legacyClient) GetLastGreen(project string, variants []string) (*model.
 
 // DeletePatchModule makes a request to the API server to delete the given module from a patch
 func (ac *legacyClient) DeletePatchModule(patchId, module string) error {
-	resp, err := ac.delete(fmt.Sprintf("patches/%s/modules?module=%v", patchId, url.QueryEscape(module)), nil)
+	resp, err := ac.delete(fmt.Sprintf("patches/%s/modules?module=%s", patchId, url.QueryEscape(module)), nil)
 	if err != nil {
 		return err
 	}
@@ -461,7 +456,7 @@ func (ac *legacyClient) ListProjects() ([]model.ProjectRef, error) {
 }
 
 func (ac *legacyClient) ListTasks(project string) ([]model.ProjectTask, error) {
-	resp, err := ac.get(fmt.Sprintf("tasks/%v", project), nil)
+	resp, err := ac.get(fmt.Sprintf("tasks/%s", project), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -481,7 +476,7 @@ func (ac *legacyClient) ListTasks(project string) ([]model.ProjectTask, error) {
 }
 
 func (ac *legacyClient) ListVariants(project string) ([]model.BuildVariant, error) {
-	resp, err := ac.get(fmt.Sprintf("variants/%v", project), nil)
+	resp, err := ac.get(fmt.Sprintf("variants/%s", project), nil)
 	if err != nil {
 		return nil, err
 	}
@@ -503,7 +498,7 @@ func (ac *legacyClient) ListVariants(project string) ([]model.BuildVariant, erro
 func (ac *legacyClient) ListDistros() ([]distro.Distro, error) {
 	resp, err := ac.get2("distros", nil)
 	if err != nil {
-		return nil, errors.Wrap(err, "problem querying api server")
+		return nil, errors.Wrap(err, "making request to get distros")
 	}
 	defer resp.Body.Close()
 
@@ -511,11 +506,11 @@ func (ac *legacyClient) ListDistros() ([]distro.Distro, error) {
 		return nil, NewAuthError(resp)
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, errors.Wrap(NewAPIError(resp), "bad status from api server")
+		return nil, errors.Wrap(NewAPIError(resp), "received non-OK status from API server")
 	}
 	distros := []distro.Distro{}
 	if err := utility.ReadJSON(resp.Body, &distros); err != nil {
-		return nil, errors.Wrap(err, "error reading json")
+		return nil, errors.Wrap(err, "reading JSON from response body")
 	}
 	return distros, nil
 }
@@ -549,7 +544,9 @@ func (ac *legacyClient) PutPatch(incomingPatch patchSubmission) (*patch.Patch, e
 		GitMetadata       patch.GitMetadata  `json:"git_metadata"`
 		RepeatDefinition  bool               `json:"reuse_definition"`
 		RepeatFailed      bool               `json:"repeat_failed"`
+		RepeatPatchId     string             `json:"repeat_patch_id"`
 		GithubAuthor      string             `json:"github_author"`
+		PatchAuthor       string             `json:"patch_author"`
 	}{
 		Description:       incomingPatch.description,
 		Project:           incomingPatch.projectName,
@@ -572,7 +569,9 @@ func (ac *legacyClient) PutPatch(incomingPatch patchSubmission) (*patch.Patch, e
 		GitMetadata:       incomingPatch.gitMetadata,
 		RepeatDefinition:  incomingPatch.repeatDefinition,
 		RepeatFailed:      incomingPatch.repeatFailed,
+		RepeatPatchId:     incomingPatch.repeatPatchId,
 		GithubAuthor:      incomingPatch.githubAuthor,
+		PatchAuthor:       incomingPatch.patchAuthor,
 	}
 
 	rPipe, wPipe := io.Pipe()
@@ -701,11 +700,11 @@ func (ac *legacyClient) UpdateRole(role *gimlet.Role) error {
 	}
 	roleJSON, err := json.Marshal(role)
 	if err != nil {
-		return errors.Wrap(err, "error serializing role data")
+		return errors.Wrap(err, "marshalling role data")
 	}
 	resp, err := ac.post2("roles", bytes.NewBuffer(roleJSON))
 	if err != nil {
-		return errors.Wrap(err, "error making request to update role")
+		return errors.Wrap(err, "making request to update role")
 	}
 	defer resp.Body.Close()
 

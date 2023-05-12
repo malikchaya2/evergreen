@@ -224,23 +224,23 @@ func TestRemove(t *testing.T) {
 func TestNewTaskIntentPod(t *testing.T) {
 	makeValidOpts := func() TaskIntentPodOptions {
 		return TaskIntentPodOptions{
-			ID:             "id",
-			Secret:         "secret",
-			CPU:            128,
-			MemoryMB:       256,
-			OS:             OSWindows,
-			Arch:           ArchAMD64,
-			WindowsVersion: WindowsVersionServer2022,
-			Image:          "image",
-			WorkingDir:     "/",
-			RepoUsername:   "username",
-			RepoPassword:   "password",
+			ID:                  "id",
+			PodSecretExternalID: "pod_secret_external_id",
+			PodSecretValue:      "pod_secret_value",
+			CPU:                 128,
+			MemoryMB:            256,
+			OS:                  OSWindows,
+			Arch:                ArchAMD64,
+			WindowsVersion:      WindowsVersionServer2022,
+			Image:               "image",
+			RepoCredsExternalID: "repo_creds_external_id",
+			WorkingDir:          "/",
 		}
 	}
 	t.Run("SucceedsWithValidOptions", func(t *testing.T) {
 		opts := makeValidOpts()
 
-		p, err := NewTaskIntentPod(opts)
+		p, err := NewTaskIntentPod(evergreen.ECSConfig{}, opts)
 		require.NoError(t, err)
 		assert.Equal(t, opts.ID, p.ID)
 		assert.Equal(t, opts.CPU, p.TaskContainerCreationOpts.CPU)
@@ -249,47 +249,66 @@ func TestNewTaskIntentPod(t *testing.T) {
 		assert.Equal(t, opts.Arch, p.TaskContainerCreationOpts.Arch)
 		assert.Equal(t, opts.WindowsVersion, p.TaskContainerCreationOpts.WindowsVersion)
 		assert.Equal(t, opts.Image, p.TaskContainerCreationOpts.Image)
+		assert.Equal(t, opts.RepoCredsExternalID, p.TaskContainerCreationOpts.RepoCredsExternalID)
 		assert.Equal(t, opts.WorkingDir, p.TaskContainerCreationOpts.WorkingDir)
-		assert.Equal(t, opts.RepoUsername, p.TaskContainerCreationOpts.RepoUsername)
-		assert.Equal(t, opts.RepoPassword, p.TaskContainerCreationOpts.RepoPassword)
 		assert.Equal(t, opts.ID, p.TaskContainerCreationOpts.EnvVars[PodIDEnvVar])
 		s, err := p.GetSecret()
 		require.NoError(t, err)
-		assert.Zero(t, s.Name)
-		assert.Equal(t, opts.Secret, s.Value)
-		assert.Empty(t, s.ExternalID)
-		assert.False(t, utility.FromBoolPtr(s.Exists))
-		assert.True(t, utility.FromBoolPtr(s.Owned))
+		assert.Equal(t, opts.PodSecretExternalID, s.ExternalID)
+		assert.Equal(t, opts.PodSecretValue, s.Value)
 	})
 	t.Run("SetsDefaultID", func(t *testing.T) {
 		opts := makeValidOpts()
 		opts.ID = ""
 
-		p, err := NewTaskIntentPod(opts)
+		p, err := NewTaskIntentPod(evergreen.ECSConfig{}, opts)
 		require.NoError(t, err)
 		assert.NotZero(t, p.ID)
 		assert.Equal(t, p.ID, p.TaskContainerCreationOpts.EnvVars[PodIDEnvVar])
 	})
-	t.Run("SetsDefaultPodSecret", func(t *testing.T) {
+	t.Run("FailsWithoutPodSecretExternalID", func(t *testing.T) {
 		opts := makeValidOpts()
-		opts.Secret = ""
+		opts.PodSecretExternalID = ""
 
-		p, err := NewTaskIntentPod(opts)
-		require.NoError(t, err)
-		assert.NotZero(t, p.ID)
-		s, err := p.GetSecret()
-		require.NoError(t, err)
-		assert.Zero(t, s.Name)
-		assert.NotZero(t, s.Value)
-		assert.Empty(t, s.ExternalID)
-		assert.False(t, utility.FromBoolPtr(s.Exists))
-		assert.True(t, utility.FromBoolPtr(s.Owned))
+		p, err := NewTaskIntentPod(evergreen.ECSConfig{}, opts)
+		assert.Error(t, err)
+		assert.Zero(t, p)
 	})
-	t.Run("FailsWithInvalidOptions", func(t *testing.T) {
+	t.Run("FailsWithoutPodSecretValue", func(t *testing.T) {
+		opts := makeValidOpts()
+		opts.PodSecretValue = ""
+
+		p, err := NewTaskIntentPod(evergreen.ECSConfig{}, opts)
+		assert.Error(t, err)
+		assert.Zero(t, p)
+	})
+	t.Run("FailsWithoutImage", func(t *testing.T) {
 		opts := makeValidOpts()
 		opts.Image = ""
 
-		p, err := NewTaskIntentPod(opts)
+		p, err := NewTaskIntentPod(evergreen.ECSConfig{}, opts)
+		assert.Error(t, err)
+		assert.Zero(t, p)
+	})
+	t.Run("FailsWithCPUExceedingGlobalMaxCPU", func(t *testing.T) {
+		opts := makeValidOpts()
+		ecsConf := evergreen.ECSConfig{
+			MaxCPU:      1024,
+			MaxMemoryMB: 2048,
+		}
+		opts.CPU = ecsConf.MaxCPU + 1
+		p, err := NewTaskIntentPod(ecsConf, opts)
+		assert.Error(t, err)
+		assert.Zero(t, p)
+	})
+	t.Run("FailsWithCPUExceedingGlobalMaxMemoryMB", func(t *testing.T) {
+		opts := makeValidOpts()
+		ecsConf := evergreen.ECSConfig{
+			MaxCPU:      1024,
+			MaxMemoryMB: 2048,
+		}
+		opts.MemoryMB = ecsConf.MaxMemoryMB + 1
+		p, err := NewTaskIntentPod(ecsConf, opts)
 		assert.Error(t, err)
 		assert.Zero(t, p)
 	})
@@ -321,7 +340,7 @@ func TestUpdateStatus(t *testing.T) {
 	}
 
 	checkEventLog := func(t *testing.T, p Pod) {
-		events, err := event.Find(event.AllLogCollection, event.MostRecentPodEvents(p.ID, 10))
+		events, err := event.Find(event.MostRecentPodEvents(p.ID, 10))
 		require.NoError(t, err)
 		require.Len(t, events, 1)
 		assert.Equal(t, p.ID, events[0].ResourceId)
@@ -333,7 +352,7 @@ func TestUpdateStatus(t *testing.T) {
 		"SucceedsWithInitializingStatus": func(t *testing.T, p Pod) {
 			require.NoError(t, p.Insert())
 
-			require.NoError(t, p.UpdateStatus(StatusInitializing))
+			require.NoError(t, p.UpdateStatus(StatusInitializing, ""))
 			assert.Equal(t, StatusInitializing, p.Status)
 
 			checkStatusAndTimeInfo(t, p)
@@ -342,7 +361,7 @@ func TestUpdateStatus(t *testing.T) {
 		"SucceedsWithStartingStatus": func(t *testing.T, p Pod) {
 			require.NoError(t, p.Insert())
 
-			require.NoError(t, p.UpdateStatus(StatusStarting))
+			require.NoError(t, p.UpdateStatus(StatusStarting, ""))
 			assert.Equal(t, StatusStarting, p.Status)
 
 			checkStatusAndTimeInfo(t, p)
@@ -351,7 +370,7 @@ func TestUpdateStatus(t *testing.T) {
 		"SucceedsWithTerminatedStatus": func(t *testing.T, p Pod) {
 			require.NoError(t, p.Insert())
 
-			require.NoError(t, p.UpdateStatus(StatusTerminated))
+			require.NoError(t, p.UpdateStatus(StatusTerminated, ""))
 			assert.Equal(t, StatusTerminated, p.Status)
 
 			checkStatus(t, p)
@@ -360,11 +379,11 @@ func TestUpdateStatus(t *testing.T) {
 		"NoopsWithIdenticalStatus": func(t *testing.T, p Pod) {
 			require.NoError(t, p.Insert())
 
-			require.NoError(t, p.UpdateStatus(p.Status))
+			require.NoError(t, p.UpdateStatus(p.Status, ""))
 			checkStatus(t, p)
 		},
 		"FailsWithNonexistentPod": func(t *testing.T, p Pod) {
-			assert.Error(t, p.UpdateStatus(StatusTerminated))
+			assert.Error(t, p.UpdateStatus(StatusTerminated, ""))
 
 			dbPod, err := FindOneByID(p.ID)
 			assert.NoError(t, err)
@@ -377,7 +396,7 @@ func TestUpdateStatus(t *testing.T) {
 				"$set": bson.M{StatusKey: StatusInitializing},
 			}))
 
-			assert.Error(t, p.UpdateStatus(StatusTerminated))
+			assert.Error(t, p.UpdateStatus(StatusTerminated, ""))
 
 			dbPod, err := FindOneByID(p.ID)
 			require.NoError(t, err)
@@ -386,9 +405,9 @@ func TestUpdateStatus(t *testing.T) {
 		},
 	} {
 		t.Run(tName, func(t *testing.T) {
-			require.NoError(t, db.ClearCollections(Collection, event.AllLogCollection))
+			require.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 			defer func() {
-				assert.NoError(t, db.ClearCollections(Collection, event.AllLogCollection))
+				assert.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 			}()
 			tCase(t, Pod{
 				ID:     "id",
@@ -474,9 +493,9 @@ func TestUpdateResources(t *testing.T) {
 		},
 	} {
 		t.Run(tName, func(t *testing.T) {
-			require.NoError(t, db.ClearCollections(Collection, event.AllLogCollection))
+			require.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 			defer func() {
-				assert.NoError(t, db.ClearCollections(Collection, event.AllLogCollection))
+				assert.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 			}()
 			tCase(t, Pod{
 				ID:     "id",
@@ -501,9 +520,8 @@ func TestUpdateResources(t *testing.T) {
 func TestGetSecret(t *testing.T) {
 	t.Run("SucceedsWithPopulatedEnvSecret", func(t *testing.T) {
 		expected := Secret{
-			Name:       "secret_name",
-			Value:      "secret_value",
 			ExternalID: "external_id",
+			Value:      "secret_value",
 		}
 		p := Pod{
 			ID: "id",
@@ -540,26 +558,51 @@ func TestSetRunningTask(t *testing.T) {
 	for tName, tCase := range map[string]func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod){
 		"Succeeds": func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod) {
 			require.NoError(t, p.Insert())
-			taskID := "task"
-			require.NoError(t, p.SetRunningTask(ctx, env, taskID))
+			const taskID = "task"
+			const taskExecution = 1
+			require.NoError(t, p.SetRunningTask(ctx, env, taskID, taskExecution))
 
 			dbPod, err := FindOneByID(p.ID)
 			require.NoError(t, err)
 			require.NotZero(t, dbPod)
-			assert.Equal(t, taskID, dbPod.RunningTask)
+			assert.Equal(t, taskID, dbPod.TaskRuntimeInfo.RunningTaskID)
+			assert.Equal(t, taskExecution, dbPod.TaskRuntimeInfo.RunningTaskExecution)
+			assert.Equal(t, StatusDecommissioned, dbPod.Status)
+		},
+		"NoopsWithPodAlreadyRunningSameTaskExecution": func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod) {
+			const taskID = "task"
+			const taskExecution = 2
+			p.TaskRuntimeInfo.RunningTaskID = taskID
+			p.TaskRuntimeInfo.RunningTaskExecution = taskExecution
+			require.NoError(t, p.Insert())
+			assert.NoError(t, p.SetRunningTask(ctx, env, taskID, taskExecution))
+
+			dbPod, err := FindOneByID(p.ID)
+			require.NoError(t, err)
+			require.NotZero(t, dbPod)
+			assert.Equal(t, taskID, dbPod.TaskRuntimeInfo.RunningTaskID)
+			assert.Equal(t, taskExecution, dbPod.TaskRuntimeInfo.RunningTaskExecution)
+		},
+		"FailsWithPodRunningSameTaskButPreviousExecution": func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod) {
+			const taskID = "task"
+			const taskExecution = 2
+			p.TaskRuntimeInfo.RunningTaskID = taskID
+			p.TaskRuntimeInfo.RunningTaskExecution = taskExecution
+			require.NoError(t, p.Insert())
+			assert.Error(t, p.SetRunningTask(ctx, env, taskID, taskExecution+1))
 		},
 		"FailsWithNonRunningPod": func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod) {
 			p.Status = StatusDecommissioned
 			require.NoError(t, p.Insert())
-			assert.Error(t, p.SetRunningTask(ctx, env, "task"))
+			assert.Error(t, p.SetRunningTask(ctx, env, "task", 0))
 		},
-		"FailsWithPodAlreadyRunningTask": func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod) {
-			p.RunningTask = "some-other-task"
+		"FailsWithPodAlreadyRunningDifferentTask": func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod) {
+			p.TaskRuntimeInfo.RunningTaskID = "some-other-task"
 			require.NoError(t, p.Insert())
-			assert.Error(t, p.SetRunningTask(ctx, env, "task"))
+			assert.Error(t, p.SetRunningTask(ctx, env, "task", 0))
 		},
 		"FailsWithNonexistentPod": func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod) {
-			assert.Error(t, p.SetRunningTask(ctx, env, "task"))
+			assert.Error(t, p.SetRunningTask(ctx, env, "task", 0))
 
 			dbPod, err := FindOneByID(p.ID)
 			assert.NoError(t, err)
@@ -583,66 +626,118 @@ func TestSetRunningTask(t *testing.T) {
 
 func TestClearRunningTask(t *testing.T) {
 	defer func() {
-		assert.NoError(t, db.ClearCollections(Collection))
+		assert.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 	}()
+
+	checkContainerTaskCleared := func(t *testing.T, podID string) {
+		p, err := FindOneByID(podID)
+		require.NoError(t, err)
+		require.NotZero(t, p)
+		assert.Zero(t, p.TaskRuntimeInfo.RunningTaskID)
+		assert.Zero(t, p.TaskRuntimeInfo.RunningTaskExecution)
+
+		events, err := event.FindAllByResourceID(podID)
+		require.NoError(t, err)
+		require.Len(t, events, 1)
+		assert.EqualValues(t, event.EventPodClearedTask, events[0].EventType, "should have logged event indicating task is cleared from pod")
+	}
 
 	for tName, tCase := range map[string]func(t *testing.T, p Pod){
 		"Succeeds": func(t *testing.T, p Pod) {
-			p.RunningTask = "task_id"
+			p.TaskRuntimeInfo.RunningTaskID = "task_id"
+			p.TaskRuntimeInfo.RunningTaskExecution = 5
 			require.NoError(t, p.Insert())
 			require.NoError(t, p.ClearRunningTask())
 
-			assert.Zero(t, p.RunningTask)
-			dbPod, err := FindOneByID(p.ID)
-			require.NoError(t, err)
-			require.NotZero(t, dbPod)
-			assert.Zero(t, dbPod.RunningTask)
+			assert.Zero(t, p.TaskRuntimeInfo.RunningTaskID)
+			assert.Zero(t, p.TaskRuntimeInfo.RunningTaskExecution)
+
+			checkContainerTaskCleared(t, p.ID)
+		},
+		"SucceedsWithTaskExecutionZero": func(t *testing.T, p Pod) {
+			p.TaskRuntimeInfo.RunningTaskID = "task_id"
+			p.TaskRuntimeInfo.RunningTaskExecution = 0
+			require.NoError(t, p.Insert())
+			require.NoError(t, p.ClearRunningTask())
+
+			assert.Zero(t, p.TaskRuntimeInfo.RunningTaskID)
+			assert.Zero(t, p.TaskRuntimeInfo.RunningTaskExecution)
+
+			checkContainerTaskCleared(t, p.ID)
 		},
 		"SucceedsWhenNotRunningAnyTask": func(t *testing.T, p Pod) {
-			p.RunningTask = ""
+			p.TaskRuntimeInfo.RunningTaskID = ""
+			p.TaskRuntimeInfo.RunningTaskExecution = 0
 			require.NoError(t, p.Insert())
 			require.NoError(t, p.ClearRunningTask())
 
-			assert.Zero(t, p.RunningTask)
+			assert.Zero(t, p.TaskRuntimeInfo.RunningTaskID)
+			assert.Zero(t, p.TaskRuntimeInfo.RunningTaskExecution)
+
 			dbPod, err := FindOneByID(p.ID)
 			require.NoError(t, err)
 			require.NotZero(t, dbPod)
-			assert.Zero(t, dbPod.RunningTask)
+			assert.Zero(t, dbPod.TaskRuntimeInfo.RunningTaskID)
+			assert.Zero(t, dbPod.TaskRuntimeInfo.RunningTaskExecution)
+
+			events, err := event.FindAllByResourceID(p.ID)
+			require.NoError(t, err)
+			assert.Empty(t, events)
 		},
 		"DoesNotUpdateDBWhenInMemoryPodDoesNotHaveRunningTask": func(t *testing.T, p Pod) {
-			p.RunningTask = "task_id"
+			const taskID = "task_id"
+			const taskExecution = 3
+			p.TaskRuntimeInfo.RunningTaskID = taskID
+			p.TaskRuntimeInfo.RunningTaskExecution = taskExecution
 			require.NoError(t, p.Insert())
-			p.RunningTask = ""
+			p.TaskRuntimeInfo.RunningTaskID = ""
+			p.TaskRuntimeInfo.RunningTaskExecution = 0
 			require.NoError(t, p.ClearRunningTask())
 
-			assert.Zero(t, p.RunningTask)
 			dbPod, err := FindOneByID(p.ID)
 			require.NoError(t, err)
 			require.NotZero(t, dbPod)
-			assert.NotZero(t, dbPod.RunningTask)
+			assert.Equal(t, taskID, dbPod.TaskRuntimeInfo.RunningTaskID)
+			assert.Equal(t, taskExecution, dbPod.TaskRuntimeInfo.RunningTaskExecution)
 		},
 		"FailsWithNonexistentPod": func(t *testing.T, p Pod) {
-			p.RunningTask = "task_id"
+			p.TaskRuntimeInfo.RunningTaskID = "task_id"
 			assert.Error(t, p.ClearRunningTask())
 
 			dbPod, err := FindOneByID(p.ID)
 			assert.NoError(t, err)
 			assert.Zero(t, dbPod)
 		},
-		"FailsWhenInMemoryPodHasDifferentRunningTaskFromDB": func(t *testing.T, p Pod) {
-			p.RunningTask = "task_id"
+		"FailsWhenInMemoryPodHasDifferentRunningTaskIDFromDB": func(t *testing.T, p Pod) {
+			const taskID = "task_id"
+			p.TaskRuntimeInfo.RunningTaskID = taskID
 			require.NoError(t, p.Insert())
-			p.RunningTask = "some_other_task_id"
+			p.TaskRuntimeInfo.RunningTaskID = "some_other_task_id"
 			assert.Error(t, p.ClearRunningTask())
 
 			dbPod, err := FindOneByID(p.ID)
 			require.NoError(t, err)
 			require.NotZero(t, dbPod)
-			assert.Equal(t, "task_id", dbPod.RunningTask)
+			assert.Equal(t, taskID, dbPod.TaskRuntimeInfo.RunningTaskID)
+		},
+		"FailsWhenInMemoryPodHasDifferentRunningTaskExecutionFromDB": func(t *testing.T, p Pod) {
+			const taskID = "task_id"
+			const taskExecution = 5
+			p.TaskRuntimeInfo.RunningTaskID = taskID
+			p.TaskRuntimeInfo.RunningTaskExecution = taskExecution
+			require.NoError(t, p.Insert())
+			p.TaskRuntimeInfo.RunningTaskExecution = taskExecution + 1
+			assert.Error(t, p.ClearRunningTask())
+
+			dbPod, err := FindOneByID(p.ID)
+			require.NoError(t, err)
+			require.NotZero(t, dbPod)
+			assert.Equal(t, taskID, dbPod.TaskRuntimeInfo.RunningTaskID)
+			assert.Equal(t, taskExecution, dbPod.TaskRuntimeInfo.RunningTaskExecution)
 		},
 	} {
 		t.Run(tName, func(t *testing.T) {
-			require.NoError(t, db.ClearCollections(Collection))
+			require.NoError(t, db.ClearCollections(Collection, event.EventCollection))
 
 			p := Pod{
 				ID:     "pod_id",
@@ -653,7 +748,7 @@ func TestClearRunningTask(t *testing.T) {
 	}
 }
 
-func TestSetAgentStartTime(t *testing.T) {
+func TestUpdateAgentStartTime(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -661,13 +756,10 @@ func TestSetAgentStartTime(t *testing.T) {
 		assert.NoError(t, db.ClearCollections(Collection))
 	}()
 
-	env := &mock.Environment{}
-	require.NoError(t, env.Configure(ctx))
-
-	for tName, tCase := range map[string]func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod){
-		"Succeeds": func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod) {
+	for tName, tCase := range map[string]func(ctx context.Context, t *testing.T, p Pod){
+		"Succeeds": func(ctx context.Context, t *testing.T, p Pod) {
 			require.NoError(t, p.Insert())
-			require.NoError(t, p.SetAgentStartTime())
+			require.NoError(t, p.UpdateAgentStartTime())
 
 			dbPod, err := FindOneByID(p.ID)
 			require.NoError(t, err)
@@ -675,8 +767,8 @@ func TestSetAgentStartTime(t *testing.T) {
 			assert.NotZero(t, dbPod.TimeInfo.AgentStarted)
 			assert.Equal(t, p.TimeInfo.AgentStarted, dbPod.TimeInfo.AgentStarted)
 		},
-		"FailsWithNonexistentPod": func(ctx context.Context, t *testing.T, env *mock.Environment, p Pod) {
-			assert.Error(t, p.SetAgentStartTime())
+		"FailsWithNonexistentPod": func(ctx context.Context, t *testing.T, p Pod) {
+			assert.Error(t, p.UpdateAgentStartTime())
 
 			dbPod, err := FindOneByID(p.ID)
 			assert.NoError(t, err)
@@ -692,7 +784,157 @@ func TestSetAgentStartTime(t *testing.T) {
 			p := Pod{
 				ID: "id",
 			}
-			tCase(tctx, t, env, p)
+			tCase(tctx, t, p)
 		})
 	}
+}
+
+func TestUpdateLastCommunicated(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	defer func() {
+		assert.NoError(t, db.ClearCollections(Collection))
+	}()
+
+	for tName, tCase := range map[string]func(ctx context.Context, t *testing.T, p Pod){
+		"Succeeds": func(ctx context.Context, t *testing.T, p Pod) {
+			require.NoError(t, p.Insert())
+			require.NoError(t, p.UpdateLastCommunicated())
+
+			dbPod, err := FindOneByID(p.ID)
+			require.NoError(t, err)
+			require.NotZero(t, dbPod)
+			assert.NotZero(t, dbPod.TimeInfo.LastCommunicated)
+			assert.Equal(t, p.TimeInfo.LastCommunicated, dbPod.TimeInfo.LastCommunicated)
+		},
+		"FailsWithNonexistentPod": func(ctx context.Context, t *testing.T, p Pod) {
+			assert.Error(t, p.UpdateLastCommunicated())
+
+			dbPod, err := FindOneByID(p.ID)
+			assert.NoError(t, err)
+			assert.Zero(t, dbPod)
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			tctx, tcancel := context.WithCancel(ctx)
+			defer tcancel()
+
+			require.NoError(t, db.ClearCollections(Collection))
+
+			p := Pod{
+				ID: "id",
+			}
+			tCase(tctx, t, p)
+		})
+	}
+}
+
+func TestTaskContainerCreationOptionsHash(t *testing.T) {
+	t.Run("Hash", func(t *testing.T) {
+		var baseOpts TaskContainerCreationOptions
+		baseHash := baseOpts.Hash()
+
+		t.Run("ReturnsSameValueForSameInput", func(t *testing.T) {
+			for i := 0; i < 5; i++ {
+				assert.Equal(t, baseHash, baseOpts.Hash(), "hash attempt %d produced different hash value", i)
+			}
+		})
+		t.Run("ChangesForImage", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.Image = "image"
+			assert.NotEqual(t, baseHash, opts.Hash(), "image should affect hash")
+		})
+		t.Run("ChangesForRepoCredsExternalID", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.RepoCredsExternalID = "external_id"
+			assert.NotEqual(t, baseHash, opts.Hash(), "repo creds external ID should affect hash")
+		})
+		t.Run("ChangesForMemory", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.MemoryMB = 1024
+			assert.NotEqual(t, baseHash, opts.Hash(), "memory should affect hash")
+		})
+		t.Run("ChangesForCPU", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.CPU = 256
+			assert.NotEqual(t, baseHash, opts.Hash(), "CPU should affect hash")
+		})
+		t.Run("ChangesForOS", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.OS = OSWindows
+			assert.NotEqual(t, baseHash, opts.Hash(), "OS should affect hash")
+		})
+		t.Run("ChangesForArch", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.Arch = ArchARM64
+			assert.NotEqual(t, baseHash, opts.Hash(), "CPU architecture should affect hash")
+		})
+		t.Run("ChangesForWindowsVersion", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.WindowsVersion = WindowsVersionServer2019
+			assert.NotEqual(t, baseHash, opts.Hash(), "Windows version should affect hash")
+		})
+		t.Run("ChangesForWorkingDir", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.WorkingDir = "/working_dir"
+			assert.NotEqual(t, baseHash, opts.Hash(), "working directory should affect hash")
+		})
+		t.Run("ChangesForEnvVars", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.EnvVars = map[string]string{
+				"ENV_VAR": "value",
+			}
+			assert.Equal(t, baseHash, opts.Hash(), "env vars should not affect hash")
+		})
+		t.Run("ReturnsSameValueForSameUnorderedEnvVars", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.EnvVars = map[string]string{
+				"ENV_VAR0": "value0",
+				"ENV_VAR1": "value1",
+				"ENV_VAR2": "value2",
+			}
+			h0 := opts.Hash()
+			h1 := opts.Hash()
+			assert.Equal(t, baseHash, h0, "env vars should not affect hash")
+			assert.Equal(t, h0, h1, "env vars should not affect hash")
+		})
+		t.Run("ReturnsSameValueForSameUnorderedEnvSecrets", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.EnvSecrets = map[string]Secret{
+				"SECRET_ENV_VAR0": {
+					ExternalID: "external_id0",
+				},
+				"SECRET_ENV_VAR1": {
+					ExternalID: "external_id1",
+				},
+				"SECRET_ENV_VAR2": {
+					ExternalID: "external_id2",
+				},
+			}
+			h0 := opts.Hash()
+			h1 := opts.Hash()
+			assert.Equal(t, h0, h1, "order of env secrets should not affect hash")
+		})
+		t.Run("ChangesForEnvSecretExternalID", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.EnvSecrets = map[string]Secret{
+				"SECRET_ENV_VAR": {},
+			}
+			h0 := opts.Hash()
+			opts.EnvSecrets["SECRET_ENV_VAR"] = Secret{ExternalID: "external_id"}
+			h1 := opts.Hash()
+			assert.NotEqual(t, h0, h1, "env secret external ID should affect hash")
+		})
+		t.Run("DoesNotChangeForEnvSecretValue", func(t *testing.T) {
+			var opts TaskContainerCreationOptions
+			opts.EnvSecrets = map[string]Secret{
+				"SECRET_ENV_VAR": {},
+			}
+			h0 := opts.Hash()
+			opts.EnvSecrets["SECRET_ENV_VAR"] = Secret{Value: "secret_value"}
+			h1 := opts.Hash()
+			assert.Equal(t, h0, h1, "env secret value should not affect hash")
+		})
+	})
 }

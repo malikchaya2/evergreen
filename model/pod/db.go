@@ -20,9 +20,10 @@ var (
 	TypeKey                      = bsonutil.MustHaveTag(Pod{}, "Type")
 	StatusKey                    = bsonutil.MustHaveTag(Pod{}, "Status")
 	TaskContainerCreationOptsKey = bsonutil.MustHaveTag(Pod{}, "TaskContainerCreationOpts")
+	FamilyKey                    = bsonutil.MustHaveTag(Pod{}, "Family")
 	TimeInfoKey                  = bsonutil.MustHaveTag(Pod{}, "TimeInfo")
 	ResourcesKey                 = bsonutil.MustHaveTag(Pod{}, "Resources")
-	RunningTaskKey               = bsonutil.MustHaveTag(Pod{}, "RunningTask")
+	TaskRuntimeInfoKey           = bsonutil.MustHaveTag(Pod{}, "TaskRuntimeInfo")
 
 	TaskContainerCreationOptsImageKey    = bsonutil.MustHaveTag(TaskContainerCreationOptions{}, "Image")
 	TaskContainerCreationOptsMemoryMBKey = bsonutil.MustHaveTag(TaskContainerCreationOptions{}, "MemoryMB")
@@ -42,15 +43,15 @@ var (
 	ResourceInfoClusterKey      = bsonutil.MustHaveTag(ResourceInfo{}, "Cluster")
 	ResourceInfoContainersKey   = bsonutil.MustHaveTag(ResourceInfo{}, "Containers")
 
+	TaskRuntimeInfoRunningTaskIDKey        = bsonutil.MustHaveTag(TaskRuntimeInfo{}, "RunningTaskID")
+	TaskRuntimeInfoRunningTaskExecutionKey = bsonutil.MustHaveTag(TaskRuntimeInfo{}, "RunningTaskExecution")
+
 	ContainerResourceInfoExternalIDKey = bsonutil.MustHaveTag(ContainerResourceInfo{}, "ExternalID")
 	ContainerResourceInfoNameKey       = bsonutil.MustHaveTag(ContainerResourceInfo{}, "Name")
 	ContainerResourceInfoSecretIDsKey  = bsonutil.MustHaveTag(ContainerResourceInfo{}, "SecretIDs")
 
-	SecretNameKey       = bsonutil.MustHaveTag(Secret{}, "Name")
 	SecretExternalIDKey = bsonutil.MustHaveTag(Secret{}, "ExternalID")
 	SecretValueKey      = bsonutil.MustHaveTag(Secret{}, "Value")
-	SecretExistsKey     = bsonutil.MustHaveTag(Secret{}, "Exists")
-	SecretOwnedKey      = bsonutil.MustHaveTag(Secret{}, "Owned")
 )
 
 func ByID(id string) bson.M {
@@ -107,7 +108,7 @@ func UpdateOne(query interface{}, update interface{}) error {
 // FindByNeedsTermination finds all pods running agents that need to be
 // terminated, which includes:
 // * Pods that have been provisioning for too long.
-// * Pods that are decommissioned.
+// * Pods that are decommissioned and have no running task.
 func FindByNeedsTermination() ([]Pod, error) {
 	staleCutoff := time.Now().Add(-15 * time.Minute)
 	return Find(db.Query(bson.M{
@@ -122,6 +123,7 @@ func FindByNeedsTermination() ([]Pod, error) {
 			},
 			{
 				StatusKey: StatusDecommissioned,
+				bsonutil.GetDottedKeyName(TaskRuntimeInfoKey, TaskRuntimeInfoRunningTaskIDKey): nil,
 			},
 		},
 	}))
@@ -148,11 +150,19 @@ func FindOneByExternalID(id string) (*Pod, error) {
 	return FindOne(db.Query(ByExternalID(id)))
 }
 
+// FindIntentByFamily finds intent pods that have a matching family name.
+func FindIntentByFamily(family string) ([]Pod, error) {
+	return Find(db.Query(bson.M{
+		StatusKey: StatusInitializing,
+		FamilyKey: family,
+	}))
+}
+
 // UpdateOneStatus updates a pod's status by ID along with any relevant metadata
 // information about the status update. If the current status is identical to
 // the updated one, this will no-op. If the current status does not match the
 // stored status, this will error.
-func UpdateOneStatus(id string, current, updated Status, ts time.Time) error {
+func UpdateOneStatus(id string, current, updated Status, ts time.Time, reason string) error {
 	if current == updated {
 		return nil
 	}
@@ -174,7 +184,73 @@ func UpdateOneStatus(id string, current, updated Status, ts time.Time) error {
 		return err
 	}
 
-	event.LogPodStatusChanged(id, string(current), string(updated))
+	event.LogPodStatusChanged(id, string(current), string(updated), reason)
 
 	return nil
+}
+
+// FindByLastCommunicatedBefore finds all active pods whose last communication
+// was before the given threshold.
+func FindByLastCommunicatedBefore(ts time.Time) ([]Pod, error) {
+	lastCommunicatedKey := bsonutil.GetDottedKeyName(TimeInfoKey, TimeInfoLastCommunicatedKey)
+	return Find(db.Query(bson.M{
+		StatusKey:           bson.M{"$in": []Status{StatusStarting, StatusRunning}},
+		lastCommunicatedKey: bson.M{"$lte": ts},
+	}))
+}
+
+// StatusCount contains the total number of pods and total number of running
+// tasks for a particular pod status.
+type StatusCount struct {
+	Status          Status `bson:"status"`
+	Count           int    `bson:"count"`
+	NumRunningTasks int    `bson:"num_running_tasks"`
+}
+
+// GetStatsByStatus gets aggregate usage statistics on pods that are intended
+// for running tasks. For each pod status, it returns the counts for the number
+// of pods and number of running tasks in that particular status. Terminated
+// pods are excluded from these statistics.
+func GetStatsByStatus(statuses ...Status) ([]StatusCount, error) {
+	if len(statuses) == 0 {
+		return []StatusCount{}, nil
+	}
+
+	runningTaskKey := bsonutil.GetDottedKeyName(TaskRuntimeInfoKey, TaskRuntimeInfoRunningTaskIDKey)
+	pipeline := []bson.M{
+		{
+			"$match": bson.M{
+				StatusKey: bson.M{
+					"$in": statuses,
+				},
+				TypeKey: TypeAgent,
+			},
+		},
+		{
+			"$group": bson.M{
+				"_id": "$" + StatusKey,
+				"count": bson.M{
+					"$sum": 1,
+				},
+				"running_tasks": bson.M{
+					"$addToSet": "$" + runningTaskKey,
+				},
+			},
+		},
+		{
+			"$project": bson.M{
+				"_id":               0,
+				"status":            "$_id",
+				"count":             1,
+				"num_running_tasks": bson.M{"$size": "$running_tasks"},
+			},
+		},
+	}
+
+	stats := []StatusCount{}
+	if err := db.Aggregate(Collection, pipeline, &stats); err != nil {
+		return nil, err
+	}
+
+	return stats, nil
 }

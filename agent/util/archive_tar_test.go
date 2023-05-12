@@ -2,7 +2,7 @@ package util
 
 import (
 	"context"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,14 +31,10 @@ func getDirectoryOfFile() string {
 func TestArchiveExtract(t *testing.T) {
 	Convey("After extracting a tarball", t, func() {
 		testDir := getDirectoryOfFile()
-		outputDir, err := ioutil.TempDir("", "artifacts_test")
-		require.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.RemoveAll(outputDir))
-		}()
+		outputDir := t.TempDir()
 
 		f, gz, tarReader, err := TarGzReader(filepath.Join(testDir, "testdata", "artifacts.tar.gz"))
-		require.NoError(t, err, "Couldn't open test tarball")
+		require.NoError(t, err)
 		defer f.Close()
 		defer gz.Close()
 
@@ -49,7 +45,7 @@ func TestArchiveExtract(t *testing.T) {
 			f, err := os.Open(filepath.Join(outputDir, "artifacts", "dir1", "dir2", "testfile.txt"))
 			So(err, ShouldBeNil)
 			defer f.Close()
-			data, err := ioutil.ReadAll(f)
+			data, err := io.ReadAll(f)
 			So(err, ShouldBeNil)
 			So(string(data), ShouldEqual, "test\n")
 		})
@@ -61,7 +57,7 @@ func TestMakeArchive(t *testing.T) {
 		testDir := getDirectoryOfFile()
 		logger := logging.NewGrip("test.archive")
 
-		outputFile, err := ioutil.TempFile("", "artifacts_test_out.tar.gz")
+		outputFile, err := os.CreateTemp("", "artifacts_test_out.tar.gz")
 		require.NoError(t, err)
 		defer func() {
 			assert.NoError(t, os.RemoveAll(outputFile.Name()))
@@ -69,7 +65,7 @@ func TestMakeArchive(t *testing.T) {
 		require.NoError(t, outputFile.Close())
 
 		f, gz, tarWriter, err := TarGzWriter(outputFile.Name())
-		require.NoError(t, err, "Couldn't open test tarball")
+		require.NoError(t, err)
 		defer f.Close()
 		defer gz.Close()
 		defer tarWriter.Close()
@@ -85,7 +81,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 		testDir := getDirectoryOfFile()
 		logger := logging.NewGrip("test.archive")
 
-		outputFile, err := ioutil.TempFile("", "artifacts_test_out.tar.gz")
+		outputFile, err := os.CreateTemp("", "artifacts_test_out.tar.gz")
 		require.NoError(t, err)
 		require.NoError(t, outputFile.Close())
 		defer func() {
@@ -93,7 +89,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 		}()
 
 		f, gz, tarWriter, err := TarGzWriter(outputFile.Name())
-		require.NoError(t, err, "Couldn't open test tarball")
+		require.NoError(t, err)
 		includes := []string{"dir1/**"}
 		excludes := []string{"*.pdb"}
 		var found int
@@ -104,13 +100,9 @@ func TestArchiveRoundTrip(t *testing.T) {
 		So(gz.Close(), ShouldBeNil)
 		So(f.Close(), ShouldBeNil)
 
-		outputDir, err := ioutil.TempDir("", "artifacts_out")
-		require.NoError(t, err)
-		defer func() {
-			assert.NoError(t, os.RemoveAll(outputDir))
-		}()
+		outputDir := t.TempDir()
 		f2, gz2, tarReader, err := TarGzReader(outputFile.Name())
-		require.NoError(t, err, "Couldn't open test tarball")
+		require.NoError(t, err)
 		err = extractTarArchive(context.Background(), tarReader, outputDir, []string{})
 		defer f2.Close()
 		defer gz2.Close()
@@ -123,7 +115,7 @@ func TestArchiveRoundTrip(t *testing.T) {
 		// Dereference symlinks
 		exists = utility.FileExists(filepath.Join(outputDir, "dir1", "dir2", "my_symlink.txt"))
 		So(exists, ShouldBeTrue)
-		contents, err := ioutil.ReadFile(filepath.Join(outputDir, "dir1", "dir2", "my_symlink.txt"))
+		contents, err := os.ReadFile(filepath.Join(outputDir, "dir1", "dir2", "my_symlink.txt"))
 		So(err, ShouldBeNil)
 		So(strings.Trim(string(contents), "\r\n\t "), ShouldEqual, "Hello, World")
 	})

@@ -3,8 +3,10 @@ package model
 import (
 	"testing"
 
+	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model/build"
+	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/stretchr/testify/suite"
 )
 
@@ -69,27 +71,39 @@ func TestBuildConnectorChangeStatusSuite(t *testing.T) {
 }
 
 func (s *BuildConnectorChangeStatusSuite) SetupSuite() {
-	s.NoError(db.ClearCollections(build.Collection, VersionCollection))
+	s.NoError(db.ClearCollections(build.Collection, VersionCollection, task.Collection))
 
 	vId := "v"
+	task1 := &task.Task{
+		Id:      "task1",
+		BuildId: "build1",
+		Status:  evergreen.TaskWillRun,
+	}
+	task2 := &task.Task{
+		Id:      "task2",
+		BuildId: "build2",
+		Status:  evergreen.TaskWillRun,
+	}
 	version := &Version{Id: vId}
-	build1 := &build.Build{Id: "build1", Version: vId}
-	build2 := &build.Build{Id: "build2", Version: vId}
+	build1 := &build.Build{Id: "build1", Version: vId, Tasks: []build.TaskCache{{Id: "task1"}}}
+	build2 := &build.Build{Id: "build2", Version: vId, Tasks: []build.TaskCache{{Id: "task2"}}}
 
+	s.NoError(task1.Insert())
+	s.NoError(task2.Insert())
 	s.NoError(build1.Insert())
 	s.NoError(build2.Insert())
 	s.NoError(version.Insert())
 }
 
 func (s *BuildConnectorChangeStatusSuite) TestSetActivated() {
-	err := SetBuildActivation("build1", true, "user1")
+	err := ActivateBuildsAndTasks([]string{"build1"}, true, "user1")
 	s.NoError(err)
 	b, err := build.FindOneId("build1")
 	s.NoError(err)
 	s.True(b.Activated)
 	s.Equal("user1", b.ActivatedBy)
 
-	err = SetBuildActivation("build1", false, "user1")
+	err = ActivateBuildsAndTasks([]string{"build1"}, false, "user1")
 	s.NoError(err)
 	b, err = build.FindOneId("build1")
 	s.NoError(err)
@@ -162,9 +176,6 @@ func (s *BuildConnectorRestartSuite) SetupSuite() {
 }
 
 func (s *BuildConnectorRestartSuite) TestRestart() {
-	err := RestartAllBuildTasks("build1", "user1")
-	s.NoError(err)
-
-	err = RestartAllBuildTasks("build1", "user1")
+	err := RestartBuild(&build.Build{Id: "build1"}, []string{}, true, "user1")
 	s.NoError(err)
 }

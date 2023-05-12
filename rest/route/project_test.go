@@ -7,11 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
+	cocoaMock "github.com/evergreen-ci/cocoa/mock"
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
 	serviceModel "github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/evergreen/rest/data"
@@ -29,8 +32,9 @@ import (
 // Tests for PATCH /rest/v2/projects/{project_id}
 
 type ProjectPatchByIDSuite struct {
-	rm  gimlet.RouteHandler
-	env evergreen.Environment
+	rm     gimlet.RouteHandler
+	env    evergreen.Environment
+	cancel context.CancelFunc
 
 	suite.Suite
 }
@@ -46,14 +50,20 @@ func TestProjectPatchSuite(t *testing.T) {
 
 func (s *ProjectPatchByIDSuite) SetupTest() {
 	s.NoError(db.ClearCollections(serviceModel.RepoRefCollection, user.Collection, serviceModel.ProjectRefCollection, serviceModel.ProjectVarsCollection, serviceModel.RepositoriesCollection, serviceModel.ProjectAliasCollection,
-		evergreen.ScopeCollection, evergreen.RoleCollection))
+		evergreen.ScopeCollection, evergreen.RoleCollection, evergreen.ConfigCollection))
 	user := user.DBUser{
 		Id:          "langdon.alger",
 		SystemRoles: []string{"admin"},
 	}
 	s.NoError(user.Insert())
 	s.NoError(getTestProjectRef().Add(&user))
-	s.NoError(getTestVar().Insert())
+	project2 := getTestProjectRef()
+	project2.Id = "project2"
+	project2.Identifier = "project2"
+	s.NoError(project2.Add(&user))
+
+	_, err := getTestVar().Upsert()
+	s.NoError(err)
 	aliases := getTestAliases()
 	for _, alias := range aliases {
 		s.NoError(alias.Upsert())
@@ -62,9 +72,17 @@ func (s *ProjectPatchByIDSuite) SetupTest() {
 		Project:      "dimoxinil",
 		LastRevision: "something",
 	}))
-	settings, err := evergreen.GetConfig()
-	s.NoError(err)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	s.cancel = cancel
+	env := testutil.NewEnvironment(ctx, s.T())
+	settings := env.Settings()
 	settings.GithubOrgs = []string{getTestProjectRef().Owner}
+	projectSetting := evergreen.ProjectCreationConfig{
+		TotalProjectLimit: 1,
+		RepoProjectLimit:  1,
+	}
+	s.NoError(projectSetting.Set())
 	s.rm = makePatchProjectByID(settings).(*projectIDPatchHandler)
 	projectAdminRole := gimlet.Role{
 		ID:    "dimoxinil",
@@ -77,14 +95,17 @@ func (s *ProjectPatchByIDSuite) SetupTest() {
 		},
 	}
 	roleManager := s.env.RoleManager()
-	err = roleManager.UpdateRole(projectAdminRole)
-	s.NoError(err)
+	s.NoError(roleManager.UpdateRole(projectAdminRole))
 	adminScope := gimlet.Scope{
 		ID:        "project_scope",
 		Type:      evergreen.ProjectResourceType,
 		Resources: []string{"dimoxinil", "other_project", "branch_project"},
 	}
 	s.NoError(roleManager.AddScope(adminScope))
+}
+
+func (s *ProjectPatchByIDSuite) TearDownTest() {
+	s.cancel()
 }
 
 func (s *ProjectPatchByIDSuite) TestParse() {
@@ -100,7 +121,7 @@ func (s *ProjectPatchByIDSuite) TestParse() {
 	s.NotNil(s.rm.(*projectIDPatchHandler).user)
 }
 
-func (s *ProjectPatchByIDSuite) TestRunInValidIdentifierChange() {
+func (s *ProjectPatchByIDSuite) TestRunInvalidIdentifierChange() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ctx = gimlet.AttachUser(ctx, &user.DBUser{Id: "Test1"})
@@ -124,6 +145,31 @@ func (s *ProjectPatchByIDSuite) TestRunInvalidNonExistingId() {
 	err := s.rm.Parse(ctx, req)
 	s.Require().Error(err)
 	s.Contains(err.Error(), "finding original project")
+}
+
+func (s *ProjectPatchByIDSuite) TestRunProjectCreateValidationFail() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = gimlet.AttachUser(ctx, &user.DBUser{Id: "Test1"})
+	json := []byte(`{"enabled": true}`)
+	req, _ := http.NewRequest(http.MethodPatch, "http://example.com/api/rest/v2/projects/dimoxinil", bytes.NewBuffer(json))
+	req = gimlet.SetURLVars(req, map[string]string{"project_id": "dimoxinil"})
+	err := s.rm.Parse(ctx, req)
+	s.NoError(err)
+	s.NotNil(s.rm.(*projectIDPatchHandler).user)
+	resp := s.rm.Run(ctx)
+	s.NotNil(resp)
+	s.NotNil(resp.Data())
+	s.Equal(resp.Status(), http.StatusOK)
+	req, _ = http.NewRequest(http.MethodPatch, "http://example.com/api/rest/v2/projects/project2", bytes.NewBuffer(json))
+	req = gimlet.SetURLVars(req, map[string]string{"project_id": "project2"})
+	err = s.rm.Parse(ctx, req)
+	s.NoError(err)
+	s.NotNil(s.rm.(*projectIDPatchHandler).user)
+	resp = s.rm.Run(ctx)
+	s.NotNil(resp)
+	s.NotNil(resp.Data())
+	s.Equal(resp.Status(), http.StatusBadRequest)
 }
 
 func (s *ProjectPatchByIDSuite) TestRunValid() {
@@ -246,31 +292,6 @@ func (s *ProjectPatchByIDSuite) TestGitTagVersionsEnabled() {
 	s.Nil(p.Restricted)
 }
 
-func (s *ProjectPatchByIDSuite) TestFilesIgnoredFromCache() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = gimlet.AttachUser(ctx, &user.DBUser{Id: "Test1"})
-	h := s.rm.(*projectIDPatchHandler)
-	h.user = &user.DBUser{Id: "me"}
-
-	jsonBody := []byte(`{"files_ignored_from_cache": []}`)
-	req, _ := http.NewRequest(http.MethodPatch, "http://example.com/api/rest/v2/projects/dimoxinil", bytes.NewBuffer(jsonBody))
-	req = gimlet.SetURLVars(req, map[string]string{"project_id": "dimoxinil"})
-	err := s.rm.Parse(ctx, req)
-	s.NoError(err)
-	s.NotNil(s.rm.(*projectIDPatchHandler).user)
-
-	resp := s.rm.Run(ctx)
-	s.NotNil(resp)
-	s.NotNil(resp.Data())
-	s.Equal(resp.Status(), http.StatusOK)
-
-	p, err := data.FindProjectById("dimoxinil", true, false)
-	s.NoError(err)
-	s.False(p.FilesIgnoredFromCache == nil)
-	s.Len(p.FilesIgnoredFromCache, 0)
-}
-
 func (s *ProjectPatchByIDSuite) TestPatchTriggerAliases() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -336,24 +357,132 @@ func (s *ProjectPatchByIDSuite) TestPatchTriggerAliases() {
 	s.Nil(p.PatchTriggerAliases)
 }
 
+func (s *ProjectPatchByIDSuite) TestRotateAndDeleteProjectPodSecret() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = gimlet.AttachUser(ctx, &user.DBUser{Id: "Test1"})
+	h := s.rm.(*projectIDPatchHandler)
+	h.user = &user.DBUser{Id: "me"}
+
+	cocoaMock.ResetGlobalSecretCache()
+	defer cocoaMock.ResetGlobalSecretCache()
+
+	// Create new pod secret.
+	body := []byte(`{
+	"container_secrets": [
+		{
+			"name": "super_secret",
+			"type": "pod_secret",
+			"should_rotate": true
+		}
+	]}`)
+	req, err := http.NewRequest(http.MethodPatch, "http://example.com/api/rest/v2/projects/dimoxinil", bytes.NewBuffer(body))
+	s.Require().NoError(err)
+	req = gimlet.SetURLVars(req, map[string]string{"project_id": "dimoxinil"})
+	s.Require().NoError(s.rm.Parse(ctx, req))
+
+	resp := s.rm.Run(ctx)
+	s.Require().NotNil(resp)
+	s.Require().NotNil(resp.Data())
+	s.Equal(http.StatusOK, resp.Status())
+
+	dbProjRef, err := serviceModel.FindBranchProjectRef("dimoxinil")
+	s.Require().NoError(err)
+	s.Require().NotNil(dbProjRef)
+	s.Require().Len(dbProjRef.ContainerSecrets, 1)
+	s.Equal("super_secret", dbProjRef.ContainerSecrets[0].Name)
+	s.EqualValues(serviceModel.ContainerSecretPodSecret, dbProjRef.ContainerSecrets[0].Type)
+	s.NotZero(dbProjRef.ContainerSecrets[0].ExternalName)
+	s.NotZero(dbProjRef.ContainerSecrets[0].ExternalID)
+
+	externalID := dbProjRef.ContainerSecrets[0].ExternalID
+	s.Require().NotNil(h.vault)
+	initialStoredValue, err := h.vault.GetValue(ctx, externalID)
+	s.Require().NoError(err)
+	s.NotZero(initialStoredValue)
+
+	// Rotate the existing pod secret's value.
+	req, err = http.NewRequest(http.MethodPatch, "http://example.com/api/rest/v2/projects/dimoxinil", bytes.NewBuffer(body))
+	s.Require().NoError(err)
+	req = gimlet.SetURLVars(req, map[string]string{"project_id": "dimoxinil"})
+	s.Require().NoError(s.rm.Parse(ctx, req))
+
+	resp = s.rm.Run(ctx)
+	s.Require().NotNil(resp)
+	s.Require().NotNil(resp.Data())
+	s.Equal(http.StatusOK, resp.Status())
+
+	dbProjRef, err = serviceModel.FindBranchProjectRef("dimoxinil")
+	s.Require().NoError(err)
+	s.Require().NotNil(dbProjRef)
+	s.Require().Len(dbProjRef.ContainerSecrets, 1)
+	s.Equal("super_secret", dbProjRef.ContainerSecrets[0].Name)
+	s.EqualValues(serviceModel.ContainerSecretPodSecret, dbProjRef.ContainerSecrets[0].Type)
+	s.NotZero(dbProjRef.ContainerSecrets[0].ExternalName)
+	s.NotZero(dbProjRef.ContainerSecrets[0].ExternalID)
+
+	externalID = dbProjRef.ContainerSecrets[0].ExternalID
+	s.Require().NotNil(h.vault)
+	newStoredValue, err := h.vault.GetValue(ctx, externalID)
+	s.Require().NoError(err)
+	s.NotZero(newStoredValue)
+	s.NotEqual(initialStoredValue, newStoredValue)
+
+	// Delete the existing pod secret.
+	body = []byte(`{
+		"delete_container_secrets": ["super_secret"]
+	}`)
+	req, err = http.NewRequest(http.MethodPatch, "http://example.com/api/rest/v2/projects/dimoxinil", bytes.NewBuffer(body))
+	s.Require().NoError(err)
+	req = gimlet.SetURLVars(req, map[string]string{"project_id": "dimoxinil"})
+	s.Require().NoError(s.rm.Parse(ctx, req))
+
+	resp = s.rm.Run(ctx)
+	s.Require().NotNil(resp)
+	s.Require().NotNil(resp.Data())
+	s.Equal(http.StatusOK, resp.Status())
+
+	dbProjRef, err = serviceModel.FindBranchProjectRef("dimoxinil")
+	s.Require().NoError(err)
+	s.Require().NotNil(dbProjRef)
+	s.Empty(dbProjRef.ContainerSecrets, "container secret should have been deleted")
+
+	_, err = h.vault.GetValue(ctx, externalID)
+	s.Error(err, "secret should have been deleted from the vault")
+}
+
 ////////////////////////////////////////////////////////////////////////
 //
 // Tests for PUT /rest/v2/projects/{project_id}
 
 type ProjectPutSuite struct {
-	rm gimlet.RouteHandler
+	rm       gimlet.RouteHandler
+	env      evergreen.Environment
+	settings *evergreen.Settings
 
 	suite.Suite
 }
 
 func TestProjectPutSuite(t *testing.T) {
-	suite.Run(t, new(ProjectPutSuite))
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s := &ProjectPutSuite{
+		env: testutil.NewEnvironment(ctx, t),
+	}
+	suite.Run(t, s)
 }
 
 func (s *ProjectPutSuite) SetupTest() {
 	s.NoError(db.ClearCollections(serviceModel.ProjectRefCollection, serviceModel.ProjectVarsCollection, user.Collection))
 	s.NoError(getTestProjectRef().Insert())
-	s.rm = makePutProjectByID().(*projectIDPutHandler)
+
+	settings := s.env.Settings()
+	s.settings = settings
+	settings.GithubOrgs = []string{"Rembrandt Q. Einstein"}
+	s.NoError(evergreen.UpdateConfig(settings))
+
+	s.rm = makePutProjectByID(s.env).(*projectIDPutHandler)
 }
 
 func (s *ProjectPutSuite) TestParse() {
@@ -416,6 +545,10 @@ func (s *ProjectPutSuite) TestRunNewWithValidEntity() {
 
 	h := s.rm.(*projectIDPutHandler)
 	h.projectName = "nutsandgum"
+	h.project = model.APIProjectRef{
+		Owner: utility.ToStringPtr("Rembrandt Q. Einstein"),
+		Repo:  utility.ToStringPtr("nutsandgum"),
+	}
 	h.body = json
 
 	resp := s.rm.Run(ctx)
@@ -500,8 +633,7 @@ func (s *ProjectGetByIDSuite) TestRunExistingId() {
 	s.Equal(cachedProject.Repo, utility.FromStringPtr(projectRef.Repo))
 	s.Equal(cachedProject.Owner, utility.FromStringPtr(projectRef.Owner))
 	s.Equal(cachedProject.Branch, utility.FromStringPtr(projectRef.Branch))
-	s.Equal(cachedProject.Enabled, projectRef.Enabled)
-	s.Equal(cachedProject.Private, projectRef.Private)
+	s.Equal(cachedProject.Enabled, utility.FromBoolPtr(projectRef.Enabled))
 	s.Equal(cachedProject.BatchTime, projectRef.BatchTime)
 	s.Equal(cachedProject.RemotePath, utility.FromStringPtr(projectRef.RemotePath))
 	s.Equal(cachedProject.Id, utility.FromStringPtr(projectRef.Id))
@@ -515,7 +647,6 @@ func (s *ProjectGetByIDSuite) TestRunExistingId() {
 	s.Equal(cachedProject.Admins, utility.FromStringPtrSlice(projectRef.Admins))
 	s.Equal(cachedProject.NotifyOnBuildFailure, projectRef.NotifyOnBuildFailure)
 	s.Equal(cachedProject.DisabledStatsCache, projectRef.DisabledStatsCache)
-	s.Equal(cachedProject.FilesIgnoredFromCache, utility.FromStringPtrSlice(projectRef.FilesIgnoredFromCache))
 }
 
 ////////////////////////////////////////////////////////////////////////
@@ -534,22 +665,22 @@ func TestProjectGetSuite(t *testing.T) {
 
 func (s *ProjectGetSuite) SetupSuite() {
 	pRefs := []serviceModel.ProjectRef{
-		serviceModel.ProjectRef{
+		{
 			Id: "projectA",
 		},
-		serviceModel.ProjectRef{
+		{
 			Id: "projectB",
 		},
-		serviceModel.ProjectRef{
+		{
 			Id: "projectC",
 		},
-		serviceModel.ProjectRef{
+		{
 			Id: "projectD",
 		},
-		serviceModel.ProjectRef{
+		{
 			Id: "projectE",
 		},
-		serviceModel.ProjectRef{
+		{
 			Id: "projectF",
 		},
 	}
@@ -661,13 +792,13 @@ func getTestProjectConfig() *serviceModel.ProjectConfig {
 
 func getTestAliases() []serviceModel.ProjectAlias {
 	return []serviceModel.ProjectAlias{
-		serviceModel.ProjectAlias{
+		{
 			ProjectID: "dimoxinil",
 			Task:      ".*",
 			Variant:   ".*",
 			Alias:     evergreen.GithubPRAlias,
 		},
-		serviceModel.ProjectAlias{
+		{
 			ProjectID:   "dimoxinil",
 			Task:        ".*",
 			VariantTags: []string{"v1"},
@@ -678,28 +809,27 @@ func getTestAliases() []serviceModel.ProjectAlias {
 
 func getTestProjectRef() *serviceModel.ProjectRef {
 	return &serviceModel.ProjectRef{
-		Owner:              "dimoxinil",
-		Repo:               "dimoxinil-enterprise-repo",
-		Branch:             "main",
-		Enabled:            utility.FalsePtr(),
-		Private:            utility.TruePtr(),
-		BatchTime:          0,
-		RemotePath:         "evergreen.yml",
-		Id:                 "dimoxinil",
-		Identifier:         "dimoxinil",
-		DisplayName:        "Dimoxinil",
-		DeactivatePrevious: utility.FalsePtr(),
-		TracksPushEvents:   utility.FalsePtr(),
-		PRTestingEnabled:   utility.FalsePtr(),
+		Owner:                 "dimoxinil",
+		Repo:                  "dimoxinil-enterprise-repo",
+		Branch:                "main",
+		Enabled:               false,
+		BatchTime:             0,
+		RemotePath:            "evergreen.yml",
+		Id:                    "dimoxinil",
+		Identifier:            "dimoxinil",
+		DisplayName:           "Dimoxinil",
+		DeactivatePrevious:    utility.FalsePtr(),
+		TracksPushEvents:      utility.FalsePtr(),
+		PRTestingEnabled:      utility.FalsePtr(),
+		VersionControlEnabled: utility.TruePtr(),
 		CommitQueue: serviceModel.CommitQueueParams{
 			Enabled: utility.FalsePtr(),
 		},
-		Hidden:                utility.FalsePtr(),
-		PatchingDisabled:      utility.FalsePtr(),
-		Admins:                []string{"langdon.alger"},
-		NotifyOnBuildFailure:  utility.FalsePtr(),
-		DisabledStatsCache:    utility.TruePtr(),
-		FilesIgnoredFromCache: []string{"ignored"},
+		Hidden:               utility.FalsePtr(),
+		PatchingDisabled:     utility.FalsePtr(),
+		Admins:               []string{"langdon.alger"},
+		NotifyOnBuildFailure: utility.FalsePtr(),
+		DisabledStatsCache:   utility.TruePtr(),
 	}
 }
 
@@ -721,10 +851,11 @@ func TestGetProjectTasks(t *testing.T) {
 	for i := 0; i <= 20; i++ {
 		myTask := task.Task{
 			Id:                  fmt.Sprintf("t%d", i),
-			RevisionOrderNumber: i,
+			RevisionOrderNumber: 20 - i%2,
 			DisplayName:         "t1",
 			Project:             projectId,
 			Status:              evergreen.TaskSucceeded,
+			Requester:           evergreen.RepotrackerVersionRequester,
 		}
 		assert.NoError(myTask.Insert())
 	}
@@ -739,7 +870,7 @@ func TestGetProjectTasks(t *testing.T) {
 
 	resp := h.Run(ctx)
 	assert.Equal(http.StatusOK, resp.Status())
-	assert.Len(resp.Data(), 10)
+	assert.Len(resp.Data(), 21)
 }
 
 func TestGetProjectVersions(t *testing.T) {
@@ -805,6 +936,7 @@ func TestDeleteProject(t *testing.T) {
 		serviceModel.RepoRefCollection,
 		serviceModel.ProjectAliasCollection,
 		serviceModel.ProjectVarsCollection,
+		evergreen.ScopeCollection,
 		user.Collection,
 	))
 	u := user.DBUser{
@@ -814,10 +946,9 @@ func TestDeleteProject(t *testing.T) {
 
 	repo := serviceModel.RepoRef{
 		ProjectRef: serviceModel.ProjectRef{
-			Id:      "repo_ref",
-			Owner:   "mongodb",
-			Repo:    "test_repo",
-			Enabled: utility.TruePtr(),
+			Id:    "repo_ref",
+			Owner: "mongodb",
+			Repo:  "test_repo",
 		},
 	}
 	assert.NoError(t, repo.Upsert())
@@ -831,8 +962,7 @@ func TestDeleteProject(t *testing.T) {
 			Owner:                "mongodb",
 			Repo:                 "test_repo",
 			Branch:               fmt.Sprintf("branch_%d", i),
-			Enabled:              utility.TruePtr(),
-			Private:              utility.TruePtr(),
+			Enabled:              true,
 			DisplayName:          fmt.Sprintf("display_%d", i),
 			RepoRefId:            "repo_ref",
 			TracksPushEvents:     utility.TruePtr(),
@@ -884,7 +1014,7 @@ func TestDeleteProject(t *testing.T) {
 			Repo:      repo.Repo,
 			Branch:    projects[i].Branch,
 			RepoRefId: repo.Id,
-			Enabled:   utility.FalsePtr(),
+			Enabled:   false,
 			Hidden:    utility.TruePtr(),
 		}
 		assert.Equal(t, skeletonProj, *hiddenProj)
@@ -928,7 +1058,7 @@ func TestAttachProjectToRepo(t *testing.T) {
 	defer cancel()
 	assert.NoError(t, db.ClearCollections(serviceModel.ProjectRefCollection,
 		serviceModel.RepoRefCollection, serviceModel.ProjectVarsCollection, user.Collection,
-		evergreen.ScopeCollection, evergreen.RoleCollection))
+		evergreen.ScopeCollection, evergreen.RoleCollection, evergreen.ConfigCollection))
 	ctx = gimlet.AttachUser(ctx, &user.DBUser{Id: "me"})
 	u := &user.DBUser{Id: "me"}
 	assert.NoError(t, u.Insert())
@@ -940,7 +1070,7 @@ func TestAttachProjectToRepo(t *testing.T) {
 		Repo:       "evergreen",
 		Branch:     "main",
 		RepoRefId:  "hello",
-		Enabled:    utility.TruePtr(),
+		Enabled:    true,
 		Admins:     []string{"me"},
 	}
 	assert.NoError(t, pRef.Insert())
@@ -1004,7 +1134,7 @@ func TestDetachProjectFromRepo(t *testing.T) {
 		Owner:      "evergreen-ci",
 		Repo:       "evergreen",
 		Branch:     "main",
-		Enabled:    utility.TruePtr(),
+		Enabled:    true,
 		Admins:     []string{"me"},
 	}
 	assert.NoError(t, pRef.Insert())
@@ -1119,4 +1249,501 @@ func (s *ProjectPutRotateSuite) TestRotateProjectVars() {
 	s.Contains(respMap["dimoxinil"], "banana")
 	s.Contains(respMap["dimoxinil"], "lemon")
 	s.Equal(resp.Status(), http.StatusOK)
+}
+
+func TestGetProjectTaskExecutions(t *testing.T) {
+	assert.NoError(t, db.ClearCollections(task.Collection, task.OldCollection, serviceModel.ProjectRefCollection))
+	projRef := serviceModel.ProjectRef{
+		Id:         "123",
+		Identifier: "myProject",
+	}
+	assert.NoError(t, projRef.Insert())
+
+	assert.NoError(t, db.ClearCollections(task.Collection, task.OldCollection))
+
+	now := time.Now()
+	earlier := time.Now().Add(-time.Hour)
+	reallyEarly := now.Add(-12 * time.Hour)
+	tasks := []task.Task{
+		{
+			Id:           "notFinished",
+			Project:      "123",
+			Status:       evergreen.TaskStarted,
+			Requester:    evergreen.RepotrackerVersionRequester,
+			BuildVariant: "bv1",
+			DisplayName:  "task1",
+			Execution:    1,
+		},
+		{
+			Id:           "finished",
+			Project:      "123",
+			Status:       evergreen.TaskFailed,
+			Requester:    evergreen.RepotrackerVersionRequester,
+			BuildVariant: "bv1",
+			DisplayName:  "task1",
+			FinishTime:   now,
+			Execution:    1,
+		},
+		{
+			Id:           "finishedEarlier",
+			Project:      "123",
+			Status:       evergreen.TaskFailed,
+			Requester:    evergreen.RepotrackerVersionRequester,
+			BuildVariant: "bv1",
+			DisplayName:  "task1",
+			FinishTime:   earlier,
+			Execution:    1,
+		},
+		{
+			Id:           "patch",
+			Project:      "123",
+			Status:       evergreen.TaskSucceeded,
+			Requester:    evergreen.PatchVersionRequester,
+			BuildVariant: "bv1",
+			DisplayName:  "task1",
+			FinishTime:   now,
+			Execution:    1,
+		},
+		{
+			Id:           "tooEarly",
+			Project:      "123",
+			Status:       evergreen.TaskSucceeded,
+			Requester:    evergreen.RepotrackerVersionRequester,
+			BuildVariant: "bv1",
+			DisplayName:  "task1",
+			FinishTime:   reallyEarly,
+			Execution:    1,
+		},
+		{
+			Id:           "wrongTask",
+			Project:      "123",
+			Status:       evergreen.TaskFailed,
+			Requester:    evergreen.RepotrackerVersionRequester,
+			BuildVariant: "bv1",
+			DisplayName:  "task2",
+			FinishTime:   now,
+			Execution:    1,
+		},
+		{
+			Id:           "wrongVariant",
+			Project:      "123",
+			Status:       evergreen.TaskFailed,
+			Requester:    evergreen.RepotrackerVersionRequester,
+			BuildVariant: "bv2",
+			DisplayName:  "task1",
+			FinishTime:   now,
+			Execution:    1,
+		},
+	}
+	for _, each := range tasks {
+		assert.NoError(t, each.Insert())
+		each.Execution = 0
+		// Duplicate everything for the old task collection to ensure this is working.
+		assert.NoError(t, db.Insert(task.OldCollection, each))
+	}
+	for testName, test := range map[string]func(*testing.T, *getProjectTaskExecutionsHandler){
+		"parseSuccess": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			body := []byte(
+				`{
+                     "task_name": "t1",
+                     "build_variant": "bv1",
+                     "requesters": ["gitter_request"],
+                     "start_time": "2022-11-02T00:00:00.000Z",
+                     "end_time": "2022-11-03T00:00:00.000Z"
+                 }`)
+			req, _ := http.NewRequest(http.MethodGet, "https://example.com/api/rest/v2/projects/myProject/excutions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": "myProject"})
+
+			err := rm.Parse(context.Background(), req)
+
+			assert.NoError(t, err)
+			assert.Equal(t, rm.projectId, "123")
+			assert.Equal(t, rm.opts.TaskName, "t1")
+			assert.Equal(t, rm.opts.BuildVariant, "bv1")
+			assert.Equal(t, rm.opts.Requesters, []string{"gitter_request"})
+			assert.Equal(t, rm.startTime, time.Date(2022, 11, 02, 0, 0, 0, 0, time.UTC))
+			assert.Equal(t, rm.endTime, time.Date(2022, 11, 03, 0, 0, 0, 0, time.UTC))
+		},
+		"parseNoStartErrors": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			body := []byte(
+				`{
+                     "task_name": "t1",
+                     "build_variant": "bv1",
+                     "requesters": ["gitter_request"],
+                     "end_time": "2022-11-03T00:00:00.000Z"
+                 }`)
+			req, _ := http.NewRequest(http.MethodGet, "https://example.com/api/rest/v2/projects/myProject/excutions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": "myProject"})
+
+			err := rm.Parse(context.Background(), req)
+			assert.Error(t, err)
+		},
+		"parseNoEndSucceeds": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			body := []byte(
+				`{
+                     "task_name": "t1",
+                     "build_variant": "bv1",
+                     "requesters": ["gitter_request"],
+                     "start_time": "2022-11-02T00:00:00.000Z"
+                 }`)
+			req, _ := http.NewRequest(http.MethodGet, "https://example.com/api/rest/v2/projects/myProject/excutions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": "myProject"})
+
+			err := rm.Parse(context.Background(), req)
+			assert.NoError(t, err)
+			assert.Equal(t, rm.projectId, "123")
+			assert.Equal(t, rm.opts.TaskName, "t1")
+			assert.Equal(t, rm.opts.BuildVariant, "bv1")
+			assert.Equal(t, rm.opts.Requesters, []string{"gitter_request"})
+			assert.Equal(t, rm.startTime, time.Date(2022, 11, 02, 0, 0, 0, 0, time.UTC))
+			assert.True(t, utility.IsZeroTime(rm.endTime))
+		},
+		"parseNoRequesterSuccess": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			body := []byte(
+				`{
+                     "task_name": "t1",
+                     "build_variant": "bv1",
+                     "start_time": "2022-11-02T00:00:00.000Z",
+                     "end_time": "2022-11-03T00:00:00.000Z"
+                 }`)
+			req, _ := http.NewRequest(http.MethodGet, "https://example.com/api/rest/v2/projects/myProject/executions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": "myProject"})
+
+			err := rm.Parse(context.Background(), req)
+			assert.NoError(t, err)
+		},
+		"parseInvalidRequester": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			body := []byte(
+				`{
+                     "task_name": "t1",
+                     "build_variant": "bv1",
+                     "requesters": ["what_am_i"],
+                     "start_time": "2022-11-02T00:00:00.000Z",
+                     "end_time": "2022-11-03T00:00:00.000Z"
+                 }`)
+			req, _ := http.NewRequest(http.MethodGet, "https://example.com/api/rest/v2/projects/proj/num_excutions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": "proj"})
+
+			err := rm.Parse(context.Background(), req)
+			assert.Error(t, err)
+		},
+		"parseInvalidTime": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			body := []byte(
+				`{
+                     "task_name": "t1",
+                     "build_variant": "bv1",
+                     "requesters": ["gitter_request"],
+                     "start_time": "2022-11-02T00:00:00",
+                     "end_time": "2022-11-03T00:00:00"
+                 }`)
+			req, _ := http.NewRequest(http.MethodGet, "https://example.com/api/rest/v2/projects/myProject/excutions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": "myProject"})
+
+			err := rm.Parse(context.Background(), req)
+			assert.Error(t, err)
+		},
+		"parseInvalidTimeRange": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			body := []byte(
+				`{
+                     "task_name": "t1",
+                     "build_variant": "bv1",
+                     "requesters": ["gitter_request"],
+                     "start_time": "2022-11-04T00:00:00.000Z",
+                     "end_time": "2022-11-03T00:00:00.000Z"
+                 }`)
+			req, _ := http.NewRequest(http.MethodGet, "https://example.com/api/rest/v2/projects/myProject/excutions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": "myProject"})
+
+			err := rm.Parse(context.Background(), req)
+			assert.Error(t, err)
+		},
+		"parseNoBuildVariant": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			body := []byte(
+				`{
+                     "task_name": "t1",
+                     "requesters": ["gitter_request"],
+                     "start_time": "2022-11-02T00:00:00.000Z",
+                     "end_time": "2022-11-03T00:00:00.000Z"
+                 }`)
+			req, _ := http.NewRequest(http.MethodGet, "https://example.com/api/rest/v2/projects/myProject/excutions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": "myProject"})
+
+			err := rm.Parse(context.Background(), req)
+			assert.Error(t, err)
+		},
+		"successfulRun": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			rm.projectId = "123"
+			rm.opts.BuildVariant = "bv1"
+			rm.opts.TaskName = "task1"
+			rm.startTime = now.Add(-20 * time.Hour)
+
+			// Should include the finished tasks in both new and old.
+			resp := rm.Run(context.Background())
+			assert.NotNil(t, resp)
+			assert.NotNil(t, resp.Data())
+			respModel := resp.Data().(model.ProjectTaskExecutionResp)
+			assert.Equal(t, 6, respModel.NumCompleted)
+		},
+		"emptyRun": func(t *testing.T, rm *getProjectTaskExecutionsHandler) {
+			rm.projectId = "nothing"
+			rm.opts.BuildVariant = "bv1"
+			rm.opts.TaskName = "task1"
+			rm.startTime = now.Add(-20 * time.Hour)
+
+			resp := rm.Run(context.Background())
+			assert.NotNil(t, resp)
+			assert.NotNil(t, resp.Data())
+			respModel := resp.Data().(model.ProjectTaskExecutionResp)
+			assert.Equal(t, 0, respModel.NumCompleted)
+		},
+	} {
+		t.Run(testName, func(t *testing.T) {
+			rm := makeGetProjectTaskExecutionsHandler().(*getProjectTaskExecutionsHandler)
+			test(t, rm)
+		})
+	}
+}
+
+func TestModifyProjectVersions(t *testing.T) {
+	ctx := context.Background()
+	ctx = gimlet.AttachUser(ctx, &user.DBUser{Id: "user"})
+	assert := assert.New(t)
+	assert.NoError(db.ClearCollections(serviceModel.ProjectRefCollection))
+	const projectId = "proj"
+	project := serviceModel.ProjectRef{
+		Id: projectId,
+	}
+	assert.NoError(project.Insert())
+	for testName, test := range map[string]func(*testing.T, *modifyProjectVersionsHandler){
+		"parseSuccess": func(t *testing.T, rm *modifyProjectVersionsHandler) {
+			body := []byte(`
+{
+	"priority": -1,
+	"revision_start": 4,
+	"revision_end": 1
+}
+			`)
+			req, _ := http.NewRequest(http.MethodPatch, "https://example.com/rest/v2/projects/something-else/versions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": projectId})
+			err := rm.Parse(ctx, req)
+			assert.NoError(err)
+			assert.Equal(utility.FromInt64Ptr(rm.opts.Priority), evergreen.DisabledTaskPriority)
+			assert.Equal(rm.opts.RevisionStart, 4)
+			assert.Equal(rm.opts.RevisionEnd, 1)
+		},
+		"parseSuccessTimestamp": func(t *testing.T, rm *modifyProjectVersionsHandler) {
+			body := []byte(`
+{
+	"priority": -1,
+	"start_time_str": "2022-11-02T00:00:00.000Z",
+	"end_time_str": "2022-11-03T00:00:00.000Z"
+}
+			`)
+			req, _ := http.NewRequest(http.MethodPatch, "https://example.com/rest/v2/projects/something-else/versions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": projectId})
+			err := rm.Parse(ctx, req)
+			assert.NoError(err)
+			assert.Equal(utility.FromInt64Ptr(rm.opts.Priority), evergreen.DisabledTaskPriority)
+			assert.Equal(rm.startTime, time.Date(2022, 11, 2, 0, 0, 0, 0, time.UTC))
+			assert.Equal(rm.endTime, time.Date(2022, 11, 3, 0, 0, 0, 0, time.UTC))
+		},
+		"parseFaiWithNoPriority": func(t *testing.T, rm *modifyProjectVersionsHandler) {
+			body := []byte(`
+{
+	"revision_start": 4,
+	"revision_end": 1
+}
+			`)
+			req, _ := http.NewRequest(http.MethodPatch, "https://example.com/rest/v2/projects/something-else/versions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": projectId})
+			err := rm.Parse(ctx, req)
+			assert.Error(err)
+		},
+		"parseFaiWithInvalidStartAndEnd": func(t *testing.T, rm *modifyProjectVersionsHandler) {
+			body := []byte(`
+{
+	"priority": -1,
+	"revision_start": 1,
+	"revision_end": 4
+}
+			`)
+			req, _ := http.NewRequest(http.MethodPatch, "https://example.com/rest/v2/projects/something-else/versions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": projectId})
+			err := rm.Parse(ctx, req)
+			assert.Error(err)
+		},
+		"parseFaiWithTimeStampAndOrder": func(t *testing.T, rm *modifyProjectVersionsHandler) {
+			body := []byte(`
+{
+	"priority": -1,
+	"revision_start": 1,
+	"revision_end": 4
+	"start_time_str": "2022-11-02T00:00:00.000Z",
+	"end_time_str": "2022-11-03T00:00:00.000Z"
+}
+			`)
+			req, _ := http.NewRequest(http.MethodPatch, "https://example.com/rest/v2/projects/something-else/versions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": projectId})
+			err := rm.Parse(ctx, req)
+			assert.Error(err)
+		},
+		"parseFaiWithInvalidTimeStamp": func(t *testing.T, rm *modifyProjectVersionsHandler) {
+			body := []byte(`
+{
+	"priority": -1,
+	"revision_start": 1,
+	"revision_end": 4
+	"start_time_str": "2022-11-03T00:00:00.000Z",
+	"end_time_str": "2022-11-02T00:00:00.000Z"
+}
+			`)
+			req, _ := http.NewRequest(http.MethodPatch, "https://example.com/rest/v2/projects/something-else/versions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": projectId})
+			err := rm.Parse(ctx, req)
+			assert.Error(err)
+		},
+		"parseFaiWithNoTimestampOrOrder": func(t *testing.T, rm *modifyProjectVersionsHandler) {
+			body := []byte(`
+{
+	"priority": -1,
+}
+			`)
+			req, _ := http.NewRequest(http.MethodPost, "https://example.com/rest/v2/projects/something-else/versions", bytes.NewBuffer(body))
+			req = gimlet.SetURLVars(req, map[string]string{"project_id": projectId})
+			err := rm.Parse(ctx, req)
+			assert.Error(err)
+		},
+		"runSucceeds": func(t *testing.T, rm *modifyProjectVersionsHandler) {
+			rm.projectId = projectId
+			rm.opts = serviceModel.ModifyVersionsOptions{
+				Priority:      utility.ToInt64Ptr(evergreen.DisabledTaskPriority),
+				RevisionStart: 4,
+				RevisionEnd:   1,
+				Requester:     evergreen.RepotrackerVersionRequester,
+			}
+			resp := rm.Run(ctx)
+			assert.NotNil(resp)
+			assert.Equal(http.StatusOK, resp.Status())
+			foundTasks, err := task.FindWithFields(task.ByVersions([]string{"v1", "v2", "v3", "v4"}), task.IdKey, task.PriorityKey, task.ActivatedKey)
+			assert.NoError(err)
+			assert.Len(foundTasks, 4)
+			var count int
+			for _, tsk := range foundTasks {
+				if tsk.Priority == evergreen.DisabledTaskPriority && !tsk.Activated {
+					count++
+				}
+			}
+			assert.Equal(4, count)
+		},
+		"runSucceedsTimeStamp": func(t *testing.T, rm *modifyProjectVersionsHandler) {
+			rm.projectId = projectId
+			rm.opts = serviceModel.ModifyVersionsOptions{
+				Priority:  utility.ToInt64Ptr(evergreen.DisabledTaskPriority),
+				Requester: evergreen.RepotrackerVersionRequester,
+			}
+			rm.startTime = time.Date(2022, 11, 2, 0, 0, 0, 0, time.UTC)
+			rm.endTime = time.Date(2022, 11, 3, 0, 0, 0, 0, time.UTC)
+			resp := rm.Run(ctx)
+			assert.NotNil(resp)
+			assert.Equal(http.StatusOK, resp.Status())
+			foundTasks, err := task.FindWithFields(task.ByVersions([]string{"v1", "v2", "v3", "v4"}), task.IdKey, task.PriorityKey, task.ActivatedKey)
+			assert.NoError(err)
+			assert.Len(foundTasks, 4)
+			var count int
+			for _, tsk := range foundTasks {
+				if tsk.Priority == evergreen.DisabledTaskPriority && !tsk.Activated {
+					count++
+				}
+			}
+			assert.Equal(2, count)
+		},
+	} {
+		t.Run(testName, func(t *testing.T) {
+			assert.NoError(db.ClearCollections(serviceModel.VersionCollection, task.Collection, build.Collection))
+			v1 := serviceModel.Version{
+				Id:                  "v1",
+				Identifier:          projectId,
+				Requester:           evergreen.RepotrackerVersionRequester,
+				RevisionOrderNumber: 1,
+				CreateTime:          time.Date(2022, time.November, 1, 0, 0, 0, 0, time.UTC),
+			}
+			assert.NoError(v1.Insert())
+			v2 := serviceModel.Version{
+				Id:                  "v2",
+				Identifier:          projectId,
+				Requester:           evergreen.RepotrackerVersionRequester,
+				RevisionOrderNumber: 2,
+				CreateTime:          time.Date(2022, time.November, 2, 0, 0, 0, 0, time.UTC),
+			}
+			assert.NoError(v2.Insert())
+			v3 := serviceModel.Version{
+				Id:                  "v3",
+				Identifier:          projectId,
+				Requester:           evergreen.RepotrackerVersionRequester,
+				RevisionOrderNumber: 3,
+				CreateTime:          time.Date(2022, time.November, 3, 0, 0, 0, 0, time.UTC),
+			}
+			assert.NoError(v3.Insert())
+			v4 := serviceModel.Version{
+				Id:                  "v4",
+				Identifier:          projectId,
+				Requester:           evergreen.RepotrackerVersionRequester,
+				RevisionOrderNumber: 4,
+				CreateTime:          time.Date(2022, time.November, 4, 0, 0, 0, 0, time.UTC),
+			}
+			assert.NoError(v4.Insert())
+			tasks := []task.Task{
+				{
+					Version:   "v1",
+					BuildId:   "b1",
+					Id:        "t1",
+					Activated: true,
+				},
+				{
+					Version:   "v2",
+					BuildId:   "b2",
+					Id:        "t2",
+					Activated: true,
+				},
+				{
+					Version:   "v3",
+					BuildId:   "b3",
+					Id:        "t3",
+					Activated: true,
+				},
+				{
+					Version:   "v4",
+					BuildId:   "b4",
+					Id:        "t4",
+					Activated: true,
+				},
+			}
+			builds := []build.Build{
+				{
+					Id:      "b1",
+					Version: "v1",
+				},
+				{
+					Id:      "b2",
+					Version: "v2",
+				},
+				{
+					Id:      "b3",
+					Version: "v3",
+				},
+				{
+					Id:      "b4",
+					Version: "v4",
+				},
+			}
+			for _, tsk := range tasks {
+				assert.NoError(tsk.Insert())
+			}
+			for _, b := range builds {
+				assert.NoError(b.Insert())
+			}
+			rm := makeModifyProjectVersionsHandler("").(*modifyProjectVersionsHandler)
+			test(t, rm)
+		})
+	}
 }

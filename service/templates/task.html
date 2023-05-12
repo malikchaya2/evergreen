@@ -12,7 +12,6 @@ window.evgBaseUrl = {{.EvgBaseUrl}}
 <script type="text/javascript" src="{{Static "js" "subscriptions.js"}}?hash={{ BuildRevision }}"></script>
 <script type="text/javascript" src="{{Static "js" "task.js"}}?hash={{ BuildRevision }}"></script>
 <script type="text/javascript" src="/static/app/perf-bb/constants.js?hash={{ BuildRevision }}"></script>
-<script type="text/javascript" src="/static/app/perf-bb/ChangePointsService.js?hash={{ BuildRevision }}"></script>
 <script type="text/javascript" src="/static/app/common/AllowlistDataService.js?hash={{ BuildRevision }}"></script>
 
 {{if .User}}
@@ -171,7 +170,7 @@ Evergreen - {{Trunc .Task.Revision 10}} / {{.Task.BuildVariantDisplay}} / {{.Tas
                     <tr ng-show="task.min_queue_pos != 0">
                       <td class="icon"><i class="fa fa-sort-numeric-asc"></i></td>
                       <td>
-                        Estimated Time to Start: [[task.wait_time | stringifyNanoseconds]] (<a href="/task_queue#/#[[task.id]]">[[task.min_queue_pos | ordinalNum]]</a>
+                        Estimated Time to Start: [[task.wait_time | stringifyNanoseconds]] (<a href="/task_queue/[[task.distro]]/[[task.id]]">[[task.min_queue_pos | ordinalNum]]</a>
                         in queue)
                       </td>
                     </tr>
@@ -469,12 +468,12 @@ Evergreen - {{Trunc .Task.Revision 10}} / {{.Task.BuildVariantDisplay}} / {{.Tas
                             <div class="progress [[progressBarClass]]" test-result-bar="test.test_result" style="width: [[barWidth]]%"></div>
                           </td>
                           <td class="col-lg-3">
-                            <div class="url-link nowrap" id="lobster-link">
-                                <a ng-href="[[test.url_lobster]]" ng-hide="[[test.url_lobster == '']]">
-                                  Lobster
+                            <div class="url-link nowrap" id="parsley-link">
+                                <a ng-href="[[test.url_parsley]]" ng-hide="[[test.url_parsley == '']]">
+                                  Parsley
                                 </a>
                               </div>
-                              <div id="separator" ng-hide="[[test.url_lobster == '']]">
+                              <div id="separator" ng-hide="[[test.url_parsley == '']]">
                                 <b>&middot;</b>
                               </div>
                             <div class="url-link nowrap" id="html-link">

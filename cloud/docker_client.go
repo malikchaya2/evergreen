@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"net/http"
 	"path"
 	"path/filepath"
@@ -210,7 +209,7 @@ func (c *dockerClientImpl) importImage(ctx context.Context, h *host.Host, name, 
 	}
 
 	// Wait until ImageImport finishes
-	_, err = ioutil.ReadAll(resp)
+	_, err = io.ReadAll(resp)
 	if err != nil {
 		return errors.Wrap(err, "Error reading ImageImport response")
 	}
@@ -245,7 +244,7 @@ func (c *dockerClientImpl) pullImage(ctx context.Context, h *host.Host, url, use
 	if err != nil {
 		return errors.Wrap(err, "error pulling image from registry")
 	}
-	_, err = ioutil.ReadAll(resp)
+	_, err = io.ReadAll(resp)
 	if err != nil {
 		return errors.Wrap(err, "error reading image pull response")
 	}
@@ -317,7 +316,7 @@ func (c *dockerClientImpl) BuildImageWithAgent(ctx context.Context, h *host.Host
 
 	// wait for ImageBuild to complete -- success response otherwise returned
 	// before building from Dockerfile is over, and next ContainerCreate will fail
-	_, err = ioutil.ReadAll(resp.Body)
+	_, err = io.ReadAll(resp.Body)
 	if err != nil {
 		return "", errors.Wrap(err, "Error reading ImageBuild response")
 	}
@@ -498,18 +497,17 @@ func (c *dockerClientImpl) ListImages(ctx context.Context, h *host.Host) ([]type
 func (c *dockerClientImpl) RemoveImage(ctx context.Context, h *host.Host, imageID string) error {
 	dockerClient, err := c.generateClient(h)
 	if err != nil {
-		return errors.Wrap(err, "Failed to generate docker client")
+		return errors.Wrap(err, "generating Docker client")
 	}
 
 	opts := types.ImageRemoveOptions{Force: true}
 	removed, err := dockerClient.ImageRemove(ctx, imageID, opts)
 	if err != nil {
-		err = errors.Wrapf(err, "Failed to remove image '%s'", imageID)
-		return err
+		return errors.Wrapf(err, "removing image '%s'", imageID)
 	}
 	// check to make sure an image was removed
 	if len(removed) <= 0 {
-		return errors.Errorf("Failed to remove image '%s'", imageID)
+		return errors.Errorf("image '%s' was not removed", imageID)
 	}
 	return nil
 }
@@ -518,12 +516,12 @@ func (c *dockerClientImpl) RemoveImage(ctx context.Context, h *host.Host, imageI
 func (c *dockerClientImpl) RemoveContainer(ctx context.Context, h *host.Host, containerID string) error {
 	dockerClient, err := c.generateClient(h)
 	if err != nil {
-		return errors.Wrap(err, "Failed to generate docker client")
+		return errors.Wrap(err, "generating Docker client")
 	}
 
 	opts := types.ContainerRemoveOptions{Force: true}
 	if err = dockerClient.ContainerRemove(ctx, containerID, opts); err != nil {
-		return errors.Wrapf(err, "Failed to remove container '%s'", containerID)
+		return errors.Wrapf(err, "removing container '%s'", containerID)
 	}
 
 	return nil
@@ -533,12 +531,12 @@ func (c *dockerClientImpl) RemoveContainer(ctx context.Context, h *host.Host, co
 func (c *dockerClientImpl) StartContainer(ctx context.Context, h *host.Host, containerID string) error {
 	dockerClient, err := c.generateClient(h)
 	if err != nil {
-		return errors.Wrap(err, "Failed to generate docker client")
+		return errors.Wrap(err, "generating Docker client")
 	}
 
 	opts := types.ContainerStartOptions{}
 	if err := dockerClient.ContainerStart(ctx, containerID, opts); err != nil {
-		return errors.Wrapf(err, "Failed to start container '%s'", containerID)
+		return errors.Wrapf(err, "starting container '%s'", containerID)
 	}
 
 	return nil

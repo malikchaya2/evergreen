@@ -22,12 +22,9 @@ type ProviderSettings interface {
 	FromDistroSettings(distro.Distro, string) error
 }
 
-//Manager is an interface which handles creating new hosts or modifying
-//them via some third-party API.
+// Manager is an interface which handles creating new hosts or modifying
+// them via some third-party API.
 type Manager interface {
-	// Returns a pointer to the manager's configuration settings struct
-	GetSettings() ProviderSettings
-
 	// Load credentials or other settings from the config file
 	Configure(context.Context, *evergreen.Settings) error
 
@@ -81,7 +78,7 @@ type Manager interface {
 	ModifyVolume(context.Context, *host.Volume, *model.VolumeModifyOptions) error
 
 	// GetVolumeAttachment gets a volume's attachment
-	GetVolumeAttachment(context.Context, string) (*host.VolumeAttachment, error)
+	GetVolumeAttachment(context.Context, string) (*VolumeAttachment, error)
 
 	// CheckInstanceType determines if the given instance type is available in the current region.
 	CheckInstanceType(context.Context, string) error
@@ -113,8 +110,13 @@ type ContainerManager interface {
 
 // BatchManager is an interface for cloud providers that support batch operations.
 type BatchManager interface {
-	// GetInstanceStatuses gets the status of a slice of instances.
-	GetInstanceStatuses(context.Context, []host.Host) ([]CloudStatus, error)
+	// GetInstanceStatuses gets the statuses of a slice of instances. It returns
+	// a map of the instance IDs to their current status. If some of the
+	// instance statuses cannot be retrieved, implementations are allowed to
+	// either return an error or return StatusNonExistent for those hosts.
+	// If there is no error, implementations should return the same number of
+	// results in the map as there are hosts.
+	GetInstanceStatuses(context.Context, []host.Host) (map[string]CloudStatus, error)
 }
 
 // ManagerOpts is a struct containing the fields needed to get a new cloud manager
@@ -126,9 +128,11 @@ type ManagerOpts struct {
 	ProviderSecret string
 }
 
+// GetSettings returns an uninitialized ProviderSettings based on the given
+// provider.
 func GetSettings(provider string) (ProviderSettings, error) {
 	switch provider {
-	case evergreen.ProviderNameEc2OnDemand, evergreen.ProviderNameEc2Spot, evergreen.ProviderNameEc2Auto, evergreen.ProviderNameEc2Fleet:
+	case evergreen.ProviderNameEc2OnDemand, evergreen.ProviderNameEc2Spot, evergreen.ProviderNameEc2Fleet:
 		return &EC2ProviderSettings{}, nil
 	case evergreen.ProviderNameStatic:
 		return &StaticSettings{}, nil
@@ -143,7 +147,7 @@ func GetSettings(provider string) (ProviderSettings, error) {
 	case evergreen.ProviderNameVsphere:
 		return &vsphereSettings{}, nil
 	}
-	return nil, errors.Errorf("invalid provider name %s", provider)
+	return nil, errors.Errorf("invalid provider name '%s'", provider)
 }
 
 // GetManager returns an implementation of Manager for the given manager options.
@@ -174,17 +178,6 @@ func GetManager(ctx context.Context, env evergreen.Environment, mgrOpts ManagerO
 				providerSecret: mgrOpts.ProviderSecret,
 			},
 		}
-	case evergreen.ProviderNameEc2Auto:
-		provider = &ec2Manager{
-			env: env,
-			EC2ManagerOptions: &EC2ManagerOptions{
-				client:         &awsClientImpl{},
-				provider:       autoProvider,
-				region:         mgrOpts.Region,
-				providerKey:    mgrOpts.ProviderKey,
-				providerSecret: mgrOpts.ProviderSecret,
-			},
-		}
 	case evergreen.ProviderNameEc2Fleet:
 		provider = &ec2FleetManager{
 			env: env,
@@ -210,11 +203,11 @@ func GetManager(ctx context.Context, env evergreen.Environment, mgrOpts ManagerO
 	case evergreen.ProviderNameVsphere:
 		provider = &vsphereManager{}
 	default:
-		return nil, errors.Errorf("No known provider for '%s'", mgrOpts.Provider)
+		return nil, errors.Errorf("no known provider '%s'", mgrOpts.Provider)
 	}
 
 	if err := provider.Configure(ctx, env.Settings()); err != nil {
-		return nil, errors.Wrap(err, "Failed to configure cloud provider")
+		return nil, errors.Wrap(err, "configuring cloud provider")
 	}
 
 	return provider, nil
@@ -225,7 +218,7 @@ func GetManager(ctx context.Context, env evergreen.Environment, mgrOpts ManagerO
 func GetManagerOptions(d distro.Distro) (ManagerOpts, error) {
 	region := ""
 	if len(d.ProviderSettingsList) > 1 {
-		if IsEc2Provider(d.Provider) {
+		if evergreen.IsEc2Provider(d.Provider) {
 			// this shouldn't ever happen, but if it does we want to continue so we don't inadvertently block task queues
 			grip.Error(message.Fields{
 				"message":           "distro should be modified to have only one provider settings",
@@ -238,10 +231,10 @@ func GetManagerOptions(d distro.Distro) (ManagerOpts, error) {
 				"distro '%s' has multiple provider settings, but is provider '%s'", d.Id, d.Provider)
 		}
 	}
-	if IsEc2Provider(d.Provider) {
+	if evergreen.IsEc2Provider(d.Provider) {
 		s := &EC2ProviderSettings{}
 		if err := s.FromDistroSettings(d, region); err != nil {
-			return ManagerOpts{}, errors.Wrapf(err, "error getting EC2 provider settings from distro")
+			return ManagerOpts{}, errors.Wrapf(err, "getting EC2 provider settings from distro")
 		}
 
 		return getEC2ManagerOptionsFromSettings(d.Provider, s), nil
@@ -258,5 +251,12 @@ func ConvertContainerManager(m Manager) (ContainerManager, error) {
 	if cm, ok := m.(ContainerManager); ok {
 		return cm, nil
 	}
-	return nil, errors.New("Error converting manager to container manager")
+	return nil, errors.Errorf("programmer error: cannot convert manager %T to container manager", m)
+}
+
+// VolumeAttachment contains information about a volume attached to a host.
+type VolumeAttachment struct {
+	VolumeID   string
+	HostID     string
+	DeviceName string
 }

@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"reflect"
 	"strings"
 	"time"
@@ -26,6 +26,13 @@ const LoadProjectError = "load project error(s)"
 const TranslateProjectError = "error translating project"
 const EmptyConfigurationError = "received empty configuration file"
 
+// DefaultParserProjectAccessTimeout is the default timeout for accessing a
+// parser project. In general, the context timeout should prefer to be inherited
+// from a higher-level context (e.g. a REST request's context), so this timeout
+// should only be used as a last resort if the context cannot be easily passed
+// to the place where the parser project is accessed.
+const DefaultParserProjectAccessTimeout = 60 * time.Second
+
 // This file contains the infrastructure for turning a YAML project configuration
 // into a usable Project struct. A basic overview of the project parsing process is:
 //
@@ -33,7 +40,7 @@ const EmptyConfigurationError = "received empty configuration file"
 // The ParserProject's internal types define custom YAML unmarshal hooks, allowing
 // users to do things like offer a single definition where we expect a list, e.g.
 //   `tags: "single_tag"` instead of the more verbose `tags: ["single_tag"]`
-// or refer to task by a single selector. Custom YAML handling allows us to
+// or refer to a task by a single selector. Custom YAML handling allows us to
 // add other useful features like detecting fatal errors and reporting them
 // through the YAML parser's error code, which supplies helpful line number information
 // that we would lose during validation against already-parsed data. In the future,
@@ -51,10 +58,18 @@ const EmptyConfigurationError = "received empty configuration file"
 // ParserProject serves as an intermediary struct for parsing project
 // configuration YAML. It implements the Unmarshaler interface
 // to allow for flexible handling.
+// From a mental model perspective, the ParserProject is the project
+// configuration after YAML rules have been evaluated (e.g. matching YAML fields
+// to Go struct fields, evaluating YAML anchors and aliases), but before any
+// Evergreen-specific evaluation rules have been applied. For example, Evergreen
+// has a custom feature to support tagging a set of tasks and expanding those
+// tags into a list of tasks under the build variant's list of tasks (i.e.
+// ".tagname" syntax). In the ParserProject, these are stored as the unexpanded
+// tag text (i.e. ".tagname"), and these tags are not evaluated until the
+// ParserProject is turned into a final Project.
 type ParserProject struct {
 	// Id and ConfigdUpdateNumber are not pointers because they are only used internally
-	Id                 string `yaml:"_id" bson:"_id"` // should be the same as the version's ID
-	ConfigUpdateNumber int    `yaml:"config_number,omitempty" bson:"config_number,omitempty"`
+	Id string `yaml:"_id" bson:"_id"` // should be the same as the version's ID
 	// UpdatedByGenerators is used to determine if the parser project needs to be re-saved or not.
 	UpdatedByGenerators []string `yaml:"updated_by_generators,omitempty" bson:"updated_by_generators,omitempty"`
 	// List of yamls to merge
@@ -172,9 +187,10 @@ func (pt *parserTask) tags() []string { return pt.Tags }
 
 // parserDependency represents the intermediary state for referencing dependencies.
 type parserDependency struct {
-	TaskSelector  taskSelector `yaml:",inline"`
-	Status        string       `yaml:"status,omitempty" bson:"status,omitempty"`
-	PatchOptional bool         `yaml:"patch_optional,omitempty" bson:"patch_optional,omitempty"`
+	TaskSelector       taskSelector `yaml:",inline"`
+	Status             string       `yaml:"status,omitempty" bson:"status,omitempty"`
+	PatchOptional      bool         `yaml:"patch_optional,omitempty" bson:"patch_optional,omitempty"`
+	OmitGeneratedTasks bool         `yaml:"omit_generated_tasks,omitempty" bson:"omit_generated_tasks,omitempty"`
 }
 
 // parserDependencies is a type defined for unmarshalling both a single
@@ -303,8 +319,7 @@ type parserBV struct {
 	Expansions    util.Expansions    `yaml:"expansions,omitempty" bson:"expansions,omitempty"`
 	Tags          parserStringSlice  `yaml:"tags,omitempty,omitempty" bson:"tags,omitempty"`
 	Modules       parserStringSlice  `yaml:"modules,omitempty" bson:"modules,omitempty"`
-	Disabled      bool               `yaml:"disabled,omitempty" bson:"disabled,omitempty"`
-	Push          bool               `yaml:"push,omitempty" bson:"push,omitempty"`
+	Disable       *bool              `yaml:"disable,omitempty" bson:"disable,omitempty"`
 	BatchTime     *int               `yaml:"batchtime,omitempty" bson:"batchtime,omitempty"`
 	CronBatchTime string             `yaml:"cron,omitempty" bson:"cron,omitempty"`
 	Stepback      *bool              `yaml:"stepback,omitempty" bson:"stepback,omitempty"`
@@ -313,7 +328,11 @@ type parserBV struct {
 	DisplayTasks  []displayTask      `yaml:"display_tasks,omitempty" bson:"display_tasks,omitempty"`
 	DependsOn     parserDependencies `yaml:"depends_on,omitempty" bson:"depends_on,omitempty"`
 	// If Activate is set to false, then we don't initially activate the build variant.
-	Activate *bool `yaml:"activate,omitempty" bson:"activate,omitempty"`
+	Activate       *bool `yaml:"activate,omitempty" bson:"activate,omitempty"`
+	Patchable      *bool `yaml:"patchable,omitempty" bson:"patchable,omitempty"`
+	PatchOnly      *bool `yaml:"patch_only,omitempty" bson:"patch_only,omitempty"`
+	AllowForGitTag *bool `yaml:"allow_for_git_tag,omitempty" bson:"allow_for_git_tag,omitempty"`
+	GitTagOnly     *bool `yaml:"git_tag_only,omitempty" bson:"git_tag_only,omitempty"`
 
 	// internal matrix stuff
 	MatrixId  string      `yaml:"matrix_id,omitempty" bson:"matrix_id,omitempty"`
@@ -370,14 +389,17 @@ func (pbv *parserBV) canMerge() bool {
 		pbv.Expansions == nil &&
 		pbv.Tags == nil &&
 		pbv.Modules == nil &&
-		!pbv.Disabled &&
-		!pbv.Push &&
+		pbv.Disable == nil &&
 		pbv.BatchTime == nil &&
 		pbv.CronBatchTime == "" &&
 		pbv.Stepback == nil &&
 		pbv.RunOn == nil &&
 		pbv.DependsOn == nil &&
 		pbv.Activate == nil &&
+		pbv.Patchable == nil &&
+		pbv.PatchOnly == nil &&
+		pbv.AllowForGitTag == nil &&
+		pbv.GitTagOnly == nil &&
 		pbv.MatrixId == "" &&
 		pbv.MatrixVal == nil &&
 		pbv.Matrix == nil &&
@@ -408,6 +430,8 @@ type parserBVTaskUnit struct {
 	CronBatchTime string `yaml:"cron,omitempty" bson:"cron,omitempty"`
 	// If Activate is set to false, then we don't initially activate the task.
 	Activate *bool `yaml:"activate,omitempty" bson:"activate,omitempty"`
+	// TaskGroup is set if an inline task group is defined on the build variant config.
+	TaskGroup *parserTaskGroup `yaml:"task_group,omitempty" bson:"task_group,omitempty"`
 }
 
 // UnmarshalYAML allows the YAML parser to read both a single selector string or
@@ -482,70 +506,107 @@ func (pss *parserStringSlice) UnmarshalYAML(unmarshal func(interface{}) error) e
 	return nil
 }
 
-// LoadProjectForVersion returns the project for a version, either from the parser project or the config string.
-// If read from the config string and shouldSave is set, the resulting parser project will be saved.
-func LoadProjectForVersion(v *Version, id string, shouldSave bool) (ProjectInfo, error) {
-	var pp *ParserProject
+// HasSpecificActivation returns if the build variant task specifies an activation condition that
+// overrides the default, such as cron/batchtime, disabling the task, or explicitly deactivating it.
+func (bvt *parserBVTaskUnit) hasSpecificActivation() bool {
+	return bvt.BatchTime != nil || bvt.CronBatchTime != "" ||
+		!utility.FromBoolTPtr(bvt.Activate) || utility.FromBoolPtr(bvt.Disable)
+}
+
+// HasSpecificActivation returns if the build variant specifies an activation condition that
+// overrides the default, such as cron/batchtime, disabling the task, or explicitly deactivating it.
+func (bv *parserBV) hasSpecificActivation() bool {
+	return bv.BatchTime != nil || bv.CronBatchTime != "" ||
+		!utility.FromBoolTPtr(bv.Activate) || utility.FromBoolPtr(bv.Disable)
+}
+
+// FindAndTranslateProjectForPatch translates a parser project for a patch into
+// a project. This assumes that the version may not exist yet (i.e. the patch is
+// unfinalized); otherwise FindAndTranslateProjectForVersion is equivalent.
+func FindAndTranslateProjectForPatch(ctx context.Context, settings *evergreen.Settings, p *patch.Patch) (*Project, *ParserProject, error) {
+	if p.ProjectStorageMethod != "" {
+		pp, err := ParserProjectFindOneByID(ctx, settings, p.ProjectStorageMethod, p.Id.Hex())
+		if err != nil {
+			return nil, nil, errors.Wrapf(err, "finding parser project '%s' stored using method '%s'", p.Id.Hex(), p.ProjectStorageMethod)
+		}
+		if pp == nil {
+			return nil, nil, errors.Errorf("parser project '%s' not found in storage using method '%s'", p.Id.Hex(), p.ProjectStorageMethod)
+		}
+		project, err := TranslateProject(pp)
+		if err != nil {
+			return nil, nil, errors.Wrapf(err, "translating project '%s'", pp.Id)
+		}
+		return project, pp, nil
+	}
+
+	if p.PatchedParserProject != "" {
+		project := &Project{}
+		pp, err := LoadProjectInto(ctx, []byte(p.PatchedParserProject), nil, p.Project, project)
+		if err != nil {
+			return nil, nil, errors.Wrap(err, "unmarshalling project config from patched parser project")
+		}
+		return project, pp, nil
+	}
+
+	// This fallback handles the case where the patch is already finalized.
+	v, err := VersionFindOneId(p.Version)
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "finding version '%s' for patch '%s'", p.Version, p.Id.Hex())
+	}
+	if v == nil {
+		return nil, nil, errors.Errorf("version '%s' not found for patch '%s'", p.Version, p.Id.Hex())
+	}
+	return FindAndTranslateProjectForVersion(ctx, settings, v)
+}
+
+// FindAndTranslateProjectForVersion translates a parser project for a version into a Project.
+// Also sets the project ID.
+func FindAndTranslateProjectForVersion(ctx context.Context, settings *evergreen.Settings, v *Version) (*Project, *ParserProject, error) {
+	pp, err := ParserProjectFindOneByID(ctx, settings, v.ProjectStorageMethod, v.Id)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "finding parser project")
+	}
+	if pp == nil {
+		return nil, nil, errors.Errorf("parser project not found for version '%s'", v.Id)
+	}
+	// Setting the translated project's identifier is necessary here because the
+	// version always has an identifier, but some old parser projects used to
+	// not be stored with the identifier.
+	pp.Identifier = utility.ToStringPtr(v.Identifier)
+	var p *Project
+	p, err = TranslateProject(pp)
+	if err != nil {
+		return nil, nil, errors.Wrapf(err, "translating parser project '%s'", v.Id)
+	}
+	return p, pp, err
+}
+
+// LoadProjectInfoForVersion returns the project info for a version from its parser project.
+func LoadProjectInfoForVersion(ctx context.Context, settings *evergreen.Settings, v *Version, id string) (ProjectInfo, error) {
 	var err error
 
 	pRef, err := FindMergedProjectRef(id, "", false)
 	if err != nil {
 		return ProjectInfo{}, errors.Wrap(err, "finding project ref")
 	}
-	pp, err = ParserProjectFindOneById(v.Id)
-	if err != nil {
-		return ProjectInfo{}, errors.Wrap(err, "finding parser project")
+	if pRef == nil {
+		return ProjectInfo{}, errors.Errorf("project ref '%s' not found", id)
 	}
 	var pc *ProjectConfig
 	if pRef.IsVersionControlEnabled() {
-		pc, err = FindProjectConfigForProjectOrVersion(v.Identifier, v.Id)
+		pc, err = FindProjectConfigById(v.Id)
 		if err != nil {
 			return ProjectInfo{}, errors.Wrap(err, "finding project config")
 		}
 	}
-	// if parser project config number is old then we should default to legacy
-	if pp != nil && pp.ConfigUpdateNumber >= v.ConfigUpdateNumber {
-		if pp.Functions == nil {
-			pp.Functions = map[string]*YAMLCommandSet{}
-		}
-		pp.Identifier = utility.ToStringPtr(id)
-		var p *Project
-		p, err = TranslateProject(pp)
-		return ProjectInfo{
-			Project:             p,
-			IntermediateProject: pp,
-			Config:              pc,
-		}, err
-	}
-
-	if v.Config == "" {
-		return ProjectInfo{}, errors.New("version has no config")
-	}
-	p := &Project{}
-	// opts empty because project yaml with `include` will not hit this case
-	ctx := context.Background()
-	pp, err = LoadProjectInto(ctx, []byte(v.Config), nil, id, p)
+	p, pp, err := FindAndTranslateProjectForVersion(ctx, settings, v)
 	if err != nil {
-		return ProjectInfo{}, errors.Wrap(err, "loading project")
-	}
-	pp.Id = v.Id
-	pp.Identifier = utility.ToStringPtr(id)
-	pp.ConfigUpdateNumber = v.ConfigUpdateNumber
-	pp.CreateTime = v.CreateTime
-
-	if shouldSave {
-		if err = pp.TryUpsert(); err != nil {
-			grip.Error(message.WrapError(err, message.Fields{
-				"project": id,
-				"version": v.Id,
-				"message": "error inserting parser project for version",
-			}))
-			return ProjectInfo{}, errors.Wrap(err, "updating version with project")
-		}
+		return ProjectInfo{}, errors.Wrap(err, "translating project")
 	}
 	return ProjectInfo{
 		Project:             p,
 		IntermediateProject: pp,
+		Config:              pc,
 	}, nil
 }
 
@@ -559,7 +620,7 @@ func GetProjectFromBSON(data []byte) (*Project, error) {
 
 // LoadProjectInto loads the raw data from the config file into project
 // and sets the project's identifier field to identifier. Tags are evaluated. Returns the intermediate step.
-// If reading from a version config, LoadProjectForVersion should be used to persist the resulting parser project.
+// If reading from a version config, LoadProjectInfoForVersion should be used to persist the resulting parser project.
 // opts is used to look up files on github if the main parser project has an Include.
 func LoadProjectInto(ctx context.Context, data []byte, opts *GetProjectOpts, identifier string, project *Project) (*ParserProject, error) {
 	unmarshalStrict := false
@@ -617,7 +678,7 @@ func LoadProjectInto(ctx context.Context, data []byte, opts *GetProjectOpts, ide
 }
 
 const (
-	ReadfromGithub    = "github"
+	ReadFromGithub    = "github"
 	ReadFromLocal     = "local"
 	ReadFromPatch     = "patch"
 	ReadFromPatchDiff = "patch_diff"
@@ -658,7 +719,7 @@ func retrieveFile(ctx context.Context, opts GetProjectOpts) ([]byte, error) {
 	}
 	switch opts.ReadFileFrom {
 	case ReadFromLocal:
-		fileContents, err := ioutil.ReadFile(opts.RemotePath)
+		fileContents, err := os.ReadFile(opts.RemotePath)
 		if err != nil {
 			return nil, errors.Wrap(err, "reading project config")
 		}
@@ -728,7 +789,7 @@ func retrieveFileForModule(ctx context.Context, opts GetProjectOpts, modules Mod
 		RemotePath:   opts.RemotePath,
 		Revision:     module.Branch,
 		Token:        opts.Token,
-		ReadFileFrom: ReadfromGithub,
+		ReadFileFrom: ReadFromGithub,
 		Identifier:   moduleName,
 	}
 	return retrieveFile(ctx, moduleOpts)
@@ -763,7 +824,16 @@ func getFileForPatchDiff(ctx context.Context, opts GetProjectOpts) ([]byte, erro
 	return projectFileBytes, nil
 }
 
+// fetchProjectFilesTimeout is the maximum timeout to fetch project
+// configuration files from its source.
+const fetchProjectFilesTimeout = time.Minute
+
+// GetProjectFromFile fetches project configuration files from its source (e.g.
+// from a patch diff, GitHub, etc).
 func GetProjectFromFile(ctx context.Context, opts GetProjectOpts) (ProjectInfo, error) {
+	ctx, cancel := context.WithTimeout(ctx, fetchProjectFilesTimeout)
+	defer cancel()
+
 	fileContents, err := retrieveFile(ctx, opts)
 	if err != nil {
 		return ProjectInfo{}, err
@@ -802,7 +872,6 @@ func createIntermediateProject(yml []byte, unmarshalStrict bool) (*ParserProject
 			// to a non-existent variables field.
 			Variables interface{} `yaml:"variables,omitempty" bson:"-"`
 		}{}
-
 		if err := util.UnmarshalYAMLStrictWithFallback(yml, &strictProjectWithVariables); err != nil {
 			return nil, err
 		}
@@ -821,8 +890,7 @@ func createIntermediateProject(yml []byte, unmarshalStrict bool) (*ParserProject
 }
 
 // TranslateProject converts our intermediate project representation into
-// the Project type that Evergreen actually uses. Errors are added to
-// pp.errors and pp.warnings and must be checked separately.
+// the Project type that Evergreen actually uses.
 func TranslateProject(pp *ParserProject) (*Project, error) {
 	// Transfer top level fields
 	proj := &Project{
@@ -867,6 +935,15 @@ func TranslateProject(pp *ParserProject) (*Project, error) {
 	return proj, errors.Wrap(catcher.Resolve(), TranslateProjectError)
 }
 
+// Init initializes the parser project with the expected fields before it is
+// persisted. It's assumed that the remaining parser project configuration is
+// already populated, but these values to initialize come from an external
+// source (i.e. the patch or version it's based on).
+func (pp *ParserProject) Init(id string, createdAt time.Time) {
+	pp.Id = id
+	pp.CreateTime = createdAt
+}
+
 func (pp *ParserProject) AddTask(name string, commands []PluginCommandConf) {
 	t := parserTask{
 		Name:     name,
@@ -888,6 +965,14 @@ func (pp *ParserProject) AddBuildVariant(name, displayName, runOn string, batchT
 		bv.RunOn = []string{runOn}
 	}
 	pp.BuildVariants = append(pp.BuildVariants, bv)
+}
+
+func (pp *ParserProject) GetParameters() []patch.Parameter {
+	res := []patch.Parameter{}
+	for _, param := range pp.Parameters {
+		res = append(res, param.Parameter)
+	}
+	return res
 }
 
 // sieveMatrixVariants takes a set of parserBVs and groups them into regular
@@ -974,18 +1059,21 @@ func evaluateBuildVariants(tse *taskSelectorEvaluator, tgse *tagSelectorEvaluato
 	var evalErrs, errs []error
 	for _, pbv := range pbvs {
 		bv := BuildVariant{
-			DisplayName:   pbv.DisplayName,
-			Name:          pbv.Name,
-			Expansions:    pbv.Expansions,
-			Modules:       pbv.Modules,
-			Disabled:      pbv.Disabled,
-			Push:          pbv.Push,
-			BatchTime:     pbv.BatchTime,
-			CronBatchTime: pbv.CronBatchTime,
-			Activate:      pbv.Activate,
-			Stepback:      pbv.Stepback,
-			RunOn:         pbv.RunOn,
-			Tags:          pbv.Tags,
+			DisplayName:    pbv.DisplayName,
+			Name:           pbv.Name,
+			Expansions:     pbv.Expansions,
+			Modules:        pbv.Modules,
+			Disable:        pbv.Disable,
+			BatchTime:      pbv.BatchTime,
+			CronBatchTime:  pbv.CronBatchTime,
+			Activate:       pbv.Activate,
+			Patchable:      pbv.Patchable,
+			PatchOnly:      pbv.PatchOnly,
+			AllowForGitTag: pbv.AllowForGitTag,
+			GitTagOnly:     pbv.GitTagOnly,
+			Stepback:       pbv.Stepback,
+			RunOn:          pbv.RunOn,
+			Tags:           pbv.Tags,
 		}
 		bv.Tasks, errs = evaluateBVTasks(tse, tgse, vse, pbv, tasks)
 
@@ -1113,33 +1201,39 @@ func evaluateBVTasks(tse *taskSelectorEvaluator, tgse *tagSelectorEvaluator, vse
 		tasksByName[t.Name] = t
 	}
 	for _, pbvt := range pbv.Tasks {
-		// evaluate each task against both the task and task group selectors
+		// Evaluate each task against both the task and task group selectors
 		// only error if both selectors error because each task should only be found
-		// in one or the other
+		// in one or the other.  Skip selector checking if task group is defined
+		// directly on the build variant task.
 		var names, temp []string
-		var err1, err2 error
 		isGroup := false
-		if tse != nil {
-			temp, err1 = tse.evalSelector(ParseSelector(pbvt.Name))
-			names = append(names, temp...)
-		}
-		if tgse != nil {
-			temp, err2 = tgse.evalSelector(ParseSelector(pbvt.Name))
-			if len(temp) > 0 {
+		if pbvt.TaskGroup != nil {
+			names = append(names, pbvt.Name)
+			isGroup = true
+		} else {
+			var err1, err2 error
+			if tse != nil {
+				temp, err1 = tse.evalSelector(ParseSelector(pbvt.Name))
 				names = append(names, temp...)
-				isGroup = true
 			}
-		}
-		if err1 != nil && err2 != nil {
-			evalErrs = append(evalErrs, err1, err2)
-			continue
+			if tgse != nil {
+				temp, err2 = tgse.evalSelector(ParseSelector(pbvt.Name))
+				if len(temp) > 0 {
+					names = append(names, temp...)
+					isGroup = true
+				}
+			}
+			if err1 != nil && err2 != nil {
+				evalErrs = append(evalErrs, err1, err2)
+				continue
+			}
 		}
 		// create new task definitions--duplicates must have the same status requirements
 		for _, name := range names {
 			parserTask := tasksByName[name]
 			// create a new task by copying the task that selected it,
 			// so we can preserve the "Variant" and "Status" field.
-			t := getParserBuildVariantTaskUnit(name, parserTask, pbvt)
+			t := getParserBuildVariantTaskUnit(name, parserTask, pbvt, pbv)
 
 			// Task-level dependencies defined in the variant override variant-level dependencies which override
 			// task-level dependencies defined in the task.
@@ -1153,6 +1247,8 @@ func evaluateBVTasks(tse *taskSelectorEvaluator, tgse *tagSelectorEvaluator, vse
 			}
 			t.DependsOn, errs = evaluateDependsOn(tse.tagEval, tgse, vse, dependsOn)
 			evalErrs = append(evalErrs, errs...)
+			// IsGroup indicates here that this build variant task unit is a
+			// task group.
 			t.IsGroup = isGroup
 
 			// add the new task if it doesn't already exists (we must avoid conflicting status fields)
@@ -1172,11 +1268,18 @@ func evaluateBVTasks(tse *taskSelectorEvaluator, tgse *tagSelectorEvaluator, vse
 	return ts, evalErrs
 }
 
-// getParserBuildVariantTaskUnit combines the parser project's task definition with the build variant task definition.
-// DependsOn will be handled separately.
-func getParserBuildVariantTaskUnit(name string, pt parserTask, bvt parserBVTaskUnit) BuildVariantTaskUnit {
+// getParserBuildVariantTaskUnit combines the parser project's build variant
+// task definition with its task definition and build variant definition.
+// DependsOn is handled separately. When there are conflicting settings defined
+// at different levels, the priority of settings are (from highest to lowest):
+// * Task settings within a build variant's list of tasks
+// * Task settings within a task group's list of tasks
+// * Project task's settings
+// * Build variant's settings
+func getParserBuildVariantTaskUnit(name string, pt parserTask, bvt parserBVTaskUnit, bv parserBV) BuildVariantTaskUnit {
 	res := BuildVariantTaskUnit{
 		Name:             name,
+		Variant:          bv.Name,
 		Patchable:        bvt.Patchable,
 		PatchOnly:        bvt.PatchOnly,
 		Disable:          bvt.Disable,
@@ -1190,6 +1293,23 @@ func getParserBuildVariantTaskUnit(name string, pt parserTask, bvt parserBVTaskU
 		CronBatchTime:    bvt.CronBatchTime,
 		BatchTime:        bvt.BatchTime,
 		Activate:         bvt.Activate,
+	}
+	if bvt.TaskGroup != nil {
+		res.TaskGroup = &TaskGroup{
+			Name:                    bvt.Name,
+			SetupGroupFailTask:      bvt.TaskGroup.SetupGroupFailTask,
+			TeardownTaskCanFailTask: bvt.TaskGroup.TeardownTaskCanFailTask,
+			SetupGroupTimeoutSecs:   bvt.TaskGroup.SetupGroupTimeoutSecs,
+			SetupGroup:              bvt.TaskGroup.SetupGroup,
+			TeardownGroup:           bvt.TaskGroup.TeardownGroup,
+			SetupTask:               bvt.TaskGroup.SetupTask,
+			TeardownTask:            bvt.TaskGroup.TeardownTask,
+			Tags:                    bvt.TaskGroup.Tags,
+			Tasks:                   bvt.TaskGroup.Tasks,
+			MaxHosts:                bvt.TaskGroup.MaxHosts,
+			Timeout:                 bvt.TaskGroup.Timeout,
+			ShareProcs:              bvt.TaskGroup.ShareProcs,
+		}
 	}
 	if res.Priority == 0 {
 		res.Priority = pt.Priority
@@ -1222,6 +1342,26 @@ func getParserBuildVariantTaskUnit(name string, pt parserTask, bvt parserBVTaskU
 	if len(res.RunOn) == 0 {
 		res.RunOn = pt.RunOn
 	}
+
+	// Build variant level settings are lower priority than project task level
+	// settings.
+	if res.Patchable == nil {
+		res.Patchable = bv.Patchable
+	}
+	if res.PatchOnly == nil {
+		res.PatchOnly = bv.PatchOnly
+	}
+	if res.AllowForGitTag == nil {
+		res.AllowForGitTag = bv.AllowForGitTag
+	}
+	if res.GitTagOnly == nil {
+		res.GitTagOnly = bv.GitTagOnly
+	}
+
+	if res.Disable == nil {
+		res.Disable = bv.Disable
+	}
+
 	return res
 }
 
@@ -1275,10 +1415,11 @@ func evaluateDependsOn(tse *tagSelectorEvaluator, tgse *tagSelectorEvaluator, vs
 				// create a newDep by copying the dep that selected it,
 				// so we can preserve the "Status" and "PatchOptional" field.
 				newDep := TaskUnitDependency{
-					Name:          name,
-					Variant:       variant,
-					Status:        d.Status,
-					PatchOptional: d.PatchOptional,
+					Name:               name,
+					Variant:            variant,
+					Status:             d.Status,
+					PatchOptional:      d.PatchOptional,
+					OmitGeneratedTasks: d.OmitGeneratedTasks,
 				}
 				// add the new dep if it doesn't already exist (we must avoid conflicting status fields)
 				if oldDep, ok := newDepsByNameAndVariant[TVPair{newDep.Variant, newDep.Name}]; !ok {

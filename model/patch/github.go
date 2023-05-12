@@ -10,7 +10,7 @@ import (
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/utility"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
@@ -93,7 +93,8 @@ type githubIntent struct {
 }
 
 // BSON fields for the patches
-// nolint
+//
+//nolint:unused
 var (
 	documentIDKey   = bsonutil.MustHaveTag(githubIntent{}, "DocumentID")
 	msgIDKey        = bsonutil.MustHaveTag(githubIntent{}, "MsgID")
@@ -224,12 +225,12 @@ func (g *githubIntent) ShouldFinalizePatch() bool {
 	return true
 }
 
-func (g *githubIntent) ReusePreviousPatchDefinition() bool {
-	return false
+func (g *githubIntent) RepeatPreviousPatchDefinition() (string, bool) {
+	return "", false
 }
 
-func (g *githubIntent) RepeatFailedTasksAndVariants() bool {
-	return false
+func (g *githubIntent) RepeatFailedTasksAndVariants() (string, bool) {
+	return "", false
 }
 
 func (g *githubIntent) RequesterIdentity() string {

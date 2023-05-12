@@ -1,142 +1,55 @@
 {
   "tests": [
-    { 
-      "query_file": "empty-version.graphql",
+    {
+      "query_file": "aborted-patch.graphql",
       "result": {
         "data": {
           "patch": {
-            "versionFull": null
+            "status": "aborted"
           }
         }
       }
     },
     {
-      "query_file": "version.graphql",
+      "query_file": "base-version-null.graphql",
       "result": {
         "data": {
           "patch": {
+            "id": "5d7288d91f8c8a403bc34a7d",
             "versionFull": {
-              "id": "5dd2e89cd1fe07048e43bb9c"
+              "baseVersion": null
             }
           }
         }
       }
     },
     {
-      "query_file": "taskCount.graphql",
+      "query_file": "base-version.graphql",
       "result": {
         "data": {
           "patch": {
             "id": "5e4ff3abe3c3317e352062e4",
-            "taskCount": 5
-          }
-        }
-      }
-    },
-    {
-      "query_file": "childPatches.graphql",
-      "result": {
-        "data": {
-          "patch": {
-            "id": "5e4ff3abe3c3317e352062e1",
-            "childPatches": [
-              {
-                "id": "5e4ff3abe3c3317e352062e4",
-                "projectID": "evergreen"
+            "versionFull": {
+              "baseVersion": {
+                "id": "5dd2e89cd1fe07048e43bb9c"
               }
-            ]
+            }
           }
         }
       }
     },
     {
-      "query_file": "noChildPatches.graphql",
+      "query_file": "builds-do-not-exist.graphql",
       "result": {
         "data": {
           "patch": {
-            "id": "5d7288d91f8c8a403bc34a7d",
-            "childPatches": null
+            "builds": []
           }
         }
       }
     },
     {
-      "query_file": "baseVersionId.graphql",
-      "result": {
-        "data": {
-          "patch": {
-            "id": "5e4ff3abe3c3317e352062e4",
-            "baseVersionID": "evergreen_5e823e1f28baeaa22ae00823d83e03082cd148ab"
-          }
-        }
-      }
-    },
-    {
-      "query_file": "noBaseCommit.graphql",
-      "result": {
-        "data": {
-          "patch": {
-            "id": "5d7288d91f8c8a403bc34a7d",
-            "baseVersionID": null
-          }
-        }
-      }
-    },
-    {
-      "query_file": "moduleCodeChanges.graphql",
-      "result": {
-        "data": {
-          "patch": {
-            "moduleCodeChanges": [
-              {
-                "branchName": "evergreen",
-                "htmlLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?patch_number=0",
-                "rawLink": "https://localhost:8443/rawdiff/5e4ff3abe3c3317e352062e4?patch_number=0",
-                "fileDiffs": [
-                  {
-                    "fileName": "service/api_task.go",
-                    "diffLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?file_name=service%2Fapi_task.go\u0026patch_number=0",
-                    "deletions": 4,
-                    "additions": 5,
-                    "description": ""
-                  }
-                ]
-              },
-              {
-                "branchName": "Spruce",
-                "htmlLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?patch_number=1",
-                "rawLink": "https://localhost:8443/rawdiff/5e4ff3abe3c3317e352062e4?patch_number=1",
-                "fileDiffs": [
-                  {
-                    "fileName": "src/page/Task.tsx",
-                    "diffLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?file_name=src%2Fpage%2FTask.tsx&patch_number=1",
-                    "deletions": 4,
-                    "additions": 11,
-                    "description": ""
-                  },
-                  {
-                    "fileName": "src/App.tsx",
-                    "diffLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?file_name=src%2FApp.tsx&patch_number=1",
-                    "deletions": 4,
-                    "additions": 22,
-                    "description": ""
-                  },
-                  {
-                    "fileName": "src/page/Patch.tsx",
-                    "diffLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?file_name=src%2Fpage%2FPatch.tsx&patch_number=1",
-                    "deletions": 4,
-                    "additions": 33,
-                    "description": ""
-                  }
-                ]
-              }
-            ]
-          }
-        }
-      }
-    },
-    {
-      "query_file": "builds.graphql",
+      "query_file": "builds-exist.graphql",
       "result": {
         "data": {
           "patch": {
@@ -168,65 +81,43 @@
       }
     },
     {
-      "query_file": "builds-no-builds.graphql",
+      "query_file": "child-patch-aliases.graphql",
       "result": {
         "data": {
           "patch": {
-            "builds": []
+            "childPatchAliases": [
+              {
+                "alias": "evergreen_alias",
+                "patchId": "5e4ff3abe3c3317e352062e4"
+              }
+            ]
           }
         }
       }
     },
     {
-      "query_file": "projectVariantsAndTasks.graphql",
+      "query_file": "child-patches-null.graphql",
       "result": {
         "data": {
           "patch": {
-            "project": {
-              "variants": [
-                {
-                  "name": "ubuntu1604",
-                  "displayName": "Ubuntu 16.04",
-                  "tasks": [
-                    "compile",
-                    "coverage",
-                    "e2e_test",
-                    "lint",
-                    "test"
-                  ]
-                }
-              ]
-            }
+            "id": "5d7288d91f8c8a403bc34a7d",
+            "childPatches": null
           }
         }
       }
     },
     {
-      "query_file": "createTime-exists.graphql",
+      "query_file": "child-patches.graphql",
       "result": {
         "data": {
           "patch": {
-            "createTime": "2020-04-13T16:12:39-04:00"
-          }
-        }
-      }
-    },
-    {
-      "query_file": "createTime-does-not-exist.graphql",
-      "result": {
-        "data": {
-          "patch": {
-            "createTime": null
-          }
-        }
-      }
-    },
-    {
-      "query_file": "commit-queue.graphql",
-      "result": {
-        "data": {
-          "patch": {
-            "commitQueuePosition": 0
+            "id": "5e4ff3abe3c3317e352062e1",
+            "childPatches": [
+              {
+                "id": "5e4ff3abe3c3317e352062e4",
+                "projectID": "evergreen"
+              }
+            ]
           }
         }
       }
@@ -242,6 +133,16 @@
       }
     },
     {
+      "query_file": "commit-queue.graphql",
+      "result": {
+        "data": {
+          "patch": {
+            "commitQueuePosition": 0
+          }
+        }
+      }
+    },
+    {
       "query_file": "correct-duration.graphql",
       "result": {
         "data": {
@@ -250,6 +151,79 @@
               "timeTaken": "1m 37s",
               "makespan": "1m 37s"
             }
+          }
+        }
+      }
+    },
+    {
+      "query_file": "create-time-null.graphql",
+      "result": {
+        "data": {
+          "patch": {
+            "createTime": null
+          }
+        }
+      }
+    },
+    {
+      "query_file": "create-time.graphql",
+      "result": {
+        "data": {
+          "patch": {
+            "createTime": "2020-04-13T16:12:39-04:00"
+          }
+        }
+      }
+    },
+    {
+      "query_file": "module-code-changes.graphql",
+      "result": {
+        "data": {
+          "patch": {
+            "moduleCodeChanges": [
+              {
+                "branchName": "evergreenIdentifier",
+                "htmlLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?patch_number=0",
+                "rawLink": "https://localhost:8443/rawdiff/5e4ff3abe3c3317e352062e4?patch_number=0",
+                "fileDiffs": [
+                  {
+                    "fileName": "service/api_task.go",
+                    "diffLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?file_name=service%2Fapi_task.go\u0026patch_number=0\u0026commit_number=0",
+                    "deletions": 4,
+                    "additions": 5,
+                    "description": ""
+                  }
+                ]
+              },
+              {
+                "branchName": "Spruce",
+                "htmlLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?patch_number=1",
+                "rawLink": "https://localhost:8443/rawdiff/5e4ff3abe3c3317e352062e4?patch_number=1",
+                "fileDiffs": [
+                  {
+                    "fileName": "src/page/Task.tsx",
+                    "diffLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?file_name=src%2Fpage%2FTask.tsx&patch_number=1&commit_number=0",
+                    "deletions": 4,
+                    "additions": 11,
+                    "description": ""
+                  },
+                  {
+                    "fileName": "src/App.tsx",
+                    "diffLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?file_name=src%2FApp.tsx&patch_number=1&commit_number=1",
+                    "deletions": 4,
+                    "additions": 22,
+                    "description": ""
+                  },
+                  {
+                    "fileName": "src/page/Patch.tsx",
+                    "diffLink": "https://localhost:8443/filediff/5e4ff3abe3c3317e352062e4?file_name=src%2Fpage%2FPatch.tsx&patch_number=1&commit_number=2",
+                    "deletions": 4,
+                    "additions": 33,
+                    "description": ""
+                  }
+                ]
+              }
+            ]
           }
         }
       }
@@ -274,16 +248,6 @@
       }
     },
     {
-      "query_file": "abortedPatchTasks.graphql",
-      "result": {
-        "data": {
-          "patch": {
-            "status": "aborted"
-          }
-        }
-      }
-    },
-    {
       "query_file": "patch-trigger-aliases.graphql",
       "result": {
         "data": {
@@ -296,9 +260,7 @@
                 "variantsTasks": [
                   {
                     "name": "ubuntu1804",
-                    "tasks": [
-                      "compile"
-                    ]
+                    "tasks": ["compile"]
                   }
                 ]
               }
@@ -308,13 +270,73 @@
       }
     },
     {
-      "query_file": "childPatchAliases.graphql",
+      "query_file": "project-variants-and-tasks.graphql",
       "result": {
         "data": {
           "patch": {
-            "childPatchAliases": [
-              { "alias": "evergreen_alias", "patchId": "5e4ff3abe3c3317e352062e4"}
-            ]
+            "projectIdentifier": "evergreenIdentifier",
+            "project": {
+              "variants": [
+                {
+                  "name": "ubuntu1604",
+                  "displayName": "Ubuntu 16.04",
+                  "tasks": [
+                    "batchtime_task",
+                    "display_task",
+                    "display_task2",
+                    "patch_only_task"
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "query_file": "task-count.graphql",
+      "result": {
+        "data": {
+          "patch": {
+            "id": "5e4ff3abe3c3317e352062e4",
+            "taskCount": 5
+          }
+        }
+      }
+    },
+    {
+      "query_file": "version-null.graphql",
+      "result": {
+        "data": {
+          "patch": {
+            "versionFull": null
+          }
+        }
+      }
+    },
+    {
+      "query_file": "version.graphql",
+      "result": {
+        "data": {
+          "patch": {
+            "versionFull": {
+              "id": "5dd2e89cd1fe07048e43bb9c"
+            }
+          }
+        }
+      }
+    },
+    {
+      "query_file": "project-metadata.graphql",
+      "result": {
+        "data": {
+          "patch": {
+            "id": "5e4ff3abe3c3317e352062e4",
+            "projectMetadata": {
+              "owner": "evergreen-ci",
+              "repo": "evergreen",
+              "identifier": "evergreenIdentifier"
+            }
           }
         }
       }

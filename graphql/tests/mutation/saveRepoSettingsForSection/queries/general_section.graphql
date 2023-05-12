@@ -1,0 +1,25 @@
+mutation {
+    saveRepoSettingsForSection(
+        repoSettings: {
+            projectRef: {
+                id: "repo_id"
+                owner: "hello",
+                repo: "world",
+                enabled: true,
+                remotePath: "my_path_is_new"
+                branch: "main"
+            }
+        },
+        section: GENERAL
+    ) {
+        projectRef {
+            enabled
+            remotePath
+            spawnHostScriptPath ## overwritten
+        }
+        vars { ## should be unchanged
+            vars
+            privateVars
+        }
+    }
+}

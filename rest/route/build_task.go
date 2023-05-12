@@ -4,12 +4,11 @@ import (
 	"context"
 	"net/http"
 
-	"github.com/evergreen-ci/utility"
-
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/rest/data"
 	"github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/gimlet"
+	"github.com/evergreen-ci/utility"
 	"github.com/pkg/errors"
 )
 
@@ -20,20 +19,24 @@ type tasksByBuildHandler struct {
 	fetchParentIds     bool
 	limit              int
 	key                string
-	url                string
+
+	url        string
+	parsleyURL string
 }
 
-func makeFetchTasksByBuild(url string) gimlet.RouteHandler {
+func makeFetchTasksByBuild(parsleyURL, url string) gimlet.RouteHandler {
 	return &tasksByBuildHandler{
-		limit: defaultLimit,
-		url:   url,
+		limit:      defaultLimit,
+		url:        url,
+		parsleyURL: parsleyURL,
 	}
 }
 
 func (tbh *tasksByBuildHandler) Factory() gimlet.RouteHandler {
 	return &tasksByBuildHandler{
-		limit: tbh.limit,
-		url:   tbh.url,
+		limit:      tbh.limit,
+		url:        tbh.url,
+		parsleyURL: tbh.parsleyURL,
 	}
 }
 
@@ -69,10 +72,6 @@ func (tbh *tasksByBuildHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	resp := gimlet.NewResponseBuilder()
-	if err = resp.SetFormat(gimlet.JSON); err != nil {
-		return gimlet.MakeJSONErrorResponder(errors.Wrap(err, "setting JSON response format"))
-	}
-
 	lastIndex := len(tasks)
 	if len(tasks) > tbh.limit {
 		lastIndex = tbh.limit
@@ -95,11 +94,12 @@ func (tbh *tasksByBuildHandler) Run(ctx context.Context) gimlet.Responder {
 	for i := range tasks {
 		taskModel := &model.APITask{}
 
-		if err = taskModel.BuildFromArgs(&tasks[i], &model.APITaskArgs{
+		if err = taskModel.BuildFromService(&tasks[i], &model.APITaskArgs{
 			IncludeAMI:               true,
 			IncludeArtifacts:         true,
 			IncludeProjectIdentifier: true,
 			LogURL:                   tbh.url,
+			ParsleyLogURL:            tbh.parsleyURL,
 		}); err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "converting task '%s' to API model", tasks[i].Id))
 		}
@@ -112,7 +112,7 @@ func (tbh *tasksByBuildHandler) Run(ctx context.Context) gimlet.Responder {
 				return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "finding archived task '%s'", tasks[i].Id))
 			}
 
-			if err = taskModel.BuildPreviousExecutions(oldTasks, tbh.url); err != nil {
+			if err = taskModel.BuildPreviousExecutions(oldTasks, tbh.url, tbh.parsleyURL); err != nil {
 				return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "adding previous task executions to API model"))
 			}
 		}

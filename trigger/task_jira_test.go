@@ -4,7 +4,6 @@ import (
 	"regexp"
 	"strings"
 	"testing"
-	"text/template"
 	"time"
 
 	"net/url"
@@ -14,8 +13,9 @@ import (
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/host"
+	"github.com/evergreen-ci/evergreen/model/pod"
 	"github.com/evergreen-ci/evergreen/model/task"
-	"github.com/evergreen-ci/utility"
+	"github.com/evergreen-ci/evergreen/model/testresult"
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -46,7 +46,7 @@ var (
 	loglineRegex = regexp.MustCompile(`\*(.*)\* - \[Logs\|(.*?)\]`)
 )
 
-func TestJIRASummary(t *testing.T) {
+func TestJiraSummary(t *testing.T) {
 	Convey("With failed task alert types:", t, func() {
 		j := jiraBuilder{
 			project: "ABC",
@@ -110,13 +110,13 @@ func TestJIRASummary(t *testing.T) {
 			})
 		})
 		Convey("a task with two failed tests should return a subject", func() {
-			j.data.Task.LocalTestResults = []task.TestResult{
-				{TestFile: testName1, Status: evergreen.TestFailedStatus},
-				{TestFile: "test_file", DisplayTestName: testName2, Status: evergreen.TestFailedStatus},
-				{TestFile: testName3, Status: evergreen.TestSucceededStatus},
-				{TestFile: testName3, Status: evergreen.TestSucceededStatus},
-				{TestFile: testName3, Status: evergreen.TestSucceededStatus},
-				{TestFile: testName3, Status: evergreen.TestSucceededStatus},
+			j.data.Task.LocalTestResults = []testresult.TestResult{
+				{TestName: testName1, Status: evergreen.TestFailedStatus},
+				{TestName: "test_file", DisplayTestName: testName2, Status: evergreen.TestFailedStatus},
+				{TestName: testName3, Status: evergreen.TestSucceededStatus},
+				{TestName: testName3, Status: evergreen.TestSucceededStatus},
+				{TestName: testName3, Status: evergreen.TestSucceededStatus},
+				{TestName: testName3, Status: evergreen.TestSucceededStatus},
 			}
 			subj, err := j.getSummary()
 			So(subj, ShouldNotEqual, "")
@@ -137,10 +137,10 @@ func TestJIRASummary(t *testing.T) {
 			})
 		})
 		Convey("a task with failing tests should return a subject omitting any silently failing tests", func() {
-			j.data.Task.LocalTestResults = []task.TestResult{
-				{TestFile: "test_file", DisplayTestName: testName1, Status: evergreen.TestFailedStatus},
-				{TestFile: testName2, Status: evergreen.TestFailedStatus},
-				{TestFile: testName3, Status: evergreen.TestSilentlyFailedStatus},
+			j.data.Task.LocalTestResults = []testresult.TestResult{
+				{TestName: "test_file", DisplayTestName: testName1, Status: evergreen.TestFailedStatus},
+				{TestName: testName2, Status: evergreen.TestFailedStatus},
+				{TestName: testName3, Status: evergreen.TestSilentlyFailedStatus},
 			}
 			subj, err := j.getSummary()
 			So(subj, ShouldNotEqual, "")
@@ -165,13 +165,13 @@ func TestJIRASummary(t *testing.T) {
 			for i := 0; i < 300; i++ {
 				reallyLongTestName = reallyLongTestName + "a"
 			}
-			j.data.Task.LocalTestResults = []task.TestResult{
-				{TestFile: testName1, Status: evergreen.TestFailedStatus},
-				{TestFile: testName2, Status: evergreen.TestFailedStatus},
-				{TestFile: testName3, Status: evergreen.TestFailedStatus},
-				{TestFile: testName3, Status: evergreen.TestFailedStatus},
-				{TestFile: "test_file", DisplayTestName: testName3, Status: evergreen.TestFailedStatus},
-				{TestFile: reallyLongTestName, Status: evergreen.TestFailedStatus},
+			j.data.Task.LocalTestResults = []testresult.TestResult{
+				{TestName: testName1, Status: evergreen.TestFailedStatus},
+				{TestName: testName2, Status: evergreen.TestFailedStatus},
+				{TestName: testName3, Status: evergreen.TestFailedStatus},
+				{TestName: testName3, Status: evergreen.TestFailedStatus},
+				{TestName: "test_file", DisplayTestName: testName3, Status: evergreen.TestFailedStatus},
+				{TestName: reallyLongTestName, Status: evergreen.TestFailedStatus},
 			}
 			subj, err := j.getSummary()
 			So(subj, ShouldNotEqual, "")
@@ -190,10 +190,10 @@ func TestJIRASummary(t *testing.T) {
 			})
 		})
 		Convey("a failed task with passing tests should return a subject", func() {
-			j.data.Task.LocalTestResults = []task.TestResult{
-				{TestFile: testName1, Status: evergreen.TestSucceededStatus},
-				{TestFile: testName2, Status: evergreen.TestSucceededStatus},
-				{TestFile: testName3, Status: evergreen.TestSucceededStatus},
+			j.data.Task.LocalTestResults = []testresult.TestResult{
+				{TestName: testName1, Status: evergreen.TestSucceededStatus},
+				{TestName: testName2, Status: evergreen.TestSucceededStatus},
+				{TestName: testName3, Status: evergreen.TestSucceededStatus},
 			}
 			subj, err := j.getSummary()
 			So(subj, ShouldNotEqual, "")
@@ -212,10 +212,10 @@ func TestJIRASummary(t *testing.T) {
 			})
 		})
 		Convey("a failed task with only passing or silently failing tests should return a subject", func() {
-			j.data.Task.LocalTestResults = []task.TestResult{
-				{TestFile: testName1, Status: evergreen.TestSilentlyFailedStatus},
-				{TestFile: testName2, Status: evergreen.TestSucceededStatus},
-				{TestFile: testName3, Status: evergreen.TestSilentlyFailedStatus},
+			j.data.Task.LocalTestResults = []testresult.TestResult{
+				{TestName: testName1, Status: evergreen.TestSilentlyFailedStatus},
+				{TestName: testName2, Status: evergreen.TestSucceededStatus},
+				{TestName: testName3, Status: evergreen.TestSilentlyFailedStatus},
 			}
 			subj, err := j.getSummary()
 			So(subj, ShouldNotEqual, "")
@@ -246,7 +246,7 @@ func TestJIRASummary(t *testing.T) {
 	})
 }
 
-func TestJIRADescription(t *testing.T) {
+func TestJiraDescription(t *testing.T) {
 	Convey("With a failed task context", t, func() {
 		j := jiraBuilder{
 			data: jiraTemplateData{
@@ -261,12 +261,14 @@ func TestJIRADescription(t *testing.T) {
 					DisplayName: taskName,
 					Details:     apimodels.TaskEndDetail{},
 					Project:     projectId,
-					LocalTestResults: []task.TestResult{
-						{TestFile: testName1, Status: evergreen.TestFailedStatus, URL: "direct_link"},
-						{TestFile: "test_file", DisplayTestName: testName2, Status: evergreen.TestFailedStatus, LogId: "123"},
-						{TestFile: testName3, Status: evergreen.TestSucceededStatus},
+					LocalTestResults: []testresult.TestResult{
+						{TestName: testName1, Status: evergreen.TestFailedStatus, LogURL: "direct_link"},
+						{TestName: "test_file", DisplayTestName: testName2, Status: evergreen.TestFailedStatus},
+						{TestName: testName3, Status: evergreen.TestSucceededStatus},
 					},
-					CreateTime: time.Unix(createTime, 0).UTC(),
+					CreateTime:        time.Unix(createTime, 0).UTC(),
+					HostId:            hostId,
+					ExecutionPlatform: task.ExecutionPlatformHost,
 				},
 				Host:  &host.Host{Id: hostId, Host: hostDNS},
 				Build: &build.Build{DisplayName: buildName, Id: buildId},
@@ -291,6 +293,7 @@ func TestJIRADescription(t *testing.T) {
 				So(d, ShouldContainSubstring, versionMessage)
 				So(d, ShouldContainSubstring, "diff|https://github.com/")
 				So(d, ShouldContainSubstring, "08 Jan 19 11:56 UTC")
+				So(d, ShouldNotContainSubstring, "Pod")
 			})
 			Convey("with links to the task, host, project, logs", func() {
 				So(d, ShouldContainSubstring, url.PathEscape(taskId))
@@ -302,7 +305,7 @@ func TestJIRADescription(t *testing.T) {
 				So(d, ShouldContainSubstring, cleanTestName(testName1))
 				So(d, ShouldContainSubstring, "direct_link")
 				So(d, ShouldContainSubstring, cleanTestName(testName2))
-				So(d, ShouldContainSubstring, "test_log/123")
+				So(d, ShouldContainSubstring, "test_log/")
 				Convey("but passing tasks should not be present", func() {
 					So(d, ShouldNotContainSubstring, cleanTestName(testName3))
 				})
@@ -338,8 +341,8 @@ func TestJIRADescription(t *testing.T) {
 			So(tests, ShouldContain, "FunUnitTest")
 
 			So(len(logfiles), ShouldEqual, 2)
-			So(logfiles, ShouldContain, j.data.Task.LocalTestResults[0].GetLogURL(evergreen.LogViewerHTML))
-			So(logfiles, ShouldContain, j.data.Task.LocalTestResults[1].GetLogURL(evergreen.LogViewerHTML))
+			So(logfiles, ShouldContain, j.data.Task.LocalTestResults[0].GetLogURL(evergreen.GetEnvironment(), evergreen.LogViewerHTML))
+			So(logfiles, ShouldContain, j.data.Task.LocalTestResults[1].GetLogURL(evergreen.GetEnvironment(), evergreen.LogViewerHTML))
 
 			So(len(taskURLs), ShouldEqual, 1)
 			So(taskURLs, ShouldContain, "http://evergreen.ui/task/t1%21/0?redirect_spruce_users=true")
@@ -349,7 +352,22 @@ func TestJIRADescription(t *testing.T) {
 			j.data.Host = nil
 			desc, err := j.getDescription()
 			So(err, ShouldBeNil)
-			So(strings.Contains(desc, "Host: N/A"), ShouldBeTrue)
+			So(desc, ShouldContainSubstring, "Host: N/A")
+		})
+		Convey("can generate a description for a container task", func() {
+			j.data.Task.ExecutionPlatform = task.ExecutionPlatformContainer
+			j.data.Pod = &pod.Pod{ID: "pod_id"}
+			desc, err := j.getDescription()
+			So(err, ShouldBeNil)
+			So(desc, ShouldContainSubstring, "Pod:")
+			So(desc, ShouldContainSubstring, j.data.Pod.ID)
+		})
+		Convey("can generate a description for a container task with no assigned pod", func() {
+			j.data.Task.ExecutionPlatform = task.ExecutionPlatformContainer
+			j.data.Pod = nil
+			desc, err := j.getDescription()
+			So(err, ShouldBeNil)
+			So(desc, ShouldContainSubstring, "Pod: N/A")
 		})
 		Convey("the description should return old_task_id if present", func() {
 			j.data.Task.Id = "new_task#!"
@@ -368,8 +386,8 @@ func TestJIRADescription(t *testing.T) {
 				DisplayOnly: true,
 				Details:     apimodels.TaskEndDetail{},
 				Project:     projectId,
-				LocalTestResults: []task.TestResult{
-					{TestFile: "shouldn't be here", Status: evergreen.TestFailedStatus, URL: "direct_link"},
+				LocalTestResults: []testresult.TestResult{
+					{TestName: "shouldn't be here", Status: evergreen.TestFailedStatus, LogURL: "direct_link"},
 				},
 			}
 
@@ -385,10 +403,10 @@ func TestJIRADescription(t *testing.T) {
 		})
 		Convey("display tasks have links to execution task logs", func() {
 			j.data.Task.DisplayOnly = true
-			j.data.Task.LocalTestResults = []task.TestResult{
-				{TestFile: "test0", Status: evergreen.TestFailedStatus, TaskID: "et0", Execution: 0},
-				{TestFile: "test1", Status: evergreen.TestFailedStatus, TaskID: "et1", Execution: 1},
-				{TestFile: "test2", Status: evergreen.TestFailedStatus, TaskID: "et1", Execution: 1},
+			j.data.Task.LocalTestResults = []testresult.TestResult{
+				{TestName: "test0", Status: evergreen.TestFailedStatus, TaskID: "et0", Execution: 0},
+				{TestName: "test1", Status: evergreen.TestFailedStatus, TaskID: "et1", Execution: 1},
+				{TestName: "test2", Status: evergreen.TestFailedStatus, TaskID: "et1", Execution: 1},
 			}
 
 			desc, err := j.getDescription()
@@ -447,12 +465,11 @@ func TestCustomFields(t *testing.T) {
 				},
 				Project:  projectId,
 				Revision: versionRevision,
-				LocalTestResults: []task.TestResult{
-					{TestFile: testName1, Status: evergreen.TestFailedStatus, URL: "direct_link"},
-					{TestFile: testName2, Status: evergreen.TestFailedStatus, LogId: "123"},
-					{TestFile: testName3, Status: evergreen.TestSucceededStatus},
+				LocalTestResults: []testresult.TestResult{
+					{TestName: testName1, Status: evergreen.TestFailedStatus, LogURL: "direct_link"},
+					{TestName: testName2, Status: evergreen.TestFailedStatus},
+					{TestName: testName3, Status: evergreen.TestSucceededStatus},
 				},
-				HasLegacyResults: utility.ToBoolPtr(true),
 			},
 			Host:  &host.Host{Id: hostId, Host: hostDNS},
 			Build: &build.Build{DisplayName: buildName, Id: buildId},
@@ -495,20 +512,25 @@ func TestMakeSpecificTaskStatus(t *testing.T) {
 
 	assert.Equal(evergreen.TaskSucceeded, doc.GetDisplayStatus())
 
+	doc.DisplayStatus = ""
 	doc.Status = evergreen.TaskFailed
 	assert.Equal(evergreen.TaskFailed, doc.GetDisplayStatus())
 
+	doc.DisplayStatus = ""
 	doc.Details.TimedOut = true
 	assert.Equal(evergreen.TaskTimedOut, doc.GetDisplayStatus())
 
+	doc.DisplayStatus = ""
 	doc.Details.TimedOut = false
 	doc.Details.Type = evergreen.CommandTypeSetup
 	assert.Equal(evergreen.TaskSetupFailed, doc.GetDisplayStatus())
 
+	doc.DisplayStatus = ""
 	doc.Details.Type = evergreen.CommandTypeSystem
 	doc.Details.TimedOut = true
 	assert.Equal(evergreen.TaskSystemTimedOut, doc.GetDisplayStatus())
 
+	doc.DisplayStatus = ""
 	doc.Details.Description = evergreen.TaskDescriptionHeartbeat
 	assert.Equal(evergreen.TaskSystemUnresponse, doc.GetDisplayStatus())
 }
@@ -525,27 +547,33 @@ func TestMakeSummaryPrefix(t *testing.T) {
 	}
 	assert.Equal("Succeeded: ", makeSummaryPrefix(doc, 0))
 
+	doc.DisplayStatus = ""
 	doc.Status = evergreen.TaskFailed
 	assert.Equal("Failure: ", makeSummaryPrefix(doc, 1))
 	assert.Equal("Failed: ", makeSummaryPrefix(doc, 0))
 
+	doc.DisplayStatus = ""
 	doc.Details.TimedOut = true
 	assert.Equal("Timed Out: ", makeSummaryPrefix(doc, 0))
 
+	doc.DisplayStatus = ""
 	doc.Details.Type = evergreen.CommandTypeSystem
 	assert.Equal("System Timed Out: ", makeSummaryPrefix(doc, 0))
 
+	doc.DisplayStatus = ""
 	doc.Details.Description = evergreen.TaskDescriptionHeartbeat
 	assert.Equal("System Unresponsive: ", makeSummaryPrefix(doc, 0))
 
+	doc.DisplayStatus = ""
 	doc.Details.TimedOut = false
 	assert.Equal("System Failure: ", makeSummaryPrefix(doc, 0))
 
+	doc.DisplayStatus = ""
 	doc.Details.Type = evergreen.CommandTypeSetup
 	assert.Equal("Setup Failure: ", makeSummaryPrefix(doc, 0))
 }
 
-func TestBuild(t *testing.T) {
+func TestJiraBuilderBuild(t *testing.T) {
 	builder := jiraBuilder{
 		project: "EVG",
 		mappings: &evergreen.JIRANotificationsConfig{
@@ -560,14 +588,22 @@ func TestBuild(t *testing.T) {
 			},
 		},
 		data: jiraTemplateData{
-			Task:    &task.Task{Status: evergreen.TaskSucceeded, HasLegacyResults: utility.ToBoolPtr(true)},
+			Task: &task.Task{
+				DisplayName:       "task_display_name",
+				Status:            evergreen.TaskSucceeded,
+				HostId:            "host_id",
+				ExecutionPlatform: task.ExecutionPlatformHost,
+			},
+			Host: &host.Host{
+				Id:   "host_id",
+				Host: "hostname",
+			},
 			Project: &model.ProjectRef{},
 			Build:   &build.Build{},
 			Version: &model.Version{Revision: "abcdefgh"},
 		},
 	}
 	var err error
-	descriptionTemplate, err = template.New("test").Parse("Status: {{.Task.Status}}")
 	assert.NoError(t, err)
 
 	message, err := builder.build()
@@ -580,4 +616,5 @@ func TestBuild(t *testing.T) {
 	assert.Equal(t, "component0", message.Components[0])
 	assert.Equal(t, "component1", message.Components[1])
 	assert.Empty(t, message.Labels)
+	assert.NotEmpty(t, message.Description)
 }

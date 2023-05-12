@@ -14,7 +14,7 @@ import (
 	"strings"
 	"sync"
 
-	humanize "github.com/dustin/go-humanize"
+	"github.com/dustin/go-humanize"
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/manifest"
@@ -56,7 +56,7 @@ func Fetch() cli.Command {
 			},
 			cli.StringFlag{
 				Name:  joinFlagNames(tokenFlagName, "k"),
-				Usage: "github API token",
+				Usage: "GitHub API token",
 			},
 			cli.BoolFlag{
 				Name:  sourceFlagName,
@@ -101,15 +101,18 @@ func Fetch() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
 
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			ac, rc, err := conf.getLegacyClients()
 			if err != nil {
-				return errors.Wrap(err, "problem accessing evergreen service")
+				return errors.Wrap(err, "setting up legacy Evergreen client")
 			}
 
 			if doFetchSource {
@@ -140,7 +143,7 @@ func fetchSource(ctx context.Context, ac, rc *legacyClient, comm client.Communic
 		return err
 	}
 	if task == nil {
-		return errors.New("task not found.")
+		return errors.New("task not found")
 	}
 	project, err := rc.GetProject(task.Version)
 	if err != nil {
@@ -276,13 +279,13 @@ func cloneSource(task *service.RestTask, project *model.ProjectRef, config *mode
 	// Then fetch each of the modules
 	variant := config.FindBuildVariant(task.BuildVariant)
 	if variant == nil {
-		return errors.Errorf("couldn't find build variant '%v' in config", task.BuildVariant)
+		return errors.Errorf("finding build variant '%s' in config", task.BuildVariant)
 	}
 
 	for _, moduleName := range variant.Modules {
 		module, err := config.GetModuleByName(moduleName)
 		if err != nil || module == nil {
-			return errors.Errorf("variant refers to a module '%v' that doesn't exist.", moduleName)
+			return errors.Errorf("variant refers to a module '%s' that doesn't exist", moduleName)
 		}
 		revision := module.Branch
 		if mfest != nil {
@@ -304,7 +307,7 @@ func cloneSource(task *service.RestTask, project *model.ProjectRef, config *mode
 		fmt.Printf("Fetching module %v at %v\n", moduleName, module.Branch)
 		owner, repo, err := thirdparty.ParseGitUrl(module.Repo)
 		if err != nil {
-			return errors.Wrapf(err, "error parsing git URL '%s'", module.Repo)
+			return errors.Wrapf(err, "parsing git URL '%s'", module.Repo)
 		}
 		err = clone(cloneOptions{
 			owner:      owner,
@@ -337,7 +340,7 @@ func applyPatch(patch *service.RestPatch, rootCloneDir string, conf *model.Proje
 			// if patch is part of a module, apply patch in module root
 			module, err := conf.GetModuleByName(patchPart.ModuleName)
 			if err != nil || module == nil {
-				return errors.Errorf("can't find module %v: %v", patchPart.ModuleName, err)
+				return errors.Wrapf(err, "finding module '%s'", patchPart.ModuleName)
 			}
 
 			// skip the module if this build variant does not use it
@@ -363,7 +366,7 @@ func applyPatch(patch *service.RestPatch, rootCloneDir string, conf *model.Proje
 func fetchArtifacts(rc *legacyClient, taskId string, rootDir string, shallow bool) error {
 	task, err := rc.GetTask(taskId)
 	if err != nil {
-		return errors.Wrapf(err, "problem getting task for %s", taskId)
+		return errors.Wrapf(err, "getting task '%s'", taskId)
 	}
 	if task == nil {
 		return errors.New("task not found")
@@ -374,8 +377,7 @@ func fetchArtifacts(rc *legacyClient, taskId string, rootDir string, shallow boo
 		return errors.WithStack(err)
 	}
 
-	return errors.Wrapf(downloadUrls(rootDir, urls, 4),
-		"problem downloading artifacts for task %s", taskId)
+	return errors.Wrapf(downloadUrls(rootDir, urls, 4), "downloading artifacts for task '%s'", taskId)
 }
 
 // searchDependencies does a depth-first search of the dependencies of the "seed" task, returning
@@ -547,7 +549,7 @@ func downloadUrls(root string, urls chan artifactDownload, workers int) error {
 							break
 						}
 						// something else went wrong.
-						errs <- errors.Errorf("failed to check if file exists: %v", err)
+						errs <- errors.Wrapf(err, "checking if file '%s' exists", testFileName)
 						return
 					}
 				}
@@ -556,22 +558,22 @@ func downloadUrls(root string, urls chan artifactDownload, workers int) error {
 
 				err = os.MkdirAll(folder, 0777)
 				if err != nil {
-					errs <- errors.Errorf("Couldn't create output directory %v: %v", folder, err)
+					errs <- errors.Wrapf(err, "creating output directory '%s'", folder)
 					continue
 				}
 
 				out, err := os.Create(fileName)
 				if err != nil {
-					errs <- errors.Errorf("Couldn't download %v: %v", u.url, err)
+					errs <- errors.Wrapf(err, "creating file '%s'", fileName)
 					continue
 				}
-				defer out.Close() // nolint
+				defer out.Close() //nolint:evg-lint
 				resp, err := http.Get(u.url)
 				if err != nil {
-					errs <- errors.Errorf("Couldn't download %v: %v", u.url, err)
+					errs <- errors.Wrapf(err, "downloading URL '%s'", u.url)
 					continue
 				}
-				defer resp.Body.Close() // nolint
+				defer resp.Body.Close() //nolint:evg-lint
 
 				// If we can get the info, determine the file size so that the human can get an
 				// idea of how long the file might take to download.
@@ -583,10 +585,10 @@ func downloadUrls(root string, urls chan artifactDownload, workers int) error {
 				}
 
 				justFile = filepath.Base(fileName)
-				fmt.Printf("(worker %v) Downloading %v to directory %s%s\n", workerId, justFile, u.path, sizeLog)
+				fmt.Printf("(worker %d) Downloading %s to directory %s%s\n", workerId, justFile, u.path, sizeLog)
 				_, err = io.Copy(out, resp.Body)
 				if err != nil {
-					errs <- errors.Errorf("Couldn't download %v: %v", u.url, err)
+					errs <- errors.Wrapf(err, "copying body from URL '%s' to file '%s'", u.url, fileName)
 					continue
 				}
 				counter++

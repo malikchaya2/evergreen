@@ -27,6 +27,7 @@ npm install
 # env variables used during lobster build step
 export PUBLIC_URL=/static/lobster
 export REACT_APP_LOGKEEPER_BASE=https://logkeeper.mongodb.org
+export REACT_APP_NEW_LOGKEEPER_BASE=https://logkeeper2.build.10gen.cc
 export REACT_APP_EVERGREEN_BASE=https://evergreen.mongodb.com
 #
 npm run build 
@@ -36,7 +37,7 @@ rm -rf $EVG_LOBSTER_STATIC_DIR
 mkdir -p $EVG_LOBSTER_STATIC_DIR
 
 # copy files from lobster to evergreen
-cp -R $LOBSTER_STATIC_DIR/ $EVG_LOBSTER_STATIC_DIR/
+cp -R $LOBSTER_STATIC_DIR/* $EVG_LOBSTER_STATIC_DIR/
 cp $LOBSTER_HTML "$LOBSTER_TEMP_DIR/temp.html"
 cp "$LOBSTER_TEMP_ASSETS_DIR/manifest.json" $EVG_LOBSTER_MANIFEST_DIR
 # surround the html with go template tags

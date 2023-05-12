@@ -7,11 +7,16 @@ import (
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
+	"github.com/evergreen-ci/evergreen/cloud"
+	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
 	"github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/event"
+	"github.com/evergreen-ci/evergreen/model/notification"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/user"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/gimlet"
+	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
@@ -48,37 +53,107 @@ func FindProjectById(id string, includeRepo bool, includeProjectConfig bool) (*m
 	return p, nil
 }
 
-// CreateProject inserts the given model.ProjectRef.
-func CreateProject(projectRef *model.ProjectRef, u *user.DBUser) error {
+// RequestS3Creds creates a JIRA ticket that requests S3 credentials to be added for the specified project.
+// TODO PM-3212: Remove the function after project completion.
+func RequestS3Creds(projectIdentifier, userEmail string) error {
+	if projectIdentifier == "" {
+		return errors.New("project identifier cannot be empty")
+	}
+	settings, err := evergreen.GetConfig()
+	if err != nil {
+		return errors.Wrap(err, "getting evergreen settings")
+	}
+	if settings.ProjectCreation.JiraProject == "" {
+		return nil
+	}
+	summary := fmt.Sprintf("Create AWS key for s3 uploads for '%s' project", projectIdentifier)
+	description := fmt.Sprintf("Could you create an s3 key for the new [%s|%s/project/%s/settings/general] project?", projectIdentifier, settings.Ui.UIv2Url, projectIdentifier)
+	jiraIssue := message.JiraIssue{
+		Project:     settings.ProjectCreation.JiraProject,
+		Summary:     summary,
+		Description: description,
+		Components:  []string{"Access"},
+		Reporter:    userEmail,
+	}
+	sub := event.Subscriber{
+		Type: event.JIRAIssueSubscriberType,
+		Target: event.JIRAIssueSubscriber{
+			Project:   settings.ProjectCreation.JiraProject,
+			IssueType: "Task",
+		},
+	}
+	n, err := notification.New("", utility.RandomString(), &sub, jiraIssue)
+	if err != nil {
+		return err
+	}
+
+	err = notification.InsertMany(*n)
+	if err != nil {
+		return errors.Wrap(err, "batch inserting notifications")
+	}
+	return nil
+}
+
+// CreateProject creates a new project ref from the given one and performs other
+// initial setup for new projects such as populating initial project variables
+// and creating new webhooks. If the given project ref already has container
+// secrets, the new project ref receives copies of the existing ones.
+// Returns true if the project was successfully created.
+func CreateProject(ctx context.Context, env evergreen.Environment, projectRef *model.ProjectRef, u *user.DBUser) (bool, error) {
 	if projectRef.Identifier != "" {
 		if err := VerifyUniqueProject(projectRef.Identifier); err != nil {
-			return err
+			return false, err
 		}
 	}
-	if projectRef.Id != "" {
-		if err := VerifyUniqueProject(projectRef.Id); err != nil {
-			return err
+	if projectRef.Id == "" {
+		if projectRef.Id == "" {
+			projectRef.Id = mgobson.NewObjectId().Hex()
 		}
 	}
-	err := projectRef.Add(u)
+	if err := VerifyUniqueProject(projectRef.Id); err != nil {
+		return false, err
+	}
+	// Always warn because created projects are never enabled.
+	warningCatcher := grip.NewBasicCatcher()
+	statusCode, err := model.ValidateEnabledProjectsLimit(projectRef.Id, env.Settings(), nil, projectRef)
 	if err != nil {
-		return gimlet.ErrorResponse{
+		if statusCode != http.StatusBadRequest {
+			return false, gimlet.ErrorResponse{
+				StatusCode: statusCode,
+				Message:    errors.Wrapf(err, "validating project '%s'", projectRef.Identifier).Error(),
+			}
+		}
+		warningCatcher.Add(err)
+	}
+
+	existingContainerSecrets := projectRef.ContainerSecrets
+	projectRef.ContainerSecrets = nil
+
+	_, err = model.EnableWebhooks(ctx, projectRef)
+	if err != nil {
+		grip.Debug(message.WrapError(err, message.Fields{
+			"message":            "error enabling webhooks",
+			"project_id":         projectRef.Id,
+			"project_identifier": projectRef.Identifier,
+			"owner":              projectRef.Owner,
+			"repo":               projectRef.Repo,
+		}))
+	}
+	err = projectRef.Add(u)
+	if err != nil {
+		return false, gimlet.ErrorResponse{
 			StatusCode: http.StatusInternalServerError,
 			Message:    errors.Wrapf(err, "inserting project '%s'", projectRef.Identifier).Error(),
 		}
 	}
 
-	newProjectVars := model.ProjectVars{
-		Id: projectRef.Id,
-	}
+	grip.Warning(message.WrapError(tryCopyingContainerSecrets(ctx, env.Settings(), existingContainerSecrets, projectRef), message.Fields{
+		"message":            "failed to copy container secrets to new project",
+		"op":                 "CreateProject",
+		"project_id":         projectRef.Id,
+		"project_identifier": projectRef.Identifier,
+	}))
 
-	err = newProjectVars.Insert()
-	if err != nil {
-		return gimlet.ErrorResponse{
-			StatusCode: http.StatusInternalServerError,
-			Message:    errors.Wrapf(err, "initializing project variables for project '%s'", projectRef.Identifier).Error(),
-		}
-	}
 	err = model.LogProjectAdded(projectRef.Id, u.DisplayName())
 	grip.Error(message.WrapError(err, message.Fields{
 		"message":            "problem logging project added",
@@ -86,6 +161,36 @@ func CreateProject(projectRef *model.ProjectRef, u *user.DBUser) error {
 		"project_identifier": projectRef.Identifier,
 		"user":               u.DisplayName(),
 	}))
+	return true, warningCatcher.Resolve()
+}
+
+func tryCopyingContainerSecrets(ctx context.Context, settings *evergreen.Settings, existingSecrets []model.ContainerSecret, pRef *model.ProjectRef) error {
+	// TODO (PM-2950): remove this temporary error-checking once the AWS
+	// infrastructure is productionized and AWS admin settings are set.
+	smClient, err := cloud.MakeSecretsManagerClient(settings)
+	if err != nil {
+		return errors.Wrap(err, "setting up Secrets Manager client to store newly-created project's container secrets")
+	}
+	defer smClient.Close(ctx)
+
+	vault, err := cloud.MakeSecretsManagerVault(smClient)
+	if err != nil {
+		return errors.Wrap(err, "setting up Secrets Manager vault to store newly-created project's container secrets")
+	}
+
+	pRef.ContainerSecrets, err = getCopiedContainerSecrets(ctx, settings, vault, pRef.Id, existingSecrets)
+	if err != nil {
+		return errors.Wrapf(err, "copying existing container secrets")
+	}
+	if err := pRef.Update(); err != nil {
+		return errors.Wrapf(err, "updating project ref's container secrets")
+	}
+	// This updates the container secrets in the DB project ref only, not
+	// the in-memory copy.
+	if err := UpsertContainerSecrets(ctx, vault, pRef.ContainerSecrets); err != nil {
+		return errors.Wrapf(err, "upserting container secrets")
+	}
+
 	return nil
 }
 
@@ -117,7 +222,7 @@ func GetProjectTasksWithOptions(projectName string, taskName string, opts model.
 	res := []restModel.APITask{}
 	for _, t := range tasks {
 		apiTask := restModel.APITask{}
-		if err = apiTask.BuildFromArgs(&t, &restModel.APITaskArgs{
+		if err = apiTask.BuildFromService(&t, &restModel.APITaskArgs{
 			IncludeProjectIdentifier: true,
 			IncludeAMI:               true,
 		}); err != nil {
@@ -166,9 +271,7 @@ func FindProjectVarsById(id string, repoId string, redact bool) (*restModel.APIP
 	}
 
 	varsModel := restModel.APIProjectVars{}
-	if err := varsModel.BuildFromService(vars); err != nil {
-		return nil, errors.Wrap(err, "converting project variables to API model")
-	}
+	varsModel.BuildFromService(*vars)
 	return &varsModel, nil
 }
 
@@ -177,19 +280,21 @@ func UpdateProjectVars(projectId string, varsModel *restModel.APIProjectVars, ov
 	if varsModel == nil {
 		return nil
 	}
-	v, err := varsModel.ToService()
-	if err != nil {
-		return errors.Wrap(err, "converting project variables to service model")
-	}
-	vars := v.(*model.ProjectVars)
+	vars := varsModel.ToService()
 	vars.Id = projectId
 
+	// Avoid accidentally overwriting private variables, for example if the GET route is used to populate PATCH.
+	for key, val := range varsModel.Vars {
+		if val == "" {
+			delete(varsModel.Vars, key)
+		}
+	}
 	if overwrite {
-		if _, err = vars.Upsert(); err != nil {
+		if _, err := vars.Upsert(); err != nil {
 			return errors.Wrapf(err, "overwriting variables for project '%s'", vars.Id)
 		}
 	} else {
-		_, err = vars.FindAndModify(varsModel.VarsToDelete)
+		_, err := vars.FindAndModify(varsModel.VarsToDelete)
 		if err != nil {
 			return errors.Wrapf(err, "updating variables for project '%s'", vars.Id)
 		}
@@ -226,6 +331,7 @@ func GetEventsById(id string, before time.Time, n int) ([]restModel.APIProjectEv
 		return nil, err
 	}
 	events.RedactPrivateVars()
+	events.ApplyDefaults()
 
 	out := []restModel.APIProjectEvent{}
 	catcher := grip.NewBasicCatcher()

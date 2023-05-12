@@ -24,6 +24,16 @@ func init() {
 const projectId = "evergreen"
 
 func getContext(t *testing.T) context.Context {
+	require.NoError(t, db.Clear(user.Collection),
+		"unable to clear user collection")
+	dbUser := &user.DBUser{
+		Id: apiUser,
+		Settings: user.UserSettings{
+			SlackUsername: "testuser",
+			SlackMemberId: "testuser",
+		},
+	}
+	require.NoError(t, dbUser.Insert())
 	const email = "testuser@mongodb.com"
 	const accessToken = "access_token"
 	const refreshToken = "refresh_token"
@@ -91,10 +101,10 @@ func TestMainlineCommits(t *testing.T) {
 
 	// Should return all mainline commits while folding up inactive ones when there are no filters
 	mainlineCommitOptions := MainlineCommitsOptions{
-		ProjectID:       projectId,
-		SkipOrderNumber: nil,
-		Limit:           utility.ToIntPtr(2),
-		ShouldCollapse:  utility.FalsePtr(),
+		ProjectIdentifier: "evergreen",
+		SkipOrderNumber:   nil,
+		Limit:             utility.ToIntPtr(2),
+		ShouldCollapse:    utility.FalsePtr(),
 	}
 	buildVariantOptions := BuildVariantOptions{}
 	res, err := config.Resolvers.Query().MainlineCommits(ctx, mainlineCommitOptions, &buildVariantOptions)

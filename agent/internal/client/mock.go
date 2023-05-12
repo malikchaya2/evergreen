@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"runtime"
 	"sync"
@@ -18,6 +18,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/manifest"
 	patchmodel "github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
@@ -45,6 +46,7 @@ type Mock struct {
 	EndTaskResult               endTaskResult
 	ShellExecFilename           string
 	TimeoutFilename             string
+	GenerateTasksShouldFail     bool
 	HeartbeatShouldAbort        bool
 	HeartbeatShouldConflict     bool
 	HeartbeatShouldErr          bool
@@ -54,13 +56,13 @@ type Mock struct {
 
 	CedarGRPCConn *grpc.ClientConn
 
-	AttachedFiles      map[string][]*artifact.File
-	LogID              string
-	LocalTestResults   *task.LocalTestResults
-	HasCedarResults    bool
-	CedarResultsFailed bool
-	TestLogs           []*serviceModel.TestLog
-	TestLogCount       int
+	AttachedFiles    map[string][]*artifact.File
+	LogID            string
+	LocalTestResults []testresult.TestResult
+	ResultsService   string
+	ResultsFailed    bool
+	TestLogs         []*serviceModel.TestLog
+	TestLogCount     int
 
 	// data collected by mocked methods
 	logMessages      map[string][]apimodels.LogMessage
@@ -68,6 +70,7 @@ type Mock struct {
 	keyVal           map[string]*serviceModel.KeyVal
 	LastMessageSent  time.Time
 	DownstreamParams []patchmodel.Parameter
+	Project          *serviceModel.Project
 
 	mu sync.RWMutex
 }
@@ -166,9 +169,7 @@ func (c *Mock) GetProjectRef(ctx context.Context, td TaskData) (*serviceModel.Pr
 }
 
 func (c *Mock) GetDistroView(context.Context, TaskData) (*apimodels.DistroView, error) {
-	return &apimodels.DistroView{
-		WorkDir: ".",
-	}, nil
+	return &apimodels.DistroView{}, nil
 }
 
 func (c *Mock) GetDistroAMI(context.Context, string, string, TaskData) (string, error) {
@@ -176,11 +177,14 @@ func (c *Mock) GetDistroAMI(context.Context, string, string, TaskData) (string, 
 }
 
 func (c *Mock) GetProject(ctx context.Context, td TaskData) (*serviceModel.Project, error) {
+	if c.Project != nil {
+		return c.Project, nil
+	}
 	var err error
 	var data []byte
 	_, file, _, _ := runtime.Caller(0)
 
-	data, err = ioutil.ReadFile(filepath.Join(filepath.Dir(file), "testdata", fmt.Sprintf("%s.yaml", td.ID)))
+	data, err = os.ReadFile(filepath.Join(filepath.Dir(file), "testdata", fmt.Sprintf("%s.yaml", td.ID)))
 	if err != nil {
 		grip.Error(err)
 	}
@@ -196,12 +200,30 @@ func (c *Mock) GetExpansions(ctx context.Context, taskData TaskData) (util.Expan
 	return e, nil
 }
 
+// GetExpansionsAndVars returns a mock ExpansionsAndVars.
+func (c *Mock) GetExpansionsAndVars(ctx context.Context, taskData TaskData) (*apimodels.ExpansionsAndVars, error) {
+	return &apimodels.ExpansionsAndVars{
+		Expansions: util.Expansions{"foo": "bar"},
+		Vars: map[string]string{
+			"shellexec_fn":   c.ShellExecFilename,
+			"timeout_fn":     c.TimeoutFilename,
+			"my_new_timeout": "2",
+		},
+		Parameters: map[string]string{
+			"overwrite-this-parameter": "new-parameter-value",
+		},
+		PrivateVars: map[string]bool{
+			"some_private_var": true,
+		},
+	}, nil
+}
+
 func (c *Mock) Heartbeat(ctx context.Context, td TaskData) (string, error) {
 	if c.HeartbeatShouldAbort {
 		return evergreen.TaskFailed, nil
 	}
 	if c.HeartbeatShouldConflict {
-		return evergreen.TaskConflict, errors.Errorf("Unauthorized - wrong secret")
+		return evergreen.TaskConflict, errors.Errorf("unauthorized - wrong secret")
 	}
 	if c.HeartbeatShouldSometimesErr {
 		if c.HeartbeatShouldErr {
@@ -215,17 +237,6 @@ func (c *Mock) Heartbeat(ctx context.Context, td TaskData) (string, error) {
 		return "", errors.New("mock heartbeat error")
 	}
 	return "", nil
-}
-
-// FetchExpansionVars returns a mock ExpansionVars.
-func (c *Mock) FetchExpansionVars(ctx context.Context, td TaskData) (*apimodels.ExpansionVars, error) {
-	return &apimodels.ExpansionVars{
-		Vars: map[string]string{
-			"shellexec_fn":   c.ShellExecFilename,
-			"timeout_fn":     c.TimeoutFilename,
-			"my_new_timeout": "2",
-		},
-	}, nil
 }
 
 // GetNextTask returns a mock NextTaskResponse.
@@ -253,7 +264,7 @@ func (c *Mock) GetNextTask(ctx context.Context, details *apimodels.GetNextTaskDe
 	}, nil
 }
 
-// GetCedarConfig returns mock cedar service information.
+// GetCedarConfig returns a mock Cedar service configuration.
 func (c *Mock) GetCedarConfig(ctx context.Context) (*apimodels.CedarConfig, error) {
 	return &apimodels.CedarConfig{
 		BaseURL:  "base_url",
@@ -269,6 +280,16 @@ func (c *Mock) GetCedarGRPCConn(ctx context.Context) (*grpc.ClientConn, error) {
 		return nil, nil
 	}
 	return c.CedarGRPCConn, nil
+}
+
+// GetDataPipesConfig returns a mock Data-Pipes service configuration.
+func (c *Mock) GetDataPipesConfig(ctx context.Context) (*apimodels.DataPipesConfig, error) {
+	return &apimodels.DataPipesConfig{
+		Host:         "url",
+		Region:       "us-east-1",
+		AWSAccessKey: "access",
+		AWSSecretKey: "secret",
+	}, nil
 }
 
 // SendTaskLogMessages posts tasks messages to the api server
@@ -373,18 +394,10 @@ func (*Mock) CreateSpawnHost(ctx context.Context, spawnRequest *model.HostReques
 	return mockHost, nil
 }
 
-// SendResults posts a set of test results for the communicator's task.
-// If results are empty or nil, this operation is a noop.
-func (c *Mock) SendTestResults(ctx context.Context, td TaskData, results *task.LocalTestResults) error {
-	c.LocalTestResults = results
-	return nil
-}
-
-// SetHasCedarResults sets the HasCedarResults flag in the task.
-func (c *Mock) SetHasCedarResults(ctx context.Context, td TaskData, failed bool) error {
-	c.HasCedarResults = true
+func (c *Mock) SetResultsInfo(ctx context.Context, td TaskData, service string, failed bool) error {
+	c.ResultsService = service
 	if failed {
-		c.CedarResultsFailed = true
+		c.ResultsFailed = true
 	}
 	return nil
 }
@@ -414,7 +427,7 @@ func (c *Mock) NewPush(ctx context.Context, td TaskData, req *apimodels.S3CopyRe
 	return nil, nil
 }
 
-func (c *Mock) UpdatePushStatus(ctx context.Context, td TaskData, pushlog *serviceModel.PushLog) error {
+func (c *Mock) UpdatePushStatus(ctx context.Context, td TaskData, pushLog *serviceModel.PushLog) error {
 	return nil
 }
 
@@ -442,18 +455,6 @@ func (c *Mock) KeyValInc(ctx context.Context, td TaskData, kv *serviceModel.KeyV
 	return nil
 }
 
-func (c *Mock) PostJSONData(ctx context.Context, td TaskData, path string, data interface{}) error {
-	return nil
-}
-
-func (c *Mock) GetJSONData(ctx context.Context, td TaskData, tn, dn, vn string) ([]byte, error) {
-	return nil, nil
-}
-
-func (c *Mock) GetJSONHistory(ctx context.Context, td TaskData, tags bool, tn, dn string) ([]byte, error) {
-	return nil, nil
-}
-
 // GenerateTasks posts new tasks for the `generate.tasks` command.
 func (c *Mock) GenerateTasks(ctx context.Context, td TaskData, jsonBytes []json.RawMessage) error {
 	if td.ID != "mock_id" {
@@ -466,11 +467,13 @@ func (c *Mock) GenerateTasks(ctx context.Context, td TaskData, jsonBytes []json.
 }
 
 func (c *Mock) GenerateTasksPoll(ctx context.Context, td TaskData) (*apimodels.GeneratePollResponse, error) {
-	return &apimodels.GeneratePollResponse{
-		Finished:   true,
-		ShouldExit: false,
-		Errors:     []string{},
-	}, nil
+	resp := &apimodels.GeneratePollResponse{
+		Finished: true,
+	}
+	if c.GenerateTasksShouldFail {
+		resp.Error = "error polling generate tasks!"
+	}
+	return resp, nil
 }
 
 func (c *Mock) CreateHost(ctx context.Context, td TaskData, options apimodels.CreateHost) ([]string, error) {
@@ -502,4 +505,10 @@ func (c *Mock) ConcludeMerge(ctx context.Context, patchId, status string, td Tas
 
 func (c *Mock) GetAdditionalPatches(ctx context.Context, patchId string, td TaskData) ([]string, error) {
 	return []string{"555555555555555555555555"}, nil
+}
+
+func (c *Mock) GetPullRequestInfo(ctx context.Context, taskData TaskData, prNum int, owner, repo string, lastAttempt bool) (*apimodels.PullRequestInfo, error) {
+	return &apimodels.PullRequestInfo{
+		Mergeable: utility.TruePtr(),
+	}, nil
 }

@@ -8,7 +8,6 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/mongodb/anser/bsonutil"
 	adb "github.com/mongodb/anser/db"
-	"github.com/mongodb/grip"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -72,9 +71,12 @@ func ByVersions(vIds []string) db.Q {
 	return db.Query(bson.M{VersionKey: bson.M{"$in": vIds}})
 }
 
-// ByVariant creates a query that finds all builds for a given variant.
-func ByVariant(bv string) db.Q {
-	return db.Query(bson.M{BuildVariantKey: bv})
+// ByVersionAndVariant creates a query that finds all builds in a version for a given variant.
+func ByVersionAndVariant(version, bv string) db.Q {
+	return db.Query(bson.M{
+		VersionKey:      version,
+		BuildVariantKey: bv,
+	})
 }
 
 // ByProject creates a query that finds all builds for a given project id.
@@ -113,19 +115,6 @@ func ByRevisionWithSystemVersionRequester(revision string) db.Q {
 			"$in": evergreen.SystemVersionRequesterTypes,
 		},
 	})
-}
-
-// ByRecentlyActivatedForProjectAndVariant builds a query that returns all
-// builds before a given revision that were activated for a project + variant.
-// Builds are sorted from most to least recent.
-func ByRecentlyActivatedForProjectAndVariant(revision int, project, variant, requester string) db.Q {
-	return db.Query(bson.M{
-		RevisionOrderNumberKey: bson.M{"$lt": revision},
-		ActivatedKey:           true,
-		BuildVariantKey:        variant,
-		ProjectKey:             project,
-		RequesterKey:           requester,
-	}).Sort([]string{"-" + RevisionOrderNumberKey})
 }
 
 // ByRecentlySuccessfulForProjectAndVariant builds a query that returns all
@@ -202,20 +191,6 @@ func ByAfterRevision(project, buildVariant string, revision int) db.Q {
 	}).Sort([]string{RevisionOrderNumberKey})
 }
 
-// ByRecentlyFinished builds a query that returns all builds for a given project
-// that are versions (not patches), that have finished and have non-zero
-// makespans.
-func ByRecentlyFinishedWithMakespans(limit int) db.Q {
-	return db.Query(bson.M{
-		RequesterKey: bson.M{
-			"$in": evergreen.SystemVersionRequesterTypes,
-		},
-		PredictedMakespanKey: bson.M{"$gt": 0},
-		ActualMakespanKey:    bson.M{"$gt": 0},
-		StatusKey:            bson.M{"$in": evergreen.TaskCompletedStatuses},
-	}).Sort([]string{RevisionOrderNumberKey}).Limit(limit)
-}
-
 // DB Boilerplate
 
 // FindOne returns one build that satisfies the query.
@@ -257,12 +232,13 @@ func UpdateOne(query interface{}, update interface{}) error {
 	)
 }
 
-func UpdateAllBuilds(query interface{}, update interface{}) (*adb.ChangeInfo, error) {
-	return db.UpdateAll(
+func UpdateAllBuilds(query interface{}, update interface{}) error {
+	_, err := db.UpdateAll(
 		Collection,
 		query,
 		update,
 	)
+	return err
 }
 
 // Remove deletes the build of the given id from the database
@@ -284,10 +260,26 @@ func FindProjectForBuild(buildID string) (string, error) {
 	return b.Project, nil
 }
 
+// FindBuildsForTasks returns all builds that cover the given tasks
+func FindBuildsForTasks(tasks []task.Task) ([]Build, error) {
+	buildIdsMap := map[string]bool{}
+	var buildIds []string
+	for _, t := range tasks {
+		buildIdsMap[t.BuildId] = true
+	}
+	for buildId := range buildIdsMap {
+		buildIds = append(buildIds, buildId)
+	}
+	builds, err := Find(ByIds(buildIds))
+	if err != nil {
+		return nil, errors.Wrap(err, "getting builds")
+	}
+	return builds, nil
+}
+
 // SetBuildStartedForTasks sets tasks' builds status to started and activates them
 func SetBuildStartedForTasks(tasks []task.Task, caller string) error {
 	buildIdSet := map[string]bool{}
-	catcher := grip.NewBasicCatcher()
 	for _, t := range tasks {
 		buildIdSet[t.BuildId] = true
 	}
@@ -295,16 +287,13 @@ func SetBuildStartedForTasks(tasks []task.Task, caller string) error {
 	for k := range buildIdSet {
 		buildIdList = append(buildIdList, k)
 	}
-	// Set the build status for all the builds containing the tasks that we touched
-	_, err := UpdateAllBuilds(
+	update := getSetBuildActivatedUpdate(true, caller)
+	update[StatusKey] = evergreen.BuildStarted
+	update[StartTimeKey] = time.Now()
+	// Set the build status/activation for all the builds containing the tasks that we touched.
+	err := UpdateAllBuilds(
 		bson.M{IdKey: bson.M{"$in": buildIdList}},
-		bson.M{"$set": bson.M{
-			StatusKey:    evergreen.BuildStarted,
-			StartTimeKey: time.Now(),
-		}},
+		bson.M{"$set": update},
 	)
-	catcher.Wrap(err, "setting builds to started")
-	// update activation for all the builds
-	catcher.Wrap(UpdateActivation(buildIdList, true, caller), "activating builds")
-	return catcher.Resolve()
+	return errors.Wrap(err, "setting builds to started")
 }

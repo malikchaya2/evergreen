@@ -4,7 +4,7 @@ import (
 	"context"
 	"crypto/hmac"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -52,7 +52,7 @@ func (s *cronsEventSuite) SetupTest() {
 	s.Require().NoError(env.Configure(s.ctx))
 	s.env = env
 
-	s.Require().NoError(db.ClearCollections(event.AllLogCollection, evergreen.ConfigCollection, notification.Collection,
+	s.Require().NoError(db.ClearCollections(event.EventCollection, evergreen.ConfigCollection, notification.Collection,
 		event.SubscriptionsCollection, patch.Collection, model.ProjectRefCollection))
 
 	events := []event.EventLogEntry{
@@ -67,9 +67,8 @@ func (s *cronsEventSuite) SetupTest() {
 		},
 	}
 
-	logger := event.NewDBEventLogger(event.AllLogCollection)
 	for i := range events {
-		s.NoError(logger.LogEvent(&events[i]))
+		s.NoError(events[i].Log())
 	}
 
 	s.n = []notification.Notification{
@@ -113,6 +112,13 @@ func (s *cronsEventSuite) SetupTest() {
 }
 
 func (s *cronsEventSuite) TestDegradedMode() {
+	// Reset to original flags after the test finishes.
+	originalFlags, err := evergreen.GetServiceFlags()
+	s.Require().NoError(err)
+	defer func() {
+		s.NoError(originalFlags.Set())
+	}()
+
 	flags := evergreen.ServiceFlags{
 		EventProcessingDisabled: true,
 	}
@@ -128,8 +134,7 @@ func (s *cronsEventSuite) TestDegradedMode() {
 	}
 
 	// degraded mode shouldn't process events
-	logger := event.NewDBEventLogger(event.AllLogCollection)
-	s.NoError(logger.LogEvent(&e))
+	s.NoError(e.Log())
 	s.NoError(PopulateEventNotifierJobs(s.env)(s.ctx, s.env.LocalQueue()))
 
 	out, err := event.FindUnprocessedEvents(-1)
@@ -159,7 +164,7 @@ func (s *cronsEventSuite) TestSenderDegradedModeDoesntDispatchJobs() {
 	s.NoError(db.FindAllQ(notification.Collection, db.Q{}, &out))
 	s.Len(out, 6)
 	for i := range out {
-		s.Equal("sender disabled", out[i].Error)
+		s.Equal("notifications are disabled", out[i].Error)
 	}
 
 	stats := s.env.LocalQueue().Stats(ctx)
@@ -175,6 +180,13 @@ func (s *cronsEventSuite) TestNotificationIsEnabled() {
 	for i := range s.n {
 		s.True(notificationIsEnabled(&flags, &s.n[i]))
 	}
+
+	// Reset to original flags after the test finishes.
+	originalFlags, err := evergreen.GetServiceFlags()
+	s.Require().NoError(err)
+	defer func() {
+		s.NoError(originalFlags.Set())
+	}()
 
 	flags = evergreen.ServiceFlags{
 		JIRANotificationsDisabled:    true,
@@ -218,8 +230,7 @@ func (s *cronsEventSuite) TestEndToEnd() {
 		},
 	}
 
-	logger := event.NewDBEventLogger(event.AllLogCollection)
-	s.NoError(logger.LogEvent(&e))
+	s.NoError(e.Log())
 
 	subs := []event.Subscription{
 		{
@@ -351,7 +362,7 @@ func (m *mockWebhookHandler) ServeHTTP(w http.ResponseWriter, req *http.Request)
 		return
 	}
 
-	body, err := ioutil.ReadAll(req.Body)
+	body, err := io.ReadAll(req.Body)
 	if err != nil {
 		m.error(err, w)
 		return

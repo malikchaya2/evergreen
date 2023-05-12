@@ -4,8 +4,10 @@ import (
 	"context"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/evergreen-ci/evergreen"
+	"github.com/evergreen-ci/evergreen/agent/internal"
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	agentutil "github.com/evergreen-ci/evergreen/agent/internal/testutil"
 	"github.com/evergreen-ci/evergreen/db"
@@ -13,7 +15,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	modelutil "github.com/evergreen-ci/evergreen/model/testutil"
 	"github.com/evergreen-ci/evergreen/testutil"
-	"github.com/evergreen-ci/utility"
+	timberutil "github.com/evergreen-ci/timber/testutil"
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -38,9 +40,9 @@ func runTest(t *testing.T, configPath string, customTests func(string)) {
 
 	SkipConvey("With attachResults plugin installed into plugin registry", t, func() {
 		modelData, err := modelutil.SetupAPITestData(testConfig, "test", "rhel55", configPath, modelutil.NoPatch)
-		require.NoError(t, err, "failed to setup test data")
+		require.NoError(t, err)
 
-		conf, err := agentutil.MakeTaskConfigFromModelData(testConfig, modelData)
+		conf, err := agentutil.MakeTaskConfigFromModelData(ctx, testConfig, modelData)
 		require.NoError(t, err)
 		conf.WorkDir = "."
 		logger, err := comm.GetLoggerProducer(ctx, client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}, nil)
@@ -50,15 +52,15 @@ func runTest(t *testing.T, configPath string, customTests func(string)) {
 			for _, projTask := range conf.Project.Tasks {
 				So(len(projTask.Commands), ShouldNotEqual, 0)
 				for _, command := range projTask.Commands {
-					pluginCmds, err := Render(command, conf.Project)
-					require.NoError(t, err, "Couldn't get plugin command: %s", command.Command)
+					pluginCmds, err := Render(command, conf.Project, "")
+					require.NoError(t, err)
 					So(pluginCmds, ShouldNotBeNil)
 					So(err, ShouldBeNil)
 
 					err = pluginCmds[0].Execute(ctx, comm, logger, conf)
 					So(err, ShouldBeNil)
 					testTask, err := task.FindOne(db.Query(task.ById(conf.Task.Id)))
-					require.NoError(t, err, "Couldn't find task")
+					require.NoError(t, err)
 					So(testTask, ShouldNotBeNil)
 				}
 			}
@@ -141,62 +143,96 @@ func TestAttachXUnitWildcardResults(t *testing.T) {
 }
 
 func TestXUnitParseAndUpload(t *testing.T) {
-	assert := assert.New(t)
-	xr := xunitResults{
-		Files: []string{"*"},
-	}
 	testConfig := testutil.TestConfig()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	comm := client.NewMock("/dev/null")
 	modelData, err := modelutil.SetupAPITestData(testConfig, "aggregation", "rhel55", WildcardConfig, modelutil.NoPatch)
-	require.NoError(t, err, "failed to setup test data")
-	conf, err := agentutil.MakeTaskConfigFromModelData(testConfig, modelData)
 	require.NoError(t, err)
-	conf.WorkDir = filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "xunit")
 
-	t.Run("SendToEvergreen", func(t *testing.T) {
-		logger, err := comm.GetLoggerProducer(ctx, client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}, nil)
-		assert.NoError(err)
-		err = xr.parseAndUploadResults(ctx, conf, logger, comm)
-		assert.NoError(err)
-		assert.NoError(logger.Close())
-
-		messages := comm.GetMockMessages()[conf.Task.Id]
-		successMessage := "Attach test logs succeeded for 12 of 12 files"
-		found := false
-		for _, message := range messages {
-			if successMessage == message.Message {
-				found = true
+	for tName, tCase := range map[string]func(ctx context.Context, t *testing.T, cedarSrv *timberutil.MockCedarServer, conf *internal.TaskConfig, logger client.LoggerProducer){
+		"GlobMatchesAsteriskAndSendsToCedar": func(ctx context.Context, t *testing.T, cedarSrv *timberutil.MockCedarServer, conf *internal.TaskConfig, logger client.LoggerProducer) {
+			xr := xunitResults{
+				Files: []string{"*"},
 			}
-		}
-		assert.True(found)
-	})
-	t.Run("SendToCedar", func(t *testing.T) {
-		conf.ProjectRef.CedarTestResultsEnabled = utility.TruePtr()
-		logger, err := comm.GetLoggerProducer(ctx, client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}, nil)
-		assert.NoError(err)
-		cedarSrv := setupCedarServer(ctx, t, comm)
-		err = xr.parseAndUploadResults(ctx, conf, logger, comm)
-		assert.NoError(err)
-		assert.NoError(logger.Close())
+			assert.NoError(t, xr.parseAndUploadResults(ctx, conf, logger, comm))
+			assert.NoError(t, logger.Close())
 
-		require.NotEmpty(t, cedarSrv.TestResults.Results)
-		for id, results := range cedarSrv.TestResults.Results {
-			assert.NotEmpty(id)
-			assert.NotEmpty(results)
-			for _, res := range results {
-				assert.NotEmpty(res.Results)
-				for _, r := range res.Results {
-					assert.NotEmpty(r.TestName)
-					assert.NotEmpty(r.DisplayTestName)
-					assert.NotEmpty(r.LogTestName)
-					if r.Status == evergreen.TestFailedStatus {
-						assert.NotEqual(r.DisplayTestName, r.LogTestName)
+			assert.Len(t, cedarSrv.TestResults.Results, 1)
+			for id, results := range cedarSrv.TestResults.Results {
+				assert.NotEmpty(t, id)
+				assert.NotEmpty(t, results)
+				for _, res := range results {
+					assert.NotEmpty(t, res.Results)
+					for _, r := range res.Results {
+						assert.NotEmpty(t, r.TestName)
+						assert.NotEmpty(t, r.DisplayTestName)
+						assert.NotEmpty(t, r.LogTestName)
+						if r.Status == evergreen.TestFailedStatus {
+							assert.NotEqual(t, r.DisplayTestName, r.LogTestName)
+						}
+						assert.NotEmpty(t, r.Status)
 					}
-					assert.NotEmpty(r.Status)
 				}
 			}
-		}
-	})
+		},
+		"GlobMatchesAbsolutePathContainingWorkDirPrefixAndSendsToCedar": func(ctx context.Context, t *testing.T, cedarSrv *timberutil.MockCedarServer, conf *internal.TaskConfig, logger client.LoggerProducer) {
+			conf.WorkDir = filepath.Join(testutil.GetDirectoryOfFile(), "testdata")
+			xr := xunitResults{
+				Files: []string{filepath.Join("xunit", "junit*.xml")},
+			}
+			assert.NoError(t, xr.parseAndUploadResults(ctx, conf, logger, comm))
+			assert.NoError(t, logger.Close())
+
+			assert.Len(t, cedarSrv.TestResults.Results, 1)
+		},
+		"GlobMatchesRelativePathAndSendsToCedar": func(ctx context.Context, t *testing.T, cedarSrv *timberutil.MockCedarServer, conf *internal.TaskConfig, logger client.LoggerProducer) {
+			xr := xunitResults{
+				Files: []string{filepath.Join(conf.WorkDir, "*")},
+			}
+			assert.NoError(t, xr.parseAndUploadResults(ctx, conf, logger, comm))
+			assert.NoError(t, logger.Close())
+
+			assert.Len(t, cedarSrv.TestResults.Results, 1)
+		},
+		"EmptyTestsForValidPathCauseNoError": func(ctx context.Context, t *testing.T, cedarSrv *timberutil.MockCedarServer, conf *internal.TaskConfig, logger client.LoggerProducer) {
+			xr := xunitResults{
+				Files: []string{filepath.Join(conf.WorkDir, "empty.xml")},
+			}
+			assert.NoError(t, xr.parseAndUploadResults(ctx, conf, logger, comm))
+			assert.NoError(t, logger.Close())
+
+			assert.Len(t, cedarSrv.TestResults.Results, 0)
+		},
+		"EmptyTestsForInvalidPathErrors": func(ctx context.Context, t *testing.T, cedarSrv *timberutil.MockCedarServer, conf *internal.TaskConfig, logger client.LoggerProducer) {
+			xr := xunitResults{
+				Files: []string{filepath.Join(conf.WorkDir, "nonexistent.xml")},
+			}
+			assert.Error(t, xr.parseAndUploadResults(ctx, conf, logger, comm))
+			assert.NoError(t, logger.Close())
+		},
+		"DirectoryErrors": func(ctx context.Context, t *testing.T, cedarSrv *timberutil.MockCedarServer, conf *internal.TaskConfig, logger client.LoggerProducer) {
+			xr := xunitResults{
+				Files: []string{conf.WorkDir},
+			}
+			assert.Error(t, xr.parseAndUploadResults(ctx, conf, logger, comm))
+			assert.NoError(t, logger.Close())
+		},
+	} {
+		t.Run(tName, func(t *testing.T) {
+			tctx, tcancel := context.WithTimeout(ctx, 10*time.Second)
+			defer tcancel()
+
+			cedarSrv := setupCedarServer(tctx, t, comm)
+
+			conf, err := agentutil.MakeTaskConfigFromModelData(ctx, testConfig, modelData)
+			require.NoError(t, err)
+			conf.WorkDir = filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "xunit")
+
+			logger, err := comm.GetLoggerProducer(ctx, client.TaskData{ID: conf.Task.Id, Secret: conf.Task.Secret}, nil)
+			require.NoError(t, err)
+
+			tCase(tctx, t, cedarSrv, conf, logger)
+		})
+	}
 }

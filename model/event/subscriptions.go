@@ -22,7 +22,7 @@ const (
 	SubscriptionsCollection = "subscriptions"
 )
 
-//nolint: deadcode, megacheck, unused
+//nolint:megacheck,unused
 var (
 	subscriptionIDKey             = bsonutil.MustHaveTag(Subscription{}, "ID")
 	subscriptionResourceTypeKey   = bsonutil.MustHaveTag(Subscription{}, "ResourceType")
@@ -74,10 +74,15 @@ const (
 	ObjectHost    = "host"
 	ObjectPatch   = "patch"
 
-	TriggerOutcome                   = "outcome"
+	TriggerOutcome = "outcome"
+	// TriggerFamilyOutcome indicates that a patch or version completed,
+	// and all their child patches (if there are any) have also completed.
+	TriggerFamilyOutcome             = "family-outcome"
 	TriggerGithubCheckOutcome        = "github-check-outcome"
 	TriggerFailure                   = "failure"
+	TriggerFamilyFailure             = "family-failure"
 	TriggerSuccess                   = "success"
+	TriggerFamilySuccess             = "family-success"
 	TriggerRegression                = "regression"
 	TriggerExceedsDuration           = "exceeds-duration"
 	TriggerRuntimeChangeByPercent    = "runtime-change"
@@ -734,6 +739,7 @@ func CreateOrUpdateGeneralSubscription(resourceType string, id string,
 
 		sub.OwnerType = OwnerTypePerson
 		sub.Owner = user
+
 		if err := sub.Upsert(); err != nil {
 			return nil, errors.Wrap(err, "upserting subscription")
 		}
@@ -787,6 +793,12 @@ func NewVersionGithubCheckOutcomeSubscription(id string, sub Subscriber) Subscri
 }
 
 func NewExpiringPatchOutcomeSubscription(id string, sub Subscriber) Subscription {
+	subscription := NewSubscriptionByID(ResourceTypePatch, TriggerFamilyOutcome, id, sub)
+	subscription.LastUpdated = time.Now()
+	return subscription
+}
+
+func NewExpiringPatchChildOutcomeSubscription(id string, sub Subscriber) Subscription {
 	subscription := NewSubscriptionByID(ResourceTypePatch, TriggerOutcome, id, sub)
 	subscription.LastUpdated = time.Now()
 	return subscription
@@ -805,7 +817,7 @@ func NewParentPatchSubscription(id string, sub Subscriber) Subscription {
 }
 
 func NewPatchOutcomeSubscriptionByOwner(owner string, sub Subscriber) Subscription {
-	return NewSubscriptionByOwner(owner, sub, ResourceTypePatch, TriggerOutcome)
+	return NewSubscriptionByOwner(owner, sub, ResourceTypePatch, TriggerFamilyOutcome)
 }
 
 func NewSpawnhostExpirationSubscription(owner string, sub Subscriber) Subscription {

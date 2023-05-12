@@ -8,8 +8,10 @@ import (
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/rest/route"
 	"github.com/evergreen-ci/gimlet"
+	"github.com/gorilla/mux"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
+	"go.opentelemetry.io/contrib/instrumentation/github.com/gorilla/mux/otelmux"
 )
 
 const (
@@ -55,10 +57,11 @@ func GetRouter(as *APIServer, uis *UIServer) (http.Handler, error) {
 	rest := GetRESTv1App(as)
 
 	opts := route.HandlerOpts{
-		APIQueue:     as.queue,
-		QueueGroup:   as.env.RemoteQueueGroup(),
-		URL:          as.Settings.Ui.Url,
-		GithubSecret: []byte(as.Settings.Api.GithubWebhookSecret),
+		APIQueue:            as.queue,
+		URL:                 as.Settings.Ui.Url,
+		GithubSecret:        []byte(as.Settings.Api.GithubWebhookSecret),
+		TaskDispatcher:      as.taskDispatcher,
+		TaskAliasDispatcher: as.taskAliasDispatcher,
 	}
 	route.AttachHandler(rest, opts)
 
@@ -70,10 +73,11 @@ func GetRouter(as *APIServer, uis *UIServer) (http.Handler, error) {
 	apiRestV2 := gimlet.NewApp()
 	apiRestV2.SetPrefix(evergreen.APIRoutePrefix + "/" + evergreen.RestRoutePrefix)
 	opts = route.HandlerOpts{
-		APIQueue:     as.queue,
-		QueueGroup:   as.env.RemoteQueueGroup(),
-		URL:          as.Settings.Ui.Url,
-		GithubSecret: []byte(as.Settings.Api.GithubWebhookSecret),
+		APIQueue:            as.queue,
+		URL:                 as.Settings.Ui.Url,
+		GithubSecret:        []byte(as.Settings.Api.GithubWebhookSecret),
+		TaskDispatcher:      as.taskDispatcher,
+		TaskAliasDispatcher: as.taskAliasDispatcher,
 	}
 	route.AttachHandler(apiRestV2, opts)
 
@@ -85,7 +89,10 @@ func GetRouter(as *APIServer, uis *UIServer) (http.Handler, error) {
 	uiService := uis.GetServiceApp()
 	apiService := as.GetServiceApp()
 
+	router := mux.NewRouter().UseEncodedPath()
+	router.Use(otelmux.Middleware("evergreen"))
+
 	// the order that we merge handlers matters here, and we must
 	// define more specific routes before less specific routes.
-	return gimlet.MergeApplications(app, clients, uiService, rest, apiRestV2, apiService)
+	return gimlet.MergeApplicationsWithRouter(router, app, clients, uiService, rest, apiRestV2, apiService)
 }

@@ -25,9 +25,13 @@ const (
 	// HostBuildingFailed is a failure state indicating that an intent host was
 	// attempting to create a host but failed during creation. Hosts that fail
 	// to build will terminate shortly.
-	HostBuildingFailed  = "building-failed"
-	HostStarting        = "starting"
-	HostProvisioning    = "provisioning"
+	HostBuildingFailed = "building-failed"
+	HostStarting       = "starting"
+	HostProvisioning   = "provisioning"
+	// HostProvisionFailed is a failure state indicating that a host was
+	// successfully created (i.e. requested from the cloud provider) but failed
+	// while it was starting up. Hosts that fail to provisoin will terminate
+	// shortly.
 	HostProvisionFailed = "provision failed"
 	HostQuarantined     = "quarantined"
 	HostDecommissioned  = "decommissioned"
@@ -37,19 +41,11 @@ const (
 
 	HostExternalUserName = "external"
 
-	HostStatusSuccess = "success"
-	HostStatusFailed  = "failed"
-
 	// Task Statuses used in the database models
 
 	// TaskInactive is not assigned to any new tasks, but can be found
 	// in the database and is used in the UI.
 	TaskInactive = "inactive"
-
-	// TaskUnstarted is assigned to a display task after cleaning up one of
-	// its execution tasks. This indicates that the display task is
-	// pending a rerun
-	TaskUnstarted = "unstarted"
 
 	// TaskUndispatched indicates either:
 	//  1. a task is not scheduled to run (when Task.Activated == false)
@@ -96,9 +92,24 @@ const (
 	CommandTypeSetup  = "setup"
 
 	// Task descriptions
+	//
+	// TaskDescriptionHeartbeat indicates that a task failed because it did not
+	// send a heartbeat while it was running. Tasks are expected to send
+	// periodic heartbeats back to the app server indicating the task is still
+	// actively running, or else they are considered stale.
 	TaskDescriptionHeartbeat = "heartbeat"
+	// TaskDescriptionStranded indicates that a task failed because its
+	// underlying runtime environment (i.e. container or host) encountered an
+	// issue. For example, if a host is terminated while the task is still
+	// running, the task is considered stranded.
 	TaskDescriptionStranded  = "stranded"
 	TaskDescriptionNoResults = "expected test results, but none attached"
+	// TaskDescriptionContainerUnallocatable indicates that the reason a
+	// container task failed is because it cannot be allocated a container.
+	TaskDescriptionContainerUnallocatable = "container task cannot be allocated"
+	// TaskDescriptionAborted indicates that the reason a task failed is specifically
+	// because it was manually aborted.
+	TaskDescriptionAborted = "aborted"
 
 	// Task Statuses that are currently used only by the UI, and in tests
 	// (these may be used in old tasks as actual task statuses rather than just
@@ -201,6 +212,7 @@ const (
 	PlannerVersionLegacy  = "legacy"
 	PlannerVersionTunable = "tunable"
 
+	// TODO: EVG-18706 all distros use DispatcherVersionRevisedWithDependencies, we may be able to remove these and their custom logic
 	DispatcherVersionLegacy                  = "legacy"
 	DispatcherVersionRevised                 = "revised"
 	DispatcherVersionRevisedWithDependencies = "revised-with-dependencies"
@@ -279,6 +291,10 @@ const (
 	TasksAlreadyGeneratedError = "generator already ran and generated tasks"
 	KeyTooLargeToIndexError    = "key too large to index"
 	InvalidDivideInputError    = "$divide only supports numeric types"
+
+	// Valid types of performing git clone
+	CloneMethodLegacySSH = "legacy-ssh"
+	CloneMethodOAuth     = "oauth"
 )
 
 var TaskStatuses = []string{
@@ -298,7 +314,6 @@ var TaskStatuses = []string{
 	TaskWillRun,
 	TaskUnscheduled,
 	TaskUndispatched,
-	TaskUnstarted,
 	TaskDispatched,
 }
 
@@ -320,13 +335,20 @@ var TaskNonGenericFailureStatuses = []string{
 	TaskSystemTimedOut,
 }
 
+var TaskSystemFailures = []string{
+	TaskSystemFailed,
+	TaskTimedOut,
+	TaskSystemUnresponse,
+	TaskSystemTimedOut,
+	TaskTestTimedOut,
+}
+
 // TaskFailureStatuses represent all the ways that a completed task can fail,
 // inclusive of display statuses such as system failures.
 var TaskFailureStatuses = append([]string{TaskFailed}, TaskNonGenericFailureStatuses...)
 
 var TaskUnstartedStatuses = []string{
 	TaskInactive,
-	TaskUnstarted,
 	TaskUndispatched,
 }
 
@@ -345,6 +367,10 @@ func IsFinishedTaskStatus(status string) bool {
 
 func IsFailedTaskStatus(status string) bool {
 	return utility.StringSliceContains(TaskFailureStatuses, status)
+}
+
+func IsSystemFailedTaskStatus(status string) bool {
+	return utility.StringSliceContains(TaskSystemFailures, status)
 }
 
 func IsValidTaskEndStatus(status string) bool {
@@ -378,7 +404,37 @@ func VersionStatusToPatchStatus(versionStatus string) (string, error) {
 	}
 }
 
+func PatchStatusToVersionStatus(patchStatus string) (string, error) {
+	switch patchStatus {
+	case PatchCreated:
+		return VersionCreated, nil
+	case PatchStarted:
+		return VersionStarted, nil
+	case PatchFailed:
+		return VersionFailed, nil
+	case PatchSucceeded:
+		return VersionSucceeded, nil
+	default:
+		return "", errors.Errorf("unknown patch status: %s", patchStatus)
+	}
+}
+
 type ModificationAction string
+
+// Common OTEL attribute keys
+const (
+	TaskIDOtelAttribute            = "evergreen.task.id"
+	TaskNameOtelAttribute          = "evergreen.task.name"
+	TaskExecutionOtelAttribute     = "evergreen.task.execution"
+	TaskStatusOtelAttribute        = "evergreen.task.status"
+	VersionIDOtelAttribute         = "evergreen.version.id"
+	VersionRequesterOtelAttribute  = "evergreen.version.requester"
+	BuildIDOtelAttribute           = "evergreen.build.id"
+	BuildNameOtelAttribute         = "evergreen.build.name"
+	ProjectIdentifierOtelAttribute = "evergreen.project.identifier"
+	ProjectIDOtelAttribute         = "evergreen.project.id"
+	DistroIDOtelAttribute          = "evergreen.distro.id"
+)
 
 const (
 	RestartAction     ModificationAction = "restart"
@@ -419,7 +475,6 @@ const (
 
 // Constants related to cloud providers and provider-specific settings.
 const (
-	ProviderNameEc2Auto     = "ec2-auto"
 	ProviderNameEc2OnDemand = "ec2-ondemand"
 	ProviderNameEc2Spot     = "ec2-spot"
 	ProviderNameEc2Fleet    = "ec2-fleet"
@@ -434,11 +489,24 @@ const (
 	// DefaultEC2Region is the default region where hosts should be spawned.
 	DefaultEC2Region = "us-east-1"
 	// DefaultEBSType is Amazon's default EBS type.
-	DefaultEBSType = "gp2"
+	DefaultEBSType = "gp3"
 	// DefaultEBSAvailabilityZone is the default availability zone for EBS
 	// volumes. This may be a temporary default.
 	DefaultEBSAvailabilityZone = "us-east-1a"
 )
+
+// IsEc2Provider returns true if the provider is ec2.
+func IsEc2Provider(provider string) bool {
+	return provider == ProviderNameEc2OnDemand ||
+		provider == ProviderNameEc2Spot ||
+		provider == ProviderNameEc2Fleet
+}
+
+// IsDockerProvider returns true if the provider is docker.
+func IsDockerProvider(provider string) bool {
+	return provider == ProviderNameDocker ||
+		provider == ProviderNameDockerMock
+}
 
 var (
 	// ProviderSpawnable includes all cloud provider types where hosts can be
@@ -447,7 +515,6 @@ var (
 	ProviderSpawnable = []string{
 		ProviderNameEc2OnDemand,
 		ProviderNameEc2Spot,
-		ProviderNameEc2Auto,
 		ProviderNameEc2Fleet,
 		ProviderNameGce,
 		ProviderNameOpenstack,
@@ -462,7 +529,6 @@ var (
 	ProviderUserSpawnable = []string{
 		ProviderNameEc2OnDemand,
 		ProviderNameEc2Spot,
-		ProviderNameEc2Auto,
 		ProviderNameEc2Fleet,
 		ProviderNameGce,
 		ProviderNameOpenstack,
@@ -476,7 +542,6 @@ var (
 	// ProviderSpotEc2Type includes all cloud provider types that manage EC2
 	// spot instances.
 	ProviderSpotEc2Type = []string{
-		ProviderNameEc2Auto,
 		ProviderNameEc2Spot,
 		ProviderNameEc2Fleet,
 	}
@@ -484,7 +549,6 @@ var (
 	// ProviderEc2Type includes all cloud provider types that manage EC2
 	// instances.
 	ProviderEc2Type = []string{
-		ProviderNameEc2Auto,
 		ProviderNameEc2Spot,
 		ProviderNameEc2Fleet,
 		ProviderNameEc2OnDemand,
@@ -493,10 +557,12 @@ var (
 
 const (
 	DefaultServiceConfigurationFileName = "/etc/mci_settings.yml"
-	DefaultDatabaseUrl                  = "mongodb://localhost:27017"
+	DefaultDatabaseURL                  = "mongodb://localhost:27017"
 	DefaultDatabaseName                 = "mci"
 	DefaultDatabaseWriteMode            = "majority"
 	DefaultDatabaseReadMode             = "majority"
+
+	DefaultAmboyDatabaseURL = "mongodb://localhost:27017"
 
 	// database and config directory, set to the testing version by default for safety
 	NotificationsFile = "mci-notifications.yml"
@@ -509,7 +575,7 @@ const (
 	RepotrackerVersionRequester = "gitter_request"
 	TriggerRequester            = "trigger_request"
 	MergeTestRequester          = "merge_test" // commit queue
-	AdHocRequester              = "ad_hoc"
+	AdHocRequester              = "ad_hoc"     // periodic build
 )
 
 var AllRequesterTypes = []string{
@@ -528,6 +594,7 @@ var (
 		RepotrackerVersionRequester,
 		TriggerRequester,
 		GitTagRequester,
+		AdHocRequester,
 	}
 )
 
@@ -539,6 +606,7 @@ const (
 	S3PullCommandName             = "s3.pull"
 	ShellExecCommandName          = "shell.exec"
 	AttachResultsCommandName      = "attach.results"
+	ManifestLoadCommandName       = "manifest.load"
 	AttachArtifactsCommandName    = "attach.artifacts"
 	AttachXUnitResultsCommandName = "attach.xunit_results"
 )
@@ -749,7 +817,6 @@ var (
 	// TaskUncompletedStatuses are all statuses that do not represent a finished state.
 	TaskUncompletedStatuses = []string{
 		TaskStarted,
-		TaskUnstarted,
 		TaskUndispatched,
 		TaskDispatched,
 		TaskConflict,
@@ -771,6 +838,12 @@ var (
 		ArchDarwinArm64:  "OSX ARM 64-bit",
 		ArchLinuxAmd64:   "Linux 64-bit",
 		ArchLinux386:     "Linux 32-bit",
+	}
+
+	// ValidCloneMethods includes all recognized clone methods.
+	ValidCloneMethods = []string{
+		CloneMethodLegacySSH,
+		CloneMethodOAuth,
 	}
 )
 
@@ -801,6 +874,10 @@ func IsGitHubPatchRequester(requester string) bool {
 
 func IsGitTagRequester(requester string) bool {
 	return requester == GitTagRequester
+}
+
+func IsCommitQueueRequester(requester string) bool {
+	return requester == MergeTestRequester
 }
 
 func ShouldConsiderBatchtime(requester string) bool {
@@ -1102,6 +1179,7 @@ const (
 	LogViewerRaw     LogViewer = "raw"
 	LogViewerHTML    LogViewer = "html"
 	LogViewerLobster LogViewer = "lobster"
+	LogViewerParsley LogViewer = "parsley"
 )
 
 // ContainerOS denotes the operating system of a running container.
@@ -1166,9 +1244,21 @@ func (w WindowsVersion) Validate() error {
 	case Windows2022, Windows2019, Windows2016:
 		return nil
 	default:
-		return errors.Errorf("unrecognized windows version '%s'", w)
+		return errors.Errorf("unrecognized Windows version '%s'", w)
 	}
 }
+
+// ParserProjectStorageMethod represents a means to store the parser project.
+type ParserProjectStorageMethod string
+
+const (
+	// ProjectStorageMethodDB indicates that the parser project is stored as a
+	// single document in a DB collection.
+	ProjectStorageMethodDB ParserProjectStorageMethod = "db"
+	// ProjectStorageMethodS3 indicates that the parser project is stored as a
+	// single object in S3.
+	ProjectStorageMethodS3 ParserProjectStorageMethod = "s3"
+)
 
 const (
 	// Valid public key types.
@@ -1185,6 +1275,8 @@ var validKeyTypes = []string{
 	publicKeyECDSA,
 }
 
+var sensitiveCollections = []string{"project_vars"}
+
 // ValidateSSHKey errors if the given key does not start with one of the allowed prefixes.
 func ValidateSSHKey(key string) error {
 	for _, prefix := range validKeyTypes {
@@ -1194,4 +1286,13 @@ func ValidateSSHKey(key string) error {
 	}
 	return errors.Errorf("either an invalid Evergreen-managed key name has been provided, "+
 		"or the key value is not one of the valid types: %s", validKeyTypes)
+}
+
+// ValidateCloneMethod checks that the clone mechanism is one of the supported
+// methods.
+func ValidateCloneMethod(method string) error {
+	if !utility.StringSliceContains(ValidCloneMethods, method) {
+		return errors.Errorf("'%s' is not a valid clone method", method)
+	}
+	return nil
 }

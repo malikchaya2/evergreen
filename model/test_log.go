@@ -16,7 +16,11 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-const TestLogCollection = "test_logs"
+const (
+	TestLogCollection = "test_logs"
+
+	maxDeleteCount = 100000
+)
 
 type TestLog struct {
 	Id            string   `bson:"_id" json:"_id"`
@@ -60,14 +64,31 @@ func FindOneTestLog(name, task string, execution int) (*TestLog, error) {
 	return tl, errors.WithStack(err)
 }
 
+func findAllTestLogs(query db.Q) ([]TestLog, error) {
+	var result []TestLog
+	if err := db.FindAllQ(TestLogCollection, query, &result); err != nil {
+		return nil, errors.Wrap(err, "finding test logs")
+	}
+	return result, nil
+}
+
 func DeleteTestLogsWithLimit(ctx context.Context, env evergreen.Environment, ts time.Time, limit int) (int, error) {
-	if limit > 100*1000 {
-		panic("cannot delete more than 100k documents in a single operation")
+	if limit > maxDeleteCount {
+		return 0, errors.Errorf("cannot delete more than %d documents in a single operation", maxDeleteCount)
 	}
 
-	ops := make([]mongo.WriteModel, limit)
-	for idx := 0; idx < limit; idx++ {
-		ops[idx] = mongo.NewDeleteOneModel().SetFilter(bson.M{TestLogIdKey: bson.M{"$lt": primitive.NewObjectIDFromTimestamp(ts).Hex()}})
+	docsToDelete, err := findAllTestLogs(db.Query(bson.M{TestLogIdKey: bson.M{"$lt": primitive.NewObjectIDFromTimestamp(ts).Hex()}}).WithFields(TestLogIdKey).Limit(limit))
+	if err != nil {
+		return 0, errors.Wrap(err, "getting docs to delete")
+	}
+
+	if len(docsToDelete) == 0 {
+		return 0, nil
+	}
+
+	ops := make([]mongo.WriteModel, 0, len(docsToDelete))
+	for _, doc := range docsToDelete {
+		ops = append(ops, mongo.NewDeleteOneModel().SetFilter(bson.M{TestLogIdKey: doc.Id}))
 	}
 
 	res, err := env.DB().Collection(TestLogCollection).BulkWrite(ctx, ops, options.BulkWrite().SetOrdered(false))
@@ -79,22 +100,22 @@ func DeleteTestLogsWithLimit(ctx context.Context, env evergreen.Environment, ts 
 }
 
 // Insert inserts the TestLog into the database
-func (self *TestLog) Insert() error {
-	self.Id = mgobson.NewObjectId().Hex()
-	if err := self.Validate(); err != nil {
+func (tl *TestLog) Insert() error {
+	tl.Id = mgobson.NewObjectId().Hex()
+	if err := tl.Validate(); err != nil {
 		return errors.Wrap(err, "invalid test log")
 	}
-	return errors.WithStack(db.Insert(TestLogCollection, self))
+	return errors.WithStack(db.Insert(TestLogCollection, tl))
 }
 
 // Validate makes sure the log will accessible in the database
 // before the log itself is inserted. Returns an error if
 // something is wrong.
-func (self *TestLog) Validate() error {
+func (tl *TestLog) Validate() error {
 	switch {
-	case self.Name == "":
+	case tl.Name == "":
 		return errors.New("test log requires a 'Name' field")
-	case self.Task == "":
+	case tl.Task == "":
 		return errors.New("test log requires a 'Task' field")
 	default:
 		return nil

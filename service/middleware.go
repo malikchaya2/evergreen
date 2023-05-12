@@ -70,6 +70,25 @@ func MustHaveUser(r *http.Request) *user.DBUser {
 	return usr
 }
 
+func RedirectSpruceUsers(w http.ResponseWriter, r *http.Request, redirect string) bool {
+	if r.FormValue("redirect_spruce_users") != "true" {
+		return false
+	}
+
+	u := gimlet.GetUser(r.Context())
+	if u == nil {
+		return false
+	}
+
+	usr, ok := u.(*user.DBUser)
+	if !ok || usr == nil || !usr.Settings.UseSpruceOptions.SpruceV1 {
+		return false
+	}
+
+	http.Redirect(w, r, redirect, http.StatusTemporaryRedirect)
+	return true
+}
+
 // ToPluginContext creates a UIContext from the projectContext data.
 func (pc projectContext) ToPluginContext(settings evergreen.Settings, usr gimlet.User) plugin.UIContext {
 	dbUser, ok := usr.(*user.DBUser)
@@ -100,8 +119,20 @@ func (uis *UIServer) GetSettings() evergreen.Settings {
 // requireUser takes a request handler and returns a wrapped version which verifies that requests
 // request are authenticated before proceeding. For a request which is not authenticated, it will
 // execute the onFail handler. If onFail is nil, a simple "unauthorized" error will be sent.
-func requireUser(onSuccess, onFail http.HandlerFunc) http.HandlerFunc {
+// If skipWithToggle is true, the request for an authenticated user will be skipped if our admin flags
+// dictate that we should enable public project access (i.e. if LegacyUIPublicAccessDisabled is false).
+func requireUser(skipWithToggle bool, onSuccess, onFail http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		if skipWithToggle {
+			flags, err := evergreen.GetServiceFlags()
+			if err != nil {
+				gimlet.WriteResponse(w, gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "retrieving admin settings")))
+			}
+			if !flags.LegacyUIPublicAccessDisabled {
+				onSuccess(w, r)
+				return
+			}
+		}
 		if user := gimlet.GetUser(r.Context()); user == nil {
 			if onFail != nil {
 				onFail(w, r)
@@ -115,11 +146,19 @@ func requireUser(onSuccess, onFail http.HandlerFunc) http.HandlerFunc {
 }
 
 func (uis *UIServer) requireLogin(next http.HandlerFunc) http.HandlerFunc {
-	return requireUser(next, uis.RedirectToLogin)
+	return requireUser(false, next, uis.RedirectToLogin)
+}
+
+func (uis *UIServer) requireLoginToggleable(next http.HandlerFunc) http.HandlerFunc {
+	return requireUser(true, next, nil)
+}
+
+func (uis *UIServer) redirectLoginToggleable(next http.HandlerFunc) http.HandlerFunc {
+	return requireUser(true, next, uis.RedirectToLogin)
 }
 
 func (uis *UIServer) requireLoginStatusUnauthorized(next http.HandlerFunc) http.HandlerFunc {
-	return requireUser(next, nil)
+	return requireUser(false, next, nil)
 }
 
 func (uis *UIServer) setCORSHeaders(next http.HandlerFunc) http.HandlerFunc {
@@ -254,7 +293,7 @@ func (pc *projectContext) populateProjectRefs(includePrivate bool, user gimlet.U
 	pc.AllProjects = make([]restModel.UIProjectFields, 0, len(allProjs))
 	// User is not logged in, so only include public projects.
 	for _, p := range allProjs {
-		if !p.IsEnabled() {
+		if !p.Enabled {
 			continue
 		}
 		if !p.IsPrivate() || includePrivate {
@@ -365,6 +404,7 @@ func (uis *UIServer) LoadProjectContext(rw http.ResponseWriter, r *http.Request)
 			Value:   ctx.ProjectRef.Id,
 			Path:    "/",
 			Expires: time.Now().Add(7 * 24 * time.Hour),
+			Secure:  true,
 		})
 	}
 

@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,7 +18,7 @@ import (
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/utility"
 	"github.com/google/shlex"
-	homedir "github.com/mitchellh/go-homedir"
+	"github.com/mitchellh/go-homedir"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/level"
 	"github.com/mongodb/grip/message"
@@ -47,7 +46,7 @@ func hostCreate() cli.Command {
 		Flags: []cli.Flag{
 			cli.StringFlag{
 				Name:  joinFlagNames(distroFlagName, "d"),
-				Usage: "name of an evergreen distro",
+				Usage: "name of an Evergreen distro",
 			},
 			cli.StringFlag{
 				Name:  joinFlagNames(keyFlagName, "k"),
@@ -79,7 +78,7 @@ func hostCreate() cli.Command {
 			},
 			cli.StringFlag{
 				Name:  joinFlagNames(fileFlagName, "f"),
-				Usage: "name of a json or yaml file containing the spawn host params",
+				Usage: "name of a JSON or YAML file containing the spawn host params",
 			},
 		},
 		Before: requireStringFlag(keyFlagName),
@@ -100,21 +99,24 @@ func hostCreate() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			spawnRequest := &restModel.HostRequestOptions{}
 			var tags []host.Tag
 			if file != "" {
 				if err = utility.ReadYAMLFile(file, &spawnRequest); err != nil {
-					return errors.Wrapf(err, "problem reading from file '%s'", file)
+					return errors.Wrapf(err, "reading from file '%s'", file)
 				}
 				if spawnRequest.Tag != "" {
 					tags, err = host.MakeHostTags([]string{spawnRequest.Tag})
 					if err != nil {
-						return errors.Wrap(err, "a problem generating tags")
+						return errors.Wrap(err, "generating host tags")
 					}
 					spawnRequest.InstanceTags = tags
 				}
@@ -124,7 +126,7 @@ func hostCreate() cli.Command {
 			} else {
 				tags, err = host.MakeHostTags(tagSlice)
 				if err != nil {
-					return errors.Wrap(err, "problem generating tags")
+					return errors.Wrap(err, "generating host tags")
 				}
 				spawnRequest = &restModel.HostRequestOptions{
 					DistroID:     distro,
@@ -138,24 +140,24 @@ func hostCreate() cli.Command {
 
 			if userdataFile != "" {
 				var out []byte
-				out, err = ioutil.ReadFile(userdataFile)
+				out, err = os.ReadFile(userdataFile)
 				if err != nil {
-					return errors.Wrapf(err, "problem reading userdata file '%s'", userdataFile)
+					return errors.Wrapf(err, "reading userdata file '%s'", userdataFile)
 				}
 				spawnRequest.UserData = string(out)
 			}
 			if setupFile != "" {
 				var out []byte
-				out, err = ioutil.ReadFile(setupFile)
+				out, err = os.ReadFile(setupFile)
 				if err != nil {
-					return errors.Wrapf(err, "problem reading setup file '%s'", setupFile)
+					return errors.Wrapf(err, "reading setup file '%s'", setupFile)
 				}
 				spawnRequest.SetupScript = string(out)
 			}
 
 			host, err := client.CreateSpawnHost(ctx, spawnRequest)
 			if err != nil {
-				return errors.Wrap(err, "problem contacting evergreen service")
+				return errors.Wrap(err, "creating spawn host")
 			}
 			if host == nil {
 				return errors.New("Unable to create a spawn host. Double check that the params and .evergreen.yml are correct")
@@ -248,19 +250,22 @@ func hostModify() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			addTags, err := host.MakeHostTags(addTagSlice)
 			if err != nil {
-				return errors.Wrap(err, "problem generating tags to add")
+				return errors.Wrap(err, "generating host tags")
 			}
 
 			publicKey, err := getPublicKey(ctx, client, publicKeyFile, publicKeyName)
 			if err != nil {
-				return errors.Wrap(err, "public key failed validation")
+				return errors.Wrap(err, "getting public key")
 			}
 
 			hostChanges := host.HostModifyOptions{
@@ -322,7 +327,7 @@ func readKeyFromFile(keyFile string) (string, error) {
 func getUserKeyByName(ctx context.Context, client client.Communicator, keyName string) (string, error) {
 	userKeys, err := client.GetCurrentUsersKeys(ctx)
 	if err != nil {
-		return "", errors.New("problem retrieving user keys")
+		return "", errors.New("getting user keys")
 	}
 
 	for _, pubKey := range userKeys {
@@ -380,27 +385,30 @@ func hostConfigure() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
 
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, !quiet)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			ac, _, err := conf.getLegacyClients()
 			if err != nil {
-				return errors.Wrap(err, "problem accessing evergreen service")
+				return errors.Wrap(err, "setting up legacy Evergreen client")
 			}
 
 			projectRef, err := ac.GetProjectRef(project)
 			if err != nil {
-				return errors.Wrapf(err, "can't find project for queue id '%s'", project)
+				return errors.Wrapf(err, "finding project '%s'", project)
 			}
 
 			if distroName != "" {
 				var currentDistro *restModel.APIDistro
 				currentDistro, err = client.GetDistroByName(ctx, distroName)
 				if err != nil {
-					return errors.Wrap(err, "problem getting distro")
+					return errors.Wrapf(err, "getting distro '%s'", distroName)
 				}
 
 				if currentDistro.IsVirtualWorkstation {
@@ -411,7 +419,7 @@ func hostConfigure() cli.Command {
 					var userHome string
 					userHome, err = homedir.Dir()
 					if err != nil {
-						return errors.Wrap(err, "problem finding home directory")
+						return errors.Wrap(err, "finding home directory")
 					}
 
 					directory = filepath.Join(userHome, directory)
@@ -424,7 +432,7 @@ func hostConfigure() cli.Command {
 				DryRun:    dryRun,
 			})
 			if err != nil {
-				return errors.Wrapf(err, "error getting commands")
+				return errors.Wrapf(err, "getting project setup commands")
 			}
 
 			grip.Info(message.Fields{
@@ -439,13 +447,13 @@ func hostConfigure() cli.Command {
 			for idx, cmd := range cmds {
 				if !dryRun {
 					if err := makeWorkingDir(cmd); err != nil {
-						return errors.Wrap(err, "problem making working directory")
+						return errors.Wrap(err, "making working directory")
 					}
 				}
 
 				if err := cmd.Run(ctx); err != nil {
 					grip.Infof("You may need to accept an email invite to receive access to repo '%s/%s'", projectRef.Owner, projectRef.Repo)
-					return errors.Wrapf(err, "problem running cmd %d of %d to provision %s", idx+1, len(cmds), projectRef.Id)
+					return errors.Wrapf(err, "running command %d of %d to provision project '%s'", idx+1, len(cmds), projectRef.Id)
 				}
 			}
 			return nil
@@ -456,14 +464,14 @@ func hostConfigure() cli.Command {
 func makeWorkingDir(cmd *jasper.Command) error {
 	opts, err := cmd.Export()
 	if err != nil {
-		return errors.Wrap(err, "can't export command options")
+		return errors.Wrap(err, "exporting command options")
 	}
 	if len(opts) == 0 {
 		return errors.New("export returned empty options")
 	}
 
 	workingDir := opts[0].WorkingDirectory
-	return errors.Wrapf(os.MkdirAll(workingDir, 0755), "can't make directory '%s'", workingDir)
+	return errors.Wrapf(os.MkdirAll(workingDir, 0755), "creating directory '%s'", workingDir)
 }
 
 func hostStop() cli.Command {
@@ -489,9 +497,12 @@ func hostStop() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			if wait {
@@ -535,9 +546,12 @@ func hostStart() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			if wait {
@@ -605,14 +619,17 @@ Examples:
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			h, err := client.GetSpawnHost(ctx, hostID)
 			if err != nil {
-				return errors.Wrap(err, "problem getting host")
+				return errors.Wrapf(err, "getting spawn host '%s'", hostID)
 			}
 			if utility.FromStringPtr(h.Status) != evergreen.HostRunning {
 				return errors.New("host is not running")
@@ -674,9 +691,12 @@ func hostAttach() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.getRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "getting REST communicator")
+			}
 			defer client.Close()
 
 			volume := &host.VolumeAttachment{
@@ -721,9 +741,12 @@ func hostDetach() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.getRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "getting REST communicator")
+			}
 			defer client.Close()
 
 			err = client.DetachVolume(ctx, hostID, volumeID)
@@ -796,9 +819,12 @@ func hostModifyVolume() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.getRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "getting REST communicator")
+			}
 			defer client.Close()
 
 			opts := restModel.VolumeModifyOptions{
@@ -827,9 +853,12 @@ func hostListVolume() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.getRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, false)
+			if err != nil {
+				return errors.Wrap(err, "getting REST communicator")
+			}
 			defer client.Close()
 
 			volumes, err := client.GetVolumesByUser(ctx)
@@ -913,9 +942,12 @@ func hostCreateVolume() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.getRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "getting REST communicator")
+			}
 			defer client.Close()
 
 			volumeRequest := &host.Volume{
@@ -962,13 +994,16 @@ func hostDeleteVolume() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.getRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "getting REST communicator")
+			}
 			defer client.Close()
 			v, err := client.GetVolume(ctx, volumeID)
 			if err != nil {
-				return errors.Wrap(err, "problem getting volume")
+				return errors.Wrapf(err, "getting volume '%s'", volumeID)
 			}
 			if v.NoExpiration {
 				msg := fmt.Sprintf("This volume is non-expirable. Please type '%s' if you are sure you want to terminate", deleteConfirmation)
@@ -1006,7 +1041,7 @@ func hostList() cli.Command {
 			},
 			cli.BoolFlag{
 				Name:  jsonFlagName,
-				Usage: "list hosts in json format",
+				Usage: "list hosts in JSON format",
 			},
 		},
 		Before: setPlainLogger,
@@ -1021,9 +1056,12 @@ func hostList() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, !showJSON)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			params := restModel.APIHostParams{
@@ -1033,7 +1071,7 @@ func hostList() cli.Command {
 			}
 			hosts, err := client.GetHosts(ctx, params)
 			if err != nil {
-				return errors.Wrap(err, "problem getting hosts")
+				return errors.Wrap(err, "getting hosts")
 			}
 
 			if showJSON {
@@ -1107,14 +1145,17 @@ func hostTerminate() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			h, err := client.GetSpawnHost(ctx, hostID)
 			if err != nil {
-				return errors.Wrap(err, "problem getting spawn host")
+				return errors.Wrapf(err, "getting spawn host '%s'", hostID)
 			}
 			if h.NoExpiration {
 				msg := fmt.Sprintf("This host is non-expirable. Please type '%s' if you are sure you want to terminate", deleteConfirmation)
@@ -1124,7 +1165,7 @@ func hostTerminate() cli.Command {
 			}
 			err = client.TerminateSpawnHost(ctx, hostID)
 			if err != nil {
-				return errors.Wrap(err, "problem terminating host")
+				return errors.Wrap(err, "terminating spawn host")
 			}
 
 			grip.Infof("Terminated host '%s'", hostID)
@@ -1203,9 +1244,12 @@ func hostRunCommand() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.setupRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer client.Close()
 
 			var hostIDs []string
@@ -1216,13 +1260,13 @@ func hostRunCommand() cli.Command {
 				if createdBefore != "" {
 					createdBeforeTime, err = time.Parse(time.RFC3339, createdBefore)
 					if err != nil {
-						return errors.Wrap(err, "can't parse created before time")
+						return errors.Wrap(err, "parsing created before time")
 					}
 				}
 				if createdAfter != "" {
 					createdAfterTime, err = time.Parse(time.RFC3339, createdAfter)
 					if err != nil {
-						return errors.Wrap(err, "can't parse create after time")
+						return errors.Wrap(err, "parsing created after time")
 					}
 				}
 
@@ -1236,7 +1280,7 @@ func hostRunCommand() cli.Command {
 					Status:        evergreen.HostRunning,
 				})
 				if err != nil {
-					return errors.Wrapf(err, "can't get matching hosts")
+					return errors.Wrapf(err, "getting matching hosts")
 				}
 				if len(hosts) == 0 {
 					grip.Info("no matching hosts")
@@ -1247,7 +1291,7 @@ func hostRunCommand() cli.Command {
 				}
 
 				if !skipConfirm {
-					if !confirm(fmt.Sprintf("The script will run on %d host(s), \n%s\nContinue? (Y/n): ", len(hostIDs), strings.Join(hostIDs, "\n")), true) {
+					if !confirm(fmt.Sprintf("The script will run on %d host(s), \n%s\nContinue?", len(hostIDs), strings.Join(hostIDs, "\n")), true) {
 						return nil
 					}
 				}
@@ -1255,9 +1299,9 @@ func hostRunCommand() cli.Command {
 
 			if path != "" {
 				var scriptBytes []byte
-				scriptBytes, err = ioutil.ReadFile(path)
+				scriptBytes, err = os.ReadFile(path)
 				if err != nil {
-					return errors.Wrapf(err, "can't read script from '%s'", path)
+					return errors.Wrapf(err, "read script from file '%s'", path)
 				}
 				script = string(scriptBytes)
 				if script == "" {
@@ -1267,7 +1311,7 @@ func hostRunCommand() cli.Command {
 
 			hostsOutput, err := client.StartHostProcesses(ctx, hostIDs, script, batchSize)
 			if err != nil {
-				return errors.Wrap(err, "problem running command")
+				return errors.Wrap(err, "starting host processes")
 			}
 
 			// poll for process output
@@ -1286,7 +1330,7 @@ func hostRunCommand() cli.Command {
 				}
 				hostsOutput, err = client.GetHostProcessOutput(ctx, hostsOutput[:runningProcesses], batchSize)
 				if err != nil {
-					return errors.Wrap(err, "can't get process output")
+					return errors.Wrap(err, "getting process output")
 				}
 			}
 
@@ -1494,12 +1538,12 @@ Examples:
 			}
 			if makeParentDirs && !makeParentDirsOnRemote {
 				if err = makeLocalParentDirs(localPath, remotePath, pull); err != nil {
-					return errors.Wrap(err, "could not create directory structure")
+					return errors.Wrap(err, "creating directory structure")
 				}
 			}
 			cmd, err := buildRsyncCommand(opts)
 			if err != nil {
-				return errors.Wrap(err, "could not build rsync command")
+				return errors.Wrap(err, "building rsync command")
 			}
 			return cmd.Run(ctx)
 		},
@@ -1530,17 +1574,20 @@ func hostFindBy() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
-			client := conf.getRestCommunicator(ctx)
+			client, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "getting REST communicator")
+			}
 			defer client.Close()
 
 			host, err := client.FindHostByIpAddress(ctx, ipAddress)
 			if err != nil {
-				return errors.Wrapf(err, "failed to fetch host with ip address '%s'", ipAddress)
+				return errors.Wrapf(err, "fetching host with IP address '%s'", ipAddress)
 			}
 			if host == nil {
-				return errors.Errorf("Host with ip address '%s' not found", ipAddress)
+				return errors.Errorf("host with IP address '%s' not found", ipAddress)
 			}
 
 			hostId := utility.FromStringPtr(host.Id)
@@ -1580,7 +1627,7 @@ func makeLocalParentDirs(local, remote string, pull bool) error {
 		dirs = filepath.Dir(remote)
 	}
 
-	return errors.Wrapf(os.MkdirAll(dirs, 0755), "could not create local parent directories '%s'", dirs)
+	return errors.Wrapf(os.MkdirAll(dirs, 0755), "creating local parent directories '%s'", dirs)
 }
 
 // getUserAndHostname gets the user's spawn hosts and if the hostID matches one
@@ -1592,9 +1639,12 @@ func getUserAndHostname(ctx context.Context, hostID, confPath string) (user, hos
 
 	conf, err := NewClientSettings(confPath)
 	if err != nil {
-		return "", "", errors.Wrap(err, "problem loading configuration")
+		return "", "", errors.Wrap(err, "loading configuration")
 	}
-	client := conf.setupRestCommunicator(ctx)
+	client, err := conf.setupRestCommunicator(ctx, true)
+	if err != nil {
+		return "", "", errors.Wrap(err, "setting up REST communicator")
+	}
 	defer client.Close()
 
 	params := restModel.APIHostParams{
@@ -1604,7 +1654,7 @@ func getUserAndHostname(ctx context.Context, hostID, confPath string) (user, hos
 	}
 	hosts, err := client.GetHosts(ctx, params)
 	if err != nil {
-		return "", "", errors.Wrap(err, "problem getting your spawn hosts")
+		return "", "", errors.Wrap(err, "getting user spawn hosts")
 	}
 
 	for _, h := range hosts {
@@ -1629,13 +1679,13 @@ func verifyRsync(localPath, remotePath string, pull bool) bool {
 	remotePathIsDir := strings.HasSuffix(remotePath, "/")
 
 	if localPathIsDir && !pull {
-		ok := confirm(fmt.Sprintf("The local directory '%s' will overwrite any existing contents in the remote directory '%s'. Continue? (y/N)", localPath, remotePath), false)
+		ok := confirm(fmt.Sprintf("The local directory '%s' will overwrite any existing contents in the remote directory '%s'. Continue?", localPath, remotePath), false)
 		if !ok {
 			return false
 		}
 	}
 	if remotePathIsDir && pull {
-		ok := confirm(fmt.Sprintf("The remote directory '%s' will overwrite any existing contents in the local directory '%s'. Continue? (y/N)", remotePath, localPath), false)
+		ok := confirm(fmt.Sprintf("The remote directory '%s' will overwrite any existing contents in the local directory '%s'. Continue?", remotePath, localPath), false)
 		if !ok {
 			return false
 		}
@@ -1718,11 +1768,11 @@ func buildRsyncCommand(opts rsyncOpts) (*jasper.Command, error) {
 	logLevel := level.Info
 	stdout, err := send.NewPlainLogger("stdout", send.LevelInfo{Threshold: logLevel, Default: logLevel})
 	if err != nil {
-		return nil, errors.Wrap(err, "problem setting up standard output")
+		return nil, errors.Wrap(err, "setting up standard output logger")
 	}
 	stderr, err := send.NewPlainErrorLogger("stderr", send.LevelInfo{Threshold: logLevel, Default: logLevel})
 	if err != nil {
-		return nil, errors.Wrap(err, "problem setting up standard error")
+		return nil, errors.Wrap(err, "setting up standard error logger")
 	}
 	return jasper.NewCommand().Add(args).SetOutputSender(logLevel, stdout).SetOutputSender(logLevel, stderr), nil
 }

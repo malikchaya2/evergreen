@@ -2,7 +2,6 @@ package units
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
 	"time"
@@ -33,6 +32,7 @@ func init() {
 type generateTasksJob struct {
 	job.Base `bson:"job_base" json:"job_base" yaml:"job_base"`
 	TaskID   string `bson:"task_id" json:"task_id" yaml:"task_id"`
+	env      evergreen.Environment
 }
 
 func makeGenerateTaskJob() *generateTasksJob {
@@ -49,17 +49,19 @@ func makeGenerateTaskJob() *generateTasksJob {
 
 // NewGenerateTasksJob returns a job that dynamically updates the project
 // configuration based on the given task's generate.tasks configuration.
-func NewGenerateTasksJob(versionID, taskID string, ts string, useScopes bool) amboy.Job {
+func NewGenerateTasksJob(versionID, taskID string, ts string) amboy.Job {
 	j := makeGenerateTaskJob()
 	j.TaskID = taskID
 
 	j.SetID(fmt.Sprintf("%s-%s-%s", generateTasksJobName, taskID, ts))
-	if useScopes {
-		versionScope := fmt.Sprintf("%s.%s", generateTasksJobName, versionID)
-		taskScope := fmt.Sprintf("%s.%s", generateTasksJobName, taskID)
-		j.SetScopes([]string{versionScope, taskScope})
-		j.SetEnqueueScopes(taskScope)
-	}
+	versionScope := fmt.Sprintf("%s.%s", generateTasksJobName, versionID)
+	taskScope := fmt.Sprintf("%s.%s", generateTasksJobName, taskID)
+	// Setting the version as one of the scopes ensures that, for a given
+	// version, only one generate.tasks job can run at a time. Setting the task
+	// scope as an enqueued scope ensures that, for a given task in a version,
+	// there's only one job that runs generate.tasks on behalf of that task.
+	j.SetScopes([]string{versionScope, taskScope})
+	j.SetEnqueueScopes(taskScope)
 	return j
 }
 
@@ -79,14 +81,14 @@ func (j *generateTasksJob) generate(ctx context.Context, t *task.Task) error {
 
 	v, err := model.VersionFindOneId(t.Version)
 	if err != nil {
-		return errors.Wrapf(err, "error finding version %s", t.Version)
+		return errors.Wrapf(err, "finding version '%s'", t.Version)
 	}
 	if v == nil {
-		return errors.Errorf("unable to find version %s", t.Version)
+		return errors.Errorf("version '%s' not found", t.Version)
 	}
-	projectInfo, err := model.LoadProjectForVersion(v, t.Project, false)
+	project, parserProject, err := model.FindAndTranslateProjectForVersion(ctx, j.env.Settings(), v)
 	if err != nil {
-		return errors.Wrapf(err, "error getting project for version %s", t.Version)
+		return errors.Wrapf(err, "loading project for version '%s'", t.Version)
 	}
 
 	// Get task again, to exit early if another generator finished while we looked for a
@@ -96,10 +98,10 @@ func (j *generateTasksJob) generate(ctx context.Context, t *task.Task) error {
 	// of this race as close to zero as possible.
 	t, err = task.FindOneId(t.Id)
 	if err != nil {
-		return errors.Wrapf(err, "error finding task %s", t.Id)
+		return errors.Wrapf(err, "finding task '%s'", t.Id)
 	}
 	if t == nil {
-		return errors.Errorf("unable to find task %s", t.Id)
+		return errors.Errorf("task '%s' not found", t.Id)
 	}
 	if t.GeneratedTasks {
 		grip.Debug(message.Fields{
@@ -111,13 +113,9 @@ func (j *generateTasksJob) generate(ctx context.Context, t *task.Task) error {
 	}
 
 	var projects []model.GeneratedProject
-	if len(t.GeneratedJSONAsString) > 0 {
-		projects, err = parseProjectsAsString(t.GeneratedJSONAsString)
-	} else {
-		projects, err = parseProjects(t.GeneratedJSON)
-	}
+	projects, err = parseProjectsAsString(t.GeneratedJSONAsString)
 	if err != nil {
-		return errors.Wrap(err, "error parsing JSON from `generate.tasks`")
+		return errors.Wrap(err, "parsing JSON from `generate.tasks`")
 	}
 	grip.Debug(message.Fields{
 		"message":       "generate.tasks timing",
@@ -141,12 +139,12 @@ func (j *generateTasksJob) generate(ctx context.Context, t *task.Task) error {
 		"version":       t.Version,
 	})
 	if err != nil {
-		return errors.Wrap(err, "error merging generated projects")
+		return errors.Wrap(err, "merging generated projects")
 	}
 	g.Task = t
 
 	start = time.Now()
-	p, pp, v, err := g.NewVersion(projectInfo.Project, projectInfo.IntermediateProject, v)
+	p, pp, v, err := g.NewVersion(project, parserProject, v)
 	if err != nil {
 		return j.handleError(pp, v, errors.WithStack(err))
 	}
@@ -197,16 +195,14 @@ func (j *generateTasksJob) generate(ctx context.Context, t *task.Task) error {
 
 	start = time.Now()
 
-	// Don't use the job's context, because it's better to finish than to exit early after a
-	// SIGTERM from a deploy. This should maybe be a context with timeout.
-	err = g.Save(context.Background(), p, pp, v)
+	// Don't use the job's context, because it's better to try finishing than to
+	// exit early after a SIGTERM from app server shutdown.
+	saveCtx, saveCancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer saveCancel()
+	err = g.Save(saveCtx, j.env.Settings(), p, pp, v)
 
 	// If the version or parser project has changed there was a race. Another generator will try again.
 	if adb.ResultsNotFound(err) || db.IsDuplicateKey(err) {
-		return err
-	}
-	// If the document hit the size limit, retrying won't help.
-	if db.IsDocumentLimit(err) {
 		return err
 	}
 	if err != nil {
@@ -224,7 +220,8 @@ func (j *generateTasksJob) generate(ctx context.Context, t *task.Task) error {
 	return nil
 }
 
-// handleError return mongo.ErrNoDocuments if another job has raced, the passed in error otherwise.
+// handleError return mongo.ErrNoDocuments if generate.tasks has already run.
+// Otherwise, it returns the given error.
 func (j *generateTasksJob) handleError(pp *model.ParserProject, v *model.Version, handledError error) error {
 	// Get task again, to exit nil if another generator finished, which caused us to error.
 	// Checking this again here makes it very unlikely that there is a race, because both
@@ -232,41 +229,20 @@ func (j *generateTasksJob) handleError(pp *model.ParserProject, v *model.Version
 	// save the config and set the task's boolean.
 	t, err := task.FindOneId(j.TaskID)
 	if err != nil {
-		return errors.Wrapf(err, "error finding task %s", j.TaskID)
+		return errors.Wrapf(err, "finding task '%s'", j.TaskID)
 	}
 	if t == nil {
-		return errors.Errorf("unable to find task %s", j.TaskID)
+		return errors.Errorf("task '%s' not found", j.TaskID)
 	}
 	if t.GeneratedTasks {
 		grip.Debug(message.Fields{
-			"message": "handledError encountered task that already generating, nooping",
+			"message": "handleError encountered task that is already generating, nooping",
 			"task":    t.Id,
 			"version": t.Version,
 		})
 		return mongo.ErrNoDocuments
 	}
 
-	if v == nil {
-		return handledError
-	}
-	versionFromDB, err := model.VersionFindOne(model.VersionById(v.Id).WithFields(model.VersionConfigNumberKey))
-	if err != nil {
-		return errors.Wrapf(err, "problem finding version %s", v.Id)
-	}
-	if versionFromDB == nil {
-		return errors.Errorf("could not find version %s", v.Id)
-	}
-	ppFromDB, err := model.ParserProjectFindOne(model.ParserProjectById(v.Id).WithFields(model.ParserProjectConfigNumberKey))
-	if err != nil {
-		return errors.Wrapf(err, "problem finding parser project %s", v.Id)
-	}
-	// If the config update number has been updated, then another task has raced with us.
-	// The error is therefore not an actual configuration problem but instead a symptom
-	// of the race.
-	if v.ConfigUpdateNumber != versionFromDB.ConfigUpdateNumber ||
-		pp != nil && ppFromDB != nil && pp.ConfigUpdateNumber != ppFromDB.ConfigUpdateNumber {
-		return mongo.ErrNoDocuments
-	}
 	return handledError
 }
 
@@ -276,12 +252,15 @@ func (j *generateTasksJob) Run(ctx context.Context) {
 
 	t, err := task.FindOneId(j.TaskID)
 	if err != nil {
-		j.AddError(errors.Wrapf(err, "problem finding task %s", j.TaskID))
+		j.AddError(errors.Wrapf(err, "finding task '%s'", j.TaskID))
 		return
 	}
 	if t == nil {
-		j.AddError(errors.Errorf("task %s does not exist", j.TaskID))
+		j.AddError(errors.Errorf("task '%s' not found", j.TaskID))
 		return
+	}
+	if j.env == nil {
+		j.env = evergreen.GetEnvironment()
 	}
 
 	err = j.generate(ctx, t)
@@ -346,19 +325,6 @@ func parseProjectsAsString(jsonStrings []string) ([]model.GeneratedProject, erro
 	var projects []model.GeneratedProject
 	for _, f := range jsonStrings {
 		p, err := model.ParseProjectFromJSONString(f)
-		if err != nil {
-			catcher.Add(err)
-		}
-		projects = append(projects, p)
-	}
-	return projects, catcher.Resolve()
-}
-
-func parseProjects(jsonBytes []json.RawMessage) ([]model.GeneratedProject, error) {
-	catcher := grip.NewBasicCatcher()
-	var projects []model.GeneratedProject
-	for _, f := range jsonBytes {
-		p, err := model.ParseProjectFromJSON(f)
 		if err != nil {
 			catcher.Add(err)
 		}

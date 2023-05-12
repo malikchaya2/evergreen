@@ -2,12 +2,12 @@
 name := evergreen
 buildDir := bin
 nodeDir := public
-packages := $(name) agent agent-command agent-util agent-internal agent-internal-client operations cloud cloud-userdata
+packages := $(name) agent agent-command agent-util agent-internal agent-internal-client agent-internal-testutil operations cloud cloud-userdata
 packages += db util plugin units graphql thirdparty thirdparty-docker auth scheduler model validator service repotracker cmd-codegen-core mock
-packages += model-annotations model-patch model-artifact model-host model-pod model-pod-dispatcher model-build model-event model-task model-user model-distro model-manifest model-testresult
-packages += operations-metabuild-generator operations-metabuild-model model-commitqueue
-packages += rest-client rest-data rest-route rest-model migrations trigger model-alertrecord model-notification model-stats model-reliability
-lintOnlyPackages := api apimodels testutil model-manifest model-testutil service-testutil service-graphql db-mgo db-mgo-bson db-mgo-internal-json
+packages += model-annotations model-patch model-artifact model-host model-pod model-pod-definition model-pod-dispatcher model-build model-event model-task model-user model-distro model-manifest model-testresult
+packages += model-commitqueue
+packages += rest-client rest-data rest-route rest-model migrations trigger model-alertrecord model-notification model-taskstats model-reliability
+lintOnlyPackages := api apimodels testutil model-manifest model-testutil service-testutil service-graphql db-mgo db-mgo-bson db-mgo-internal-json rest
 testOnlyPackages := service-graphql # has only test files so can't undergo all operations
 orgPath := github.com/evergreen-ci
 projectPath := $(orgPath)/$(name)
@@ -97,8 +97,11 @@ testSrcFiles := makefile $(shell find . -name "*.go" -not -path "./$(buildDir)/*
 currentHash := $(shell git rev-parse HEAD)
 agentVersion := $(shell grep "AgentVersion" config.go | tr -d '\tAgentVersion = ' | tr -d '"')
 ldFlags := $(if $(DEBUG_ENABLED),,-w -s )-X=github.com/evergreen-ci/evergreen.BuildRevision=$(currentHash)
+gcFlags := $(if $(STAGING_ONLY),-N -l,)
 karmaFlags := $(if $(KARMA_REPORTER),--reporters $(KARMA_REPORTER),)
-smokeFile := $(if $(SMOKE_TEST_FILE),--test-file $(SMOKE_TEST_FILE),)
+
+goLintInstallerVersion := "v1.51.2"
+goLintInstallerChecksum := "0e09dedc7e35f511b7924b885e50d7fe48eef25bec78c86f22f5b5abd24976cc"
 # end evergreen specific configuration
 
 ######################################################################
@@ -110,14 +113,14 @@ smokeFile := $(if $(SMOKE_TEST_FILE),--test-file $(SMOKE_TEST_FILE),)
 
 # start rules for building services and clients
 ifeq ($(OS),Windows_NT)
-localClientBinary := $(clientBuildDir)/$(goos)_$(goarch)/evergreen.exe
+localClientBinary := $(clientBuildDir)/$(goos)_$(goarch)/$(windowsBinaryBasename)
 else
-localClientBinary := $(clientBuildDir)/$(goos)_$(goarch)/evergreen
+localClientBinary := $(clientBuildDir)/$(goos)_$(goarch)/$(unixBinaryBasename)
 endif
 cli:$(localClientBinary)
 clis:$(clientBinaries)
-$(clientBuildDir)/%/evergreen $(clientBuildDir)/%/evergreen.exe:$(buildDir)/build-cross-compile $(srcFiles)
-	@./$(buildDir)/build-cross-compile -buildName=$* -ldflags="$(ldFlags)" -goBinary="$(gobin)" -directory=$(clientBuildDir) -source=$(clientSource) -output=$@
+$(clientBuildDir)/%/$(unixBinaryBasename) $(clientBuildDir)/%/$(windowsBinaryBasename):$(buildDir)/build-cross-compile $(srcFiles) go.mod go.sum
+	@./$(buildDir)/build-cross-compile -buildName=$* -ldflags="$(ldFlags)" -gcflags="$(gcFlags)" -goBinary="$(gobin)" -directory=$(clientBuildDir) -source=$(clientSource) -output=$@
 # Targets to upload the CLI binaries to S3.
 $(buildDir)/upload-s3:cmd/upload-s3/upload-s3.go
 	@$(gobin) build -o $@ $<
@@ -137,10 +140,11 @@ $(buildDir)/set-project-var:cmd/set-project-var/set-project-var.go
 	$(gobin) build -o $@ $<
 set-var:$(buildDir)/set-var
 set-project-var:$(buildDir)/set-project-var
-set-smoke-vars:$(buildDir)/.load-smoke-data
-	@./bin/set-project-var -dbName mci_smoke -key aws_key -value $(AWS_KEY)
-	@./bin/set-project-var -dbName mci_smoke -key aws_secret -value $(AWS_SECRET)
-	@./bin/set-var -dbName=mci_smoke -collection=hosts -id=localhost -key=agent_revision -value=$(agentVersion)
+set-smoke-vars:$(buildDir)/.load-smoke-data $(buildDir)/set-project-var $(buildDir)/set-var
+	@$(buildDir)/set-project-var -dbName mci_smoke -key aws_key -value $(AWS_KEY)
+	@$(buildDir)/set-project-var -dbName mci_smoke -key aws_secret -value $(AWS_SECRET)
+	@$(buildDir)/set-var -dbName=mci_smoke -collection=hosts -id=localhost -key=agent_revision -value=$(agentVersion)
+	@$(buildDir)/set-var -dbName=mci_smoke -collection=pods -id=localhost -key=agent_version -value=$(agentVersion)
 load-smoke-data:$(buildDir)/.load-smoke-data
 load-local-data:$(buildDir)/.load-local-data
 $(buildDir)/.load-smoke-data:$(buildDir)/load-smoke-data
@@ -150,18 +154,33 @@ $(buildDir)/.load-local-data:$(buildDir)/load-smoke-data
 	./$< -path testdata/local -dbName evergreen_local -amboyDBName amboy_local
 	@touch $@
 smoke-test-agent-monitor:$(localClientBinary) load-smoke-data
+	# Start the smoke test's Evergreen app server.
 	./$< service deploy start-evergreen --web --binary ./$< &
+	# Start the smoke test's agent monitor, which will run the Evergreen agent based on the locally-compiled Evergreen
+	# executable. This agent will coordinate with the app server to run the smoke test's tasks.
+	# It is necessary to set up this locally-running agent because the app server can't actually start hosts to run
+	# tasks.
+	# Note that the distro comes from the smoke test's DB files.
 	./$< service deploy start-evergreen --monitor --binary ./$< --distro localhost &
-	./$< service deploy test-endpoints --check-build --username admin --key abb623665fdbf368a1db980dde6ee0f0 $(smokeFile) || (pkill -f $<; exit 1)
+	# Run the smoke test's actual tests.
+	# The username/password to is used to authenticate to the app server, and these credentials come from the smoke
+	# test's DB files.
+	./$< service deploy test-endpoints --check-build --username admin --key abb623665fdbf368a1db980dde6ee0f0
+	# Clean up all smoke test Evergreen executable processes.
 	pkill -f $<
-smoke-test-task:$(localClientBinary) load-smoke-data
+smoke-test-host-task:$(localClientBinary) load-smoke-data
 	./$< service deploy start-evergreen --web --binary ./$< &
-	./$< service deploy start-evergreen --agent --binary ./$< &
-	./$< service deploy test-endpoints --check-build --username admin --key abb623665fdbf368a1db980dde6ee0f0 $(smokeFile) || (pkill -f $<; exit 1)
+	./$< service deploy start-evergreen --mode host --agent --binary ./$< &
+	./$< service deploy test-endpoints --check-build --mode host --username admin --key abb623665fdbf368a1db980dde6ee0f0
+	pkill -f $<
+smoke-test-container-task:$(localClientBinary) load-smoke-data
+	./$< service deploy start-evergreen --web --binary ./$< &
+	./$< service deploy start-evergreen --mode pod --agent --binary ./$< &
+	./$< service deploy test-endpoints --check-build --mode pod --username admin --key abb623665fdbf368a1db980dde6ee0f0
 	pkill -f $<
 smoke-test-endpoints:$(localClientBinary) load-smoke-data
 	./$< service deploy start-evergreen --web --binary ./$< &
-	./$< service deploy test-endpoints --username admin --key abb623665fdbf368a1db980dde6ee0f0 $(smokeFile) || (pkill -f $<; exit 1)
+	./$< service deploy test-endpoints --username admin --key abb623665fdbf368a1db980dde6ee0f0
 	pkill -f $<
 local-evergreen:$(localClientBinary) load-local-data
 	./$< service deploy start-local-evergreen
@@ -179,7 +198,7 @@ local-evergreen:$(localClientBinary) load-local-data
 
 # start output files
 testOutput := $(foreach target,$(packages) $(testOnlyPackages),$(buildDir)/output.$(target).test)
-lintOutput := $(foreach target,$(packages),$(buildDir)/output.$(target).lint)
+lintOutput := $(foreach target,$(packages) $(lintOnlyPackages),$(buildDir)/output.$(target).lint)
 coverageOutput := $(foreach target,$(packages),$(buildDir)/output.$(target).coverage)
 coverageHtmlOutput := $(foreach target,$(packages),$(buildDir)/output.$(target).coverage.html)
 # end output files
@@ -188,7 +207,9 @@ coverageHtmlOutput := $(foreach target,$(packages),$(buildDir)/output.$(target).
 $(buildDir)/.lintSetup:$(buildDir)/golangci-lint
 	@touch $@
 $(buildDir)/golangci-lint:
-	@curl --retry 10 --retry-max-time 120 -sSfL https://raw.githubusercontent.com/golangci/golangci-lint/master/install.sh | sh -s -- -b $(buildDir) v1.40.0 >/dev/null 2>&1 && touch $@
+	@curl --retry 10 --retry-max-time 120 -sSfL -o "$(buildDir)/install.sh" https://raw.githubusercontent.com/golangci/golangci-lint/$(goLintInstallerVersion)/install.sh
+	@echo "$(goLintInstallerChecksum) $(buildDir)/install.sh" | sha256sum --check
+	@bash $(buildDir)/install.sh -b $(buildDir) $(goLintInstallerVersion) >/dev/null 2>&1 && touch $@
 $(buildDir)/run-linter:cmd/run-linter/run-linter.go $(buildDir)/.lintSetup
 	$(gobin) build -ldflags "-w" -o $@ $<
 # end lint setup targets
@@ -241,9 +262,10 @@ $(clientBuildDir)/%/.signed:$(buildDir)/sign-executable $(clientBuildDir)/%/$(un
 	./$< sign --client $(buildDir)/macnotary --executable $(@D)/$(unixBinaryBasename) --server-url $(NOTARY_SERVER_URL) --bundle-id $(EVERGREEN_BUNDLE_ID)
 	touch $@
 
-dist-staging: export STAGING_ONLY := 1
 dist-staging:
-	make dist
+	STAGING_ONLY=1 DEBUG_ENABLED=1 SIGN_MACOS= $(MAKE) dist
+dist-unsigned:
+	SIGN_MACOS= $(MAKE) dist
 dist:$(buildDir)/dist.tar.gz
 $(buildDir)/dist.tar.gz:$(buildDir)/make-tarball $(clientBinaries) $(uiFiles) $(if $(SIGN_MACOS),$(foreach platform,$(macOSPlatforms),$(clientBuildDir)/$(platform)/.signed))
 	./$< --name $@ --prefix $(name) $(foreach item,$(distContents),--item $(item)) --exclude "public/node_modules" --exclude "clients/.cache"
@@ -379,15 +401,16 @@ mongodb/.get-mongodb:
 get-mongodb:mongodb/.get-mongodb
 	@touch $<
 start-mongod:mongodb/.get-mongodb
-	./mongodb/mongod $(if $(AUTH_ENABLED),--auth,) --dbpath ./mongodb/db_files --port 27017 --replSet evg --oplogSize 10
+ifdef AUTH_ENABLED
+	echo "replica set key" > ./mongodb/keyfile.txt
+	chmod 600 ./mongodb/keyfile.txt
+endif
+	./mongodb/mongod $(if $(AUTH_ENABLED),--auth --keyFile ./mongodb/keyfile.txt,) --dbpath ./mongodb/db_files --port 27017 --replSet evg --oplogSize 10
 configure-mongod:mongodb/.get-mongodb
 	./mongodb/mongo --nodb --eval "assert.soon(function(x){try{var d = new Mongo(\"localhost:27017\"); return true}catch(e){return false}}, \"timed out connecting\")"
 	@echo "mongod is up"
 	./mongodb/mongo --eval 'rs.initiate()'
-ifdef $(FCV)
-	./mongodb/mongo --eval 'db.adminCommand({setFeatureCompatibilityVersion: "$(FCV)"})'
-endif
-ifdef $(AUTH_ENABLED)
+ifdef AUTH_ENABLED
 	./mongodb/mongo --host `./mongodb/mongo --quiet --eval "db.isMaster()['primary']"` cmd/mongo-auth/create_auth_user.js
 endif
 	@echo "configured mongod"

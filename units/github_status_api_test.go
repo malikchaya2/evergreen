@@ -16,7 +16,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/evergreen/thirdparty"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/grip/message"
 	"github.com/mongodb/grip/send"
 	"github.com/stretchr/testify/suite"
@@ -37,7 +37,7 @@ func TestGithubStatusUpdate(t *testing.T) {
 }
 
 func (s *githubStatusUpdateSuite) SetupTest() {
-	s.NoError(db.ClearCollections(evergreen.ConfigCollection, patch.Collection, patch.IntentCollection, model.ProjectRefCollection, evergreen.ConfigCollection))
+	s.NoError(db.ClearCollections(patch.Collection, patch.IntentCollection, model.ProjectRefCollection, evergreen.ConfigCollection))
 
 	uiConfig := evergreen.UIConfig{}
 	uiConfig.Url = "https://example.com"
@@ -95,7 +95,7 @@ func (s *githubStatusUpdateSuite) TestRunInDegradedMode() {
 	job.Run(context.Background())
 
 	s.Error(job.Error())
-	s.Contains(job.Error().Error(), "github status updates are disabled, not updating status")
+	s.Contains(job.Error().Error(), "GitHub status updates are disabled, not updating status")
 }
 
 func (s *githubStatusUpdateSuite) TestForPatchCreated() {

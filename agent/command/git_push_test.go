@@ -4,17 +4,15 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"path"
 	"strings"
 	"testing"
 
+	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/agent/internal"
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
-	"github.com/evergreen-ci/evergreen/apimodels"
 	"github.com/evergreen-ci/evergreen/model"
-	"github.com/evergreen-ci/evergreen/model/distro"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/thirdparty"
@@ -37,11 +35,12 @@ func TestGitPush(t *testing.T) {
 	conf := &internal.TaskConfig{
 		Task:       &task.Task{},
 		ProjectRef: &model.ProjectRef{Branch: "main"},
-		Distro:     &apimodels.DistroView{CloneMethod: distro.CloneMethodOAuth},
 		Expansions: &util.Expansions{},
 	}
 	logger, err := comm.GetLoggerProducer(context.Background(), client.TaskData{}, nil)
 	require.NoError(t, err)
+
+	assert.Equal(t, conf.GetCloneMethod(), evergreen.CloneMethodOAuth)
 
 	var splitCommand []string
 	for name, test := range map[string]func(*testing.T){
@@ -78,7 +77,7 @@ func TestGitPush(t *testing.T) {
 
 			commands := []string{
 				"git checkout main",
-				"git push origin main",
+				"git push origin refs/heads/main",
 			}
 
 			assert.Len(t, manager.Procs, len(commands))
@@ -97,11 +96,9 @@ func TestGitPush(t *testing.T) {
 			c.base.jasper = jpm
 			c.DryRun = true
 
-			var repoDir string
-			repoDir, err = ioutil.TempDir("", "test_repo")
-			require.NoError(t, err)
-			require.NoError(t, ioutil.WriteFile(path.Join(repoDir, "test1.txt"), []byte("test1"), 0644))
-			require.NoError(t, ioutil.WriteFile(path.Join(repoDir, "test2.txt"), []byte("test2"), 0644))
+			repoDir := t.TempDir()
+			require.NoError(t, os.WriteFile(path.Join(repoDir, "test1.txt"), []byte("test1"), 0644))
+			require.NoError(t, os.WriteFile(path.Join(repoDir, "test2.txt"), []byte("test2"), 0644))
 
 			// create repo
 			createRepoCommands := []string{
@@ -112,7 +109,7 @@ func TestGitPush(t *testing.T) {
 			cmd := jpm.CreateCommand(ctx).Directory(repoDir).Append(createRepoCommands...)
 			require.NoError(t, cmd.Run(ctx))
 
-			require.NoError(t, ioutil.WriteFile(path.Join(repoDir, "test3.txt"), []byte("test3"), 0644))
+			require.NoError(t, os.WriteFile(path.Join(repoDir, "test3.txt"), []byte("test3"), 0644))
 			toApplyCommands := []string{
 				`git rm test1.txt`,
 				`git add test3.txt`,
@@ -136,8 +133,6 @@ func TestGitPush(t *testing.T) {
 			require.Len(t, filesChangedSlice, 2)
 			assert.Equal(t, "test1.txt", filesChangedSlice[0])
 			assert.Equal(t, "test3.txt", filesChangedSlice[1])
-
-			assert.NoError(t, os.RemoveAll(repoDir))
 		},
 		"PushPatchMock": func(*testing.T) {
 			manager := &mock.Manager{}
@@ -157,7 +152,7 @@ func TestGitPush(t *testing.T) {
 
 			assert.NoError(t, c.pushPatch(context.Background(), logger, params))
 			commands := []string{
-				"git push origin main",
+				"git push origin refs/heads/main",
 			}
 			require.Len(t, manager.Procs, len(commands))
 			for i, proc := range manager.Procs {

@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,17 +100,13 @@ func TestTarGzCommandMakeArchive(t *testing.T) {
 
 			Convey("the correct files should be included and excluded", func() {
 
-				target, err := ioutil.TempFile("", "target.tgz")
+				target, err := os.CreateTemp("", "target.tgz")
 				require.NoError(t, err)
 				defer func() {
 					assert.NoError(t, os.RemoveAll(target.Name()))
 				}()
 				require.NoError(t, target.Close())
-				outputDir, err := ioutil.TempDir("", "archive_targz_output")
-				require.NoError(t, err)
-				defer func() {
-					assert.NoError(t, os.RemoveAll(outputDir))
-				}()
+				outputDir := t.TempDir()
 
 				params := map[string]interface{}{
 					"target":        target.Name(),

@@ -1,6 +1,7 @@
 package model
 
 import (
+	"encoding/json"
 	"fmt"
 	"reflect"
 	"time"
@@ -25,6 +26,19 @@ type UIProjectFields struct {
 	Owner       string `json:"owner_name"`
 }
 
+type GetProjectTaskExecutionReq struct {
+	TaskName     string   `json:"task_name"`
+	BuildVariant string   `json:"build_variant"`
+	Requesters   []string `json:"requesters"`
+
+	StartTime string `json:"start_time"`
+	EndTime   string `json:"end_time"`
+}
+
+type ProjectTaskExecutionResp struct {
+	NumCompleted int `json:"num_completed"`
+}
+
 type APITriggerDefinition struct {
 	Project           *string `json:"project"`
 	Level             *string `json:"level"` //build or task
@@ -37,7 +51,7 @@ type APITriggerDefinition struct {
 	Alias             *string `json:"alias"`
 }
 
-func (t *APITriggerDefinition) ToService() (interface{}, error) {
+func (t *APITriggerDefinition) ToService() model.TriggerDefinition {
 	return model.TriggerDefinition{
 		Project:           utility.FromStringPtr(t.Project),
 		Level:             utility.FromStringPtr(t.Level),
@@ -48,19 +62,10 @@ func (t *APITriggerDefinition) ToService() (interface{}, error) {
 		ConfigFile:        utility.FromStringPtr(t.ConfigFile),
 		Alias:             utility.FromStringPtr(t.Alias),
 		DateCutoff:        t.DateCutoff,
-	}, nil
+	}
 }
 
-func (t *APITriggerDefinition) BuildFromService(h interface{}) error {
-	var triggerDef model.TriggerDefinition
-	switch v := h.(type) {
-	case model.TriggerDefinition:
-		triggerDef = v
-	case *model.TriggerDefinition:
-		triggerDef = *v
-	default:
-		return errors.Errorf("programmatic error: expected downstream trigger definition but got type %T", h)
-	}
+func (t *APITriggerDefinition) BuildFromService(triggerDef model.TriggerDefinition) {
 	t.Project = utility.ToStringPtr(triggerDef.Project)
 	t.Level = utility.ToStringPtr(triggerDef.Level)
 	t.DefinitionID = utility.ToStringPtr(triggerDef.DefinitionID)
@@ -70,7 +75,6 @@ func (t *APITriggerDefinition) BuildFromService(h interface{}) error {
 	t.ConfigFile = utility.ToStringPtr(triggerDef.ConfigFile)
 	t.Alias = utility.ToStringPtr(triggerDef.Alias)
 	t.DateCutoff = triggerDef.DateCutoff
-	return nil
 }
 
 type APIPatchTriggerDefinition struct {
@@ -83,16 +87,7 @@ type APIPatchTriggerDefinition struct {
 	VariantsTasks          []VariantTask      `json:"variants_tasks,omitempty"`
 }
 
-func (t *APIPatchTriggerDefinition) BuildFromService(h interface{}) error {
-	var def patch.PatchTriggerDefinition
-	switch v := h.(type) {
-	case patch.PatchTriggerDefinition:
-		def = v
-	case *patch.PatchTriggerDefinition:
-		def = *v
-	default:
-		return errors.Errorf("programmatic error: expected patch trigger definition but got %T", h)
-	}
+func (t *APIPatchTriggerDefinition) BuildFromService(def patch.PatchTriggerDefinition) error {
 	t.ChildProjectId = utility.ToStringPtr(def.ChildProject) // we store the real ID in the child project field
 	identifier, err := model.GetIdentifierForProject(def.ChildProject)
 	if err != nil {
@@ -106,16 +101,14 @@ func (t *APIPatchTriggerDefinition) BuildFromService(h interface{}) error {
 	var specifiers []APITaskSpecifier
 	for _, ts := range def.TaskSpecifiers {
 		specifier := APITaskSpecifier{}
-		if err := specifier.BuildFromService(ts); err != nil {
-			return errors.Wrap(err, "converting task specifier to API model")
-		}
+		specifier.BuildFromService(ts)
 		specifiers = append(specifiers, specifier)
 	}
 	t.TaskSpecifiers = specifiers
 	return nil
 }
 
-func (t *APIPatchTriggerDefinition) ToService() (interface{}, error) {
+func (t *APIPatchTriggerDefinition) ToService() patch.PatchTriggerDefinition {
 	trigger := patch.PatchTriggerDefinition{}
 
 	trigger.ChildProject = utility.FromStringPtr(t.ChildProjectIdentifier) // we'll fix this to be the ID in case it's changed
@@ -124,18 +117,10 @@ func (t *APIPatchTriggerDefinition) ToService() (interface{}, error) {
 	trigger.ParentAsModule = utility.FromStringPtr(t.ParentAsModule)
 	var specifiers []patch.TaskSpecifier
 	for _, ts := range t.TaskSpecifiers {
-		i, err := ts.ToService()
-		if err != nil {
-			return nil, errors.Wrapf(err, "converting task specifier to service model")
-		}
-		specifier, ok := i.(patch.TaskSpecifier)
-		if !ok {
-			return nil, errors.Errorf("programmatic error: expected task specifier but got type %T", i)
-		}
-		specifiers = append(specifiers, specifier)
+		specifiers = append(specifiers, ts.ToService())
 	}
 	trigger.TaskSpecifiers = specifiers
-	return trigger, nil
+	return trigger
 }
 
 type APITaskSpecifier struct {
@@ -144,104 +129,106 @@ type APITaskSpecifier struct {
 	VariantRegex *string `json:"variant_regex,omitempty"`
 }
 
-func (ts *APITaskSpecifier) BuildFromService(h interface{}) error {
-	var def patch.TaskSpecifier
-	switch v := h.(type) {
-	case patch.TaskSpecifier:
-		def = v
-	case *patch.TaskSpecifier:
-		def = *v
-	default:
-		return errors.Errorf("programmatic error: expected patch task specifier but got type %T", h)
-	}
+func (ts *APITaskSpecifier) BuildFromService(def patch.TaskSpecifier) {
 	ts.PatchAlias = utility.ToStringPtr(def.PatchAlias)
 	ts.TaskRegex = utility.ToStringPtr(def.TaskRegex)
 	ts.VariantRegex = utility.ToStringPtr(def.VariantRegex)
-	return nil
 }
 
-func (t *APITaskSpecifier) ToService() (interface{}, error) {
+func (t *APITaskSpecifier) ToService() patch.TaskSpecifier {
 	specifier := patch.TaskSpecifier{}
 
 	specifier.PatchAlias = utility.FromStringPtr(t.PatchAlias)
 	specifier.TaskRegex = utility.FromStringPtr(t.TaskRegex)
 	specifier.VariantRegex = utility.FromStringPtr(t.VariantRegex)
-	return specifier, nil
+	return specifier
 }
 
 type APIPeriodicBuildDefinition struct {
 	ID            *string    `json:"id"`
 	ConfigFile    *string    `json:"config_file"`
 	IntervalHours *int       `json:"interval_hours"`
+	Cron          *string    `json:"cron"`
 	Alias         *string    `json:"alias,omitempty"`
 	Message       *string    `json:"message,omitempty"`
 	NextRunTime   *time.Time `json:"next_run_time,omitempty"`
 }
 
-type APICommitQueueParams struct {
-	Enabled       *bool   `json:"enabled"`
-	RequireSigned *bool   `json:"require_signed"`
-	MergeMethod   *string `json:"merge_method"`
-	Message       *string `json:"message"`
+type APIExternalLink struct {
+	URLTemplate *string `json:"url_template"`
+	DisplayName *string `json:"display_name"`
 }
 
-func (bd *APIPeriodicBuildDefinition) ToService() (interface{}, error) {
+func (t *APIExternalLink) ToService() model.ExternalLink {
+	return model.ExternalLink{
+		URLTemplate: utility.FromStringPtr(t.URLTemplate),
+		DisplayName: utility.FromStringPtr(t.DisplayName),
+	}
+}
+
+func (t *APIExternalLink) BuildFromService(h model.ExternalLink) {
+	t.URLTemplate = utility.ToStringPtr(h.URLTemplate)
+	t.DisplayName = utility.ToStringPtr(h.DisplayName)
+}
+
+type APIProjectBanner struct {
+	Theme evergreen.BannerTheme `json:"theme"`
+	Text  *string               `json:"text"`
+}
+
+func (t *APIProjectBanner) ToService() model.ProjectBanner {
+	return model.ProjectBanner{
+		Theme: t.Theme,
+		Text:  utility.FromStringPtr(t.Text),
+	}
+}
+
+func (t *APIProjectBanner) BuildFromService(h model.ProjectBanner) {
+	t.Theme = h.Theme
+	t.Text = utility.ToStringPtr(h.Text)
+}
+
+type APICommitQueueParams struct {
+	Enabled     *bool   `json:"enabled"`
+	MergeMethod *string `json:"merge_method"`
+	Message     *string `json:"message"`
+}
+
+func (bd *APIPeriodicBuildDefinition) ToService() model.PeriodicBuildDefinition {
 	buildDef := model.PeriodicBuildDefinition{}
 	buildDef.ID = utility.FromStringPtr(bd.ID)
 	buildDef.ConfigFile = utility.FromStringPtr(bd.ConfigFile)
 	buildDef.IntervalHours = utility.FromIntPtr(bd.IntervalHours)
+	buildDef.Cron = utility.FromStringPtr(bd.Cron)
 	buildDef.Alias = utility.FromStringPtr(bd.Alias)
 	buildDef.Message = utility.FromStringPtr(bd.Message)
 	buildDef.NextRunTime = utility.FromTimePtr(bd.NextRunTime)
-	return buildDef, nil
+	return buildDef
 }
 
-func (bd *APIPeriodicBuildDefinition) BuildFromService(h interface{}) error {
-	var params model.PeriodicBuildDefinition
-	switch v := h.(type) {
-	case model.PeriodicBuildDefinition:
-		params = v
-	case *model.PeriodicBuildDefinition:
-		params = *v
-	default:
-		return errors.Errorf("programmatic error: expected periodic build definition but got type %T", h)
-	}
+func (bd *APIPeriodicBuildDefinition) BuildFromService(params model.PeriodicBuildDefinition) {
 	bd.ID = utility.ToStringPtr(params.ID)
 	bd.ConfigFile = utility.ToStringPtr(params.ConfigFile)
 	bd.IntervalHours = utility.ToIntPtr(params.IntervalHours)
+	bd.Cron = utility.ToStringPtr(params.Cron)
 	bd.Alias = utility.ToStringPtr(params.Alias)
 	bd.Message = utility.ToStringPtr(params.Message)
 	bd.NextRunTime = utility.ToTimePtr(params.NextRunTime)
-	return nil
 }
 
-func (cqParams *APICommitQueueParams) BuildFromService(h interface{}) error {
-	var params model.CommitQueueParams
-	switch v := h.(type) {
-	case model.CommitQueueParams:
-		params = v
-	case *model.CommitQueueParams:
-		params = *v
-	default:
-		return errors.Errorf("programmatic error: expected commit queue params but got type %T", h)
-	}
-
+func (cqParams *APICommitQueueParams) BuildFromService(params model.CommitQueueParams) {
 	cqParams.Enabled = utility.BoolPtrCopy(params.Enabled)
-	cqParams.RequireSigned = utility.BoolPtrCopy(params.RequireSigned)
 	cqParams.MergeMethod = utility.ToStringPtr(params.MergeMethod)
 	cqParams.Message = utility.ToStringPtr(params.Message)
-
-	return nil
 }
 
-func (cqParams *APICommitQueueParams) ToService() (interface{}, error) {
+func (cqParams *APICommitQueueParams) ToService() model.CommitQueueParams {
 	serviceParams := model.CommitQueueParams{}
 	serviceParams.Enabled = utility.BoolPtrCopy(cqParams.Enabled)
-	serviceParams.RequireSigned = utility.BoolPtrCopy(cqParams.RequireSigned)
 	serviceParams.MergeMethod = utility.FromStringPtr(cqParams.MergeMethod)
 	serviceParams.Message = utility.FromStringPtr(cqParams.Message)
 
-	return serviceParams, nil
+	return serviceParams
 }
 
 type APIBuildBaronSettings struct {
@@ -254,16 +241,7 @@ type APIBuildBaronSettings struct {
 	BFSuggestionFeaturesURL *string   `bson:"bf_suggestion_features_url" json:"bf_suggestion_features_url"`
 }
 
-func (bb *APIBuildBaronSettings) BuildFromService(h interface{}) error {
-	var def evergreen.BuildBaronSettings
-	switch v := h.(type) {
-	case evergreen.BuildBaronSettings:
-		def = v
-	case *evergreen.BuildBaronSettings:
-		def = *v
-	default:
-		return errors.Errorf("programmatic error: expected build baron config but got type %T", h)
-	}
+func (bb *APIBuildBaronSettings) BuildFromService(def evergreen.BuildBaronSettings) {
 	bb.TicketCreateProject = utility.ToStringPtr(def.TicketCreateProject)
 	bb.TicketSearchProjects = utility.ToStringPtrSlice(def.TicketSearchProjects)
 	bb.BFSuggestionServer = utility.ToStringPtr(def.BFSuggestionServer)
@@ -271,20 +249,18 @@ func (bb *APIBuildBaronSettings) BuildFromService(h interface{}) error {
 	bb.BFSuggestionPassword = utility.ToStringPtr(def.BFSuggestionPassword)
 	bb.BFSuggestionTimeoutSecs = utility.ToIntPtr(def.BFSuggestionTimeoutSecs)
 	bb.BFSuggestionFeaturesURL = utility.ToStringPtr(def.BFSuggestionFeaturesURL)
-	return nil
 }
 
-func (bb *APIBuildBaronSettings) ToService() (interface{}, error) {
-	buildbaron := evergreen.BuildBaronSettings{}
-
-	buildbaron.TicketCreateProject = utility.FromStringPtr(bb.TicketCreateProject)
-	buildbaron.TicketSearchProjects = utility.FromStringPtrSlice(bb.TicketSearchProjects)
-	buildbaron.BFSuggestionServer = utility.FromStringPtr(bb.BFSuggestionServer)
-	buildbaron.BFSuggestionUsername = utility.FromStringPtr(bb.BFSuggestionUsername)
-	buildbaron.BFSuggestionPassword = utility.FromStringPtr(bb.BFSuggestionPassword)
-	buildbaron.BFSuggestionTimeoutSecs = utility.FromIntPtr(bb.BFSuggestionTimeoutSecs)
-	buildbaron.BFSuggestionFeaturesURL = utility.FromStringPtr(bb.BFSuggestionFeaturesURL)
-	return buildbaron, nil
+func (bb *APIBuildBaronSettings) ToService() evergreen.BuildBaronSettings {
+	buildBaron := evergreen.BuildBaronSettings{}
+	buildBaron.TicketCreateProject = utility.FromStringPtr(bb.TicketCreateProject)
+	buildBaron.TicketSearchProjects = utility.FromStringPtrSlice(bb.TicketSearchProjects)
+	buildBaron.BFSuggestionServer = utility.FromStringPtr(bb.BFSuggestionServer)
+	buildBaron.BFSuggestionUsername = utility.FromStringPtr(bb.BFSuggestionUsername)
+	buildBaron.BFSuggestionPassword = utility.FromStringPtr(bb.BFSuggestionPassword)
+	buildBaron.BFSuggestionTimeoutSecs = utility.FromIntPtr(bb.BFSuggestionTimeoutSecs)
+	buildBaron.BFSuggestionFeaturesURL = utility.FromStringPtr(bb.BFSuggestionFeaturesURL)
+	return buildBaron
 }
 
 type APITaskAnnotationSettings struct {
@@ -302,7 +278,7 @@ type APIJiraField struct {
 	DisplayText *string `bson:"display_text" json:"display_text"`
 }
 
-func (ta *APITaskAnnotationSettings) ToService() (interface{}, error) {
+func (ta *APITaskAnnotationSettings) ToService() evergreen.AnnotationsSettings {
 	res := evergreen.AnnotationsSettings{}
 	webhook := evergreen.WebHook{}
 	webhook.Secret = utility.FromStringPtr(ta.FileTicketWebhook.Secret)
@@ -314,18 +290,10 @@ func (ta *APITaskAnnotationSettings) ToService() (interface{}, error) {
 		jiraField.DisplayText = utility.FromStringPtr(apiJiraField.DisplayText)
 		res.JiraCustomFields = append(res.JiraCustomFields, jiraField)
 	}
-	return res, nil
+	return res
 }
 
-func (ta *APITaskAnnotationSettings) BuildFromService(h interface{}) error {
-	var config evergreen.AnnotationsSettings
-	switch v := h.(type) {
-	case evergreen.AnnotationsSettings:
-		config = v
-	case *evergreen.AnnotationsSettings:
-		config = *v
-	}
-
+func (ta *APITaskAnnotationSettings) BuildFromService(config evergreen.AnnotationsSettings) {
 	apiWebhook := APIWebHook{}
 	apiWebhook.Secret = utility.ToStringPtr(config.FileTicketWebhook.Secret)
 	apiWebhook.Endpoint = utility.ToStringPtr(config.FileTicketWebhook.Endpoint)
@@ -336,7 +304,6 @@ func (ta *APITaskAnnotationSettings) BuildFromService(h interface{}) error {
 		apiJiraField.DisplayText = utility.ToStringPtr(jiraField.DisplayText)
 		ta.JiraCustomFields = append(ta.JiraCustomFields, apiJiraField)
 	}
-	return nil
 }
 
 type APITaskSyncOptions struct {
@@ -344,22 +311,16 @@ type APITaskSyncOptions struct {
 	PatchEnabled  *bool `json:"patch_enabled"`
 }
 
-func (opts *APITaskSyncOptions) BuildFromService(h interface{}) error {
-	switch v := h.(type) {
-	case model.TaskSyncOptions:
-		opts.ConfigEnabled = utility.BoolPtrCopy(v.ConfigEnabled)
-		opts.PatchEnabled = utility.BoolPtrCopy(v.PatchEnabled)
-		return nil
-	default:
-		return errors.Errorf("programmatic error: expected task sync options but got type %T", v)
-	}
+func (opts *APITaskSyncOptions) BuildFromService(in model.TaskSyncOptions) {
+	opts.ConfigEnabled = utility.BoolPtrCopy(in.ConfigEnabled)
+	opts.PatchEnabled = utility.BoolPtrCopy(in.PatchEnabled)
 }
 
-func (opts *APITaskSyncOptions) ToService() (interface{}, error) {
+func (opts *APITaskSyncOptions) ToService() model.TaskSyncOptions {
 	return model.TaskSyncOptions{
 		ConfigEnabled: utility.BoolPtrCopy(opts.ConfigEnabled),
 		PatchEnabled:  utility.BoolPtrCopy(opts.PatchEnabled),
-	}, nil
+	}
 }
 
 type APIWorkstationConfig struct {
@@ -367,35 +328,91 @@ type APIWorkstationConfig struct {
 	GitClone      *bool                        `bson:"git_clone" json:"git_clone"`
 }
 
-type APIContainerCredential struct {
-	Username *string `bson:"username" json:"username"`
-	Password *string `bson:"password" json:"password"`
+type APIContainerSecret struct {
+	Name         *string `json:"name"`
+	ExternalName *string `json:"external_name"`
+	ExternalID   *string `json:"external_id"`
+	Type         *string `json:"type"`
+	Value        *string `json:"value"`
+	// ShouldRotate indicates that the user requested the pod secret to be
+	// rotated to a new value. This only applies to the project's pod secret.
+	ShouldRotate *bool `json:"should_rotate"`
+	// RepoCreds, if set, are the new repository credentials to store. This only
+	// applies to repository credentials.
+	RepoCreds *APIRepositoryCredentials `json:"repo_creds"`
 }
 
-func (cr *APIContainerCredential) BuildFromService(h model.ContainerCredential) {
-	cr.Username = utility.ToStringPtr(h.Username)
-	cr.Password = utility.ToStringPtr(h.Password)
+type APIRepositoryCredentials struct {
+	Username *string `json:"username"`
+	Password *string `json:"password"`
 }
 
-func (cr *APIContainerCredential) ToService() model.ContainerCredential {
-	return model.ContainerCredential{
-		Username: utility.FromStringPtr(cr.Username),
-		Password: utility.FromStringPtr(cr.Password),
+func (cr *APIContainerSecret) BuildFromService(h model.ContainerSecret) error {
+	if h.Type == model.ContainerSecretRepoCreds && h.Value != "" {
+		// If the plaintext secret value is available and this secret is a repo
+		// cred, the value is the repo creds encoded as JSON, so convert it back
+		// to its structured form for the REST API.
+		var apiRepoCreds APIRepositoryCredentials
+		if err := json.Unmarshal([]byte(h.Value), &apiRepoCreds); err != nil {
+			return errors.Wrap(err, "unmarshalling repository credentials")
+		}
+		cr.RepoCreds = &apiRepoCreds
 	}
+	if h.Value != "" {
+		cr.Value = utility.ToStringPtr(h.Value)
+	}
+	cr.Name = utility.ToStringPtr(h.Name)
+	cr.ExternalID = utility.ToStringPtr(h.ExternalID)
+	cr.Type = utility.ToStringPtr(string(h.Type))
+	return nil
+}
+
+func (cr *APIContainerSecret) ToService() (*model.ContainerSecret, error) {
+	secret := model.ContainerSecret{
+		Name:       utility.FromStringPtr(cr.Name),
+		ExternalID: utility.FromStringPtr(cr.ExternalID),
+		Type:       model.ContainerSecretType(utility.FromStringPtr(cr.Type)),
+		Value:      utility.FromStringPtr(cr.Value),
+	}
+	if utility.FromBoolPtr(cr.ShouldRotate) {
+		if secret.Type == model.ContainerSecretPodSecret {
+			// The user has requested to rotate the pod secret to a new value.
+			secret.Value = utility.RandomString()
+		} else {
+			return nil, errors.Errorf("can only rotate the value for the pod secret, not for container secret '%s' of type '%s'", secret.Name, secret.Type)
+		}
+	}
+	if cr.RepoCreds != nil {
+		if secret.Type == model.ContainerSecretRepoCreds {
+			// If this is a repo cred and the credentials must be stored, the value
+			// to store must be encoded as JSON.
+			b, err := json.Marshal(cr.RepoCreds)
+			if err != nil {
+				return nil, errors.Wrap(err, "marshalling repository credentials as JSON")
+			}
+			secret.Value = string(b)
+		} else {
+			return nil, errors.Errorf("can only set credentials for repo creds, not for container secret '%s' of type '%s'", secret.Name, secret.Type)
+		}
+	}
+	return &secret, nil
 }
 
 type APIContainerResources struct {
-	MemoryMB *int `bson:"memory_mb" json:"memory_mb"`
-	CPU      *int `bson:"cpu" json:"cpu"`
+	Name     *string `bson:"name" json:"name"`
+	MemoryMB *int    `bson:"memory_mb" json:"memory_mb"`
+	CPU      *int    `bson:"cpu" json:"cpu"`
 }
 
 func (cr *APIContainerResources) BuildFromService(h model.ContainerResources) {
+	cr.Name = utility.ToStringPtr(h.Name)
 	cr.MemoryMB = utility.ToIntPtr(h.MemoryMB)
 	cr.CPU = utility.ToIntPtr(h.CPU)
 }
 
 func (cr *APIContainerResources) ToService() model.ContainerResources {
 	return model.ContainerResources{
+		Name:     utility.FromStringPtr(cr.Name),
 		MemoryMB: utility.FromIntPtr(cr.MemoryMB),
 		CPU:      utility.FromIntPtr(cr.CPU),
 	}
@@ -406,7 +423,7 @@ type APIWorkstationSetupCommand struct {
 	Directory *string `bson:"directory" json:"directory"`
 }
 
-func (c *APIWorkstationConfig) ToService() (interface{}, error) {
+func (c *APIWorkstationConfig) ToService() model.WorkstationConfig {
 	res := model.WorkstationConfig{}
 	res.GitClone = utility.BoolPtrCopy(c.GitClone)
 	if c.SetupCommands != nil {
@@ -418,18 +435,10 @@ func (c *APIWorkstationConfig) ToService() (interface{}, error) {
 		cmd.Directory = utility.FromStringPtr(apiCmd.Directory)
 		res.SetupCommands = append(res.SetupCommands, cmd)
 	}
-	return res, nil
+	return res
 }
 
-func (c *APIWorkstationConfig) BuildFromService(h interface{}) error {
-	var config model.WorkstationConfig
-	switch v := h.(type) {
-	case model.WorkstationConfig:
-		config = v
-	case *model.WorkstationConfig:
-		config = *v
-	}
-
+func (c *APIWorkstationConfig) BuildFromService(config model.WorkstationConfig) {
 	c.GitClone = utility.BoolPtrCopy(config.GitClone)
 	if config.SetupCommands != nil {
 		c.SetupCommands = []APIWorkstationSetupCommand{}
@@ -440,8 +449,6 @@ func (c *APIWorkstationConfig) BuildFromService(h interface{}) error {
 		apiCmd.Directory = utility.ToStringPtr(cmd.Directory)
 		c.SetupCommands = append(c.SetupCommands, apiCmd)
 	}
-
-	return nil
 }
 
 type APIParameterInfo struct {
@@ -450,27 +457,18 @@ type APIParameterInfo struct {
 	Description *string `json:"description"`
 }
 
-func (c *APIParameterInfo) ToService() (interface{}, error) {
+func (c *APIParameterInfo) ToService() model.ParameterInfo {
 	res := model.ParameterInfo{}
 	res.Key = utility.FromStringPtr(c.Key)
 	res.Value = utility.FromStringPtr(c.Value)
 	res.Description = utility.FromStringPtr(c.Description)
-	return res, nil
+	return res
 }
 
-func (c *APIParameterInfo) BuildFromService(h interface{}) error {
-	var info model.ParameterInfo
-	switch v := h.(type) {
-	case model.ParameterInfo:
-		info = v
-	case *model.ParameterInfo:
-		info = *v
-	}
-
+func (c *APIParameterInfo) BuildFromService(info model.ParameterInfo) {
 	c.Key = utility.ToStringPtr(info.Key)
 	c.Value = utility.ToStringPtr(info.Value)
 	c.Description = utility.ToStringPtr(info.Description)
-	return nil
 }
 
 type APIProjectRef struct {
@@ -491,10 +489,8 @@ type APIProjectRef struct {
 	ManualPRTestingEnabled      *bool                     `json:"manual_pr_testing_enabled"`
 	GitTagVersionsEnabled       *bool                     `json:"git_tag_versions_enabled"`
 	GithubChecksEnabled         *bool                     `json:"github_checks_enabled"`
-	CedarTestResultsEnabled     *bool                     `json:"cedar_test_results_enabled"`
 	UseRepoSettings             *bool                     `json:"use_repo_settings"`
 	RepoRefId                   *string                   `json:"repo_ref_id"`
-	DefaultLogger               *string                   `json:"default_logger"`
 	CommitQueue                 APICommitQueueParams      `json:"commit_queue"`
 	TaskSync                    APITaskSyncOptions        `json:"task_sync"`
 	TaskAnnotationSettings      APITaskAnnotationSettings `json:"task_annotation_settings"`
@@ -504,9 +500,9 @@ type APIProjectRef struct {
 	PatchingDisabled            *bool                     `json:"patching_disabled"`
 	RepotrackerDisabled         *bool                     `json:"repotracker_disabled"`
 	DispatchingDisabled         *bool                     `json:"dispatching_disabled"`
+	StepbackDisabled            *bool                     `json:"stepback_disabled"`
 	VersionControlEnabled       *bool                     `json:"version_control_enabled"`
 	DisabledStatsCache          *bool                     `json:"disabled_stats_cache"`
-	FilesIgnoredFromCache       []*string                 `json:"files_ignored_from_cache"`
 	Admins                      []*string                 `json:"admins"`
 	DeleteAdmins                []*string                 `json:"delete_admins,omitempty"`
 	GitTagAuthorizedUsers       []*string                 `json:"git_tag_authorized_users" bson:"git_tag_authorized_users"`
@@ -517,116 +513,71 @@ type APIProjectRef struct {
 	Restricted                  *bool                     `json:"restricted"`
 	Revision                    *string                   `json:"revision"`
 
-	Triggers             []APITriggerDefinition       `json:"triggers"`
-	GithubTriggerAliases []*string                    `json:"github_trigger_aliases"`
-	PatchTriggerAliases  []APIPatchTriggerDefinition  `json:"patch_trigger_aliases"`
-	Aliases              []APIProjectAlias            `json:"aliases"`
-	Variables            APIProjectVars               `json:"variables"`
-	WorkstationConfig    APIWorkstationConfig         `json:"workstation_config"`
-	Subscriptions        []APISubscription            `json:"subscriptions"`
-	DeleteSubscriptions  []*string                    `json:"delete_subscriptions,omitempty"`
-	PeriodicBuilds       []APIPeriodicBuildDefinition `json:"periodic_builds,omitempty"`
+	Triggers                 []APITriggerDefinition       `json:"triggers"`
+	GithubTriggerAliases     []*string                    `json:"github_trigger_aliases"`
+	PatchTriggerAliases      []APIPatchTriggerDefinition  `json:"patch_trigger_aliases"`
+	Aliases                  []APIProjectAlias            `json:"aliases"`
+	Variables                APIProjectVars               `json:"variables"`
+	WorkstationConfig        APIWorkstationConfig         `json:"workstation_config"`
+	Subscriptions            []APISubscription            `json:"subscriptions"`
+	DeleteSubscriptions      []*string                    `json:"delete_subscriptions,omitempty"`
+	PeriodicBuilds           []APIPeriodicBuildDefinition `json:"periodic_builds,omitempty"`
+	ContainerSizeDefinitions []APIContainerResources      `json:"container_size_definitions"`
+	ContainerSecrets         []APIContainerSecret         `json:"container_secrets,omitempty"`
+	// DeleteContainerSecrets contains names of container secrets to be deleted.
+	DeleteContainerSecrets []string          `json:"delete_container_secrets,omitempty"`
+	ExternalLinks          []APIExternalLink `json:"external_links"`
+	Banner                 APIProjectBanner  `json:"banner"`
 }
 
 // ToService returns a service layer ProjectRef using the data from APIProjectRef
-func (p *APIProjectRef) ToService() (interface{}, error) {
-
-	commitQueue, err := p.CommitQueue.ToService()
-	if err != nil {
-		return nil, errors.Wrap(err, "converting commit queue params to service model")
-	}
-
-	i, err := p.TaskSync.ToService()
-	if err != nil {
-		return nil, errors.Wrap(err, "converting task sync options to service model")
-	}
-	taskSync, ok := i.(model.TaskSyncOptions)
-	if !ok {
-		return nil, errors.Errorf("programmatic error: expected task sync options but got type %T", i)
-	}
-
-	i, err = p.WorkstationConfig.ToService()
-	if err != nil {
-		return nil, errors.Wrap(err, "converting workstation config to service model")
-	}
-	workstationConfig, ok := i.(model.WorkstationConfig)
-	if !ok {
-		return nil, errors.Errorf("programmatic error: expected workstation config but got type %T", i)
-	}
-
-	i, err = p.BuildBaronSettings.ToService()
-	if err != nil {
-		return nil, errors.Wrap(err, "converting build baron settings to service model")
-	}
-	buildBaronConfig, ok := i.(evergreen.BuildBaronSettings)
-	if !ok {
-		return nil, errors.Errorf("programmatic error: expected build baron config but was actually %T", i)
-	}
-
-	i, err = p.TaskAnnotationSettings.ToService()
-	if err != nil {
-		return nil, errors.Wrap(err, "converting task annotation settings to service model")
-	}
-	taskAnnotationConfig, ok := i.(evergreen.AnnotationsSettings)
-	if !ok {
-		return nil, errors.Errorf("programmatic error: expected task annotation settings but got type %T", i)
-	}
-
+func (p *APIProjectRef) ToService() (*model.ProjectRef, error) {
 	projectRef := model.ProjectRef{
-		Owner:                   utility.FromStringPtr(p.Owner),
-		Repo:                    utility.FromStringPtr(p.Repo),
-		Branch:                  utility.FromStringPtr(p.Branch),
-		Enabled:                 utility.BoolPtrCopy(p.Enabled),
-		Private:                 utility.BoolPtrCopy(p.Private),
-		Restricted:              utility.BoolPtrCopy(p.Restricted),
-		BatchTime:               p.BatchTime,
-		RemotePath:              utility.FromStringPtr(p.RemotePath),
-		Id:                      utility.FromStringPtr(p.Id),
-		Identifier:              utility.FromStringPtr(p.Identifier),
-		DisplayName:             utility.FromStringPtr(p.DisplayName),
-		DeactivatePrevious:      utility.BoolPtrCopy(p.DeactivatePrevious),
-		TracksPushEvents:        utility.BoolPtrCopy(p.TracksPushEvents),
-		DefaultLogger:           utility.FromStringPtr(p.DefaultLogger),
-		PRTestingEnabled:        utility.BoolPtrCopy(p.PRTestingEnabled),
-		ManualPRTestingEnabled:  utility.BoolPtrCopy(p.ManualPRTestingEnabled),
-		GitTagVersionsEnabled:   utility.BoolPtrCopy(p.GitTagVersionsEnabled),
-		GithubChecksEnabled:     utility.BoolPtrCopy(p.GithubChecksEnabled),
-		CedarTestResultsEnabled: utility.BoolPtrCopy(p.CedarTestResultsEnabled),
-		RepoRefId:               utility.FromStringPtr(p.RepoRefId),
-		CommitQueue:             commitQueue.(model.CommitQueueParams),
-		TaskSync:                taskSync,
-		WorkstationConfig:       workstationConfig,
-		BuildBaronSettings:      buildBaronConfig,
-		TaskAnnotationSettings:  taskAnnotationConfig,
-		PerfEnabled:             utility.BoolPtrCopy(p.PerfEnabled),
-		Hidden:                  utility.BoolPtrCopy(p.Hidden),
-		PatchingDisabled:        utility.BoolPtrCopy(p.PatchingDisabled),
-		RepotrackerDisabled:     utility.BoolPtrCopy(p.RepotrackerDisabled),
-		DispatchingDisabled:     utility.BoolPtrCopy(p.DispatchingDisabled),
-		VersionControlEnabled:   utility.BoolPtrCopy(p.VersionControlEnabled),
-		DisabledStatsCache:      utility.BoolPtrCopy(p.DisabledStatsCache),
-		FilesIgnoredFromCache:   utility.FromStringPtrSlice(p.FilesIgnoredFromCache),
-		NotifyOnBuildFailure:    utility.BoolPtrCopy(p.NotifyOnBuildFailure),
-		SpawnHostScriptPath:     utility.FromStringPtr(p.SpawnHostScriptPath),
-		Admins:                  utility.FromStringPtrSlice(p.Admins),
-		GitTagAuthorizedUsers:   utility.FromStringPtrSlice(p.GitTagAuthorizedUsers),
-		GitTagAuthorizedTeams:   utility.FromStringPtrSlice(p.GitTagAuthorizedTeams),
-		GithubTriggerAliases:    utility.FromStringPtrSlice(p.GithubTriggerAliases),
+		Owner:                  utility.FromStringPtr(p.Owner),
+		Repo:                   utility.FromStringPtr(p.Repo),
+		Branch:                 utility.FromStringPtr(p.Branch),
+		Enabled:                utility.FromBoolPtr(p.Enabled),
+		Private:                utility.BoolPtrCopy(p.Private),
+		Restricted:             utility.BoolPtrCopy(p.Restricted),
+		BatchTime:              p.BatchTime,
+		RemotePath:             utility.FromStringPtr(p.RemotePath),
+		Id:                     utility.FromStringPtr(p.Id),
+		Identifier:             utility.FromStringPtr(p.Identifier),
+		DisplayName:            utility.FromStringPtr(p.DisplayName),
+		DeactivatePrevious:     utility.BoolPtrCopy(p.DeactivatePrevious),
+		TracksPushEvents:       utility.BoolPtrCopy(p.TracksPushEvents),
+		PRTestingEnabled:       utility.BoolPtrCopy(p.PRTestingEnabled),
+		ManualPRTestingEnabled: utility.BoolPtrCopy(p.ManualPRTestingEnabled),
+		GitTagVersionsEnabled:  utility.BoolPtrCopy(p.GitTagVersionsEnabled),
+		GithubChecksEnabled:    utility.BoolPtrCopy(p.GithubChecksEnabled),
+		RepoRefId:              utility.FromStringPtr(p.RepoRefId),
+		CommitQueue:            p.CommitQueue.ToService(),
+		TaskSync:               p.TaskSync.ToService(),
+		WorkstationConfig:      p.WorkstationConfig.ToService(),
+		BuildBaronSettings:     p.BuildBaronSettings.ToService(),
+		TaskAnnotationSettings: p.TaskAnnotationSettings.ToService(),
+		PerfEnabled:            utility.BoolPtrCopy(p.PerfEnabled),
+		Hidden:                 utility.BoolPtrCopy(p.Hidden),
+		PatchingDisabled:       utility.BoolPtrCopy(p.PatchingDisabled),
+		RepotrackerDisabled:    utility.BoolPtrCopy(p.RepotrackerDisabled),
+		DispatchingDisabled:    utility.BoolPtrCopy(p.DispatchingDisabled),
+		StepbackDisabled:       utility.BoolPtrCopy(p.StepbackDisabled),
+		VersionControlEnabled:  utility.BoolPtrCopy(p.VersionControlEnabled),
+		DisabledStatsCache:     utility.BoolPtrCopy(p.DisabledStatsCache),
+		NotifyOnBuildFailure:   utility.BoolPtrCopy(p.NotifyOnBuildFailure),
+		SpawnHostScriptPath:    utility.FromStringPtr(p.SpawnHostScriptPath),
+		Admins:                 utility.FromStringPtrSlice(p.Admins),
+		GitTagAuthorizedUsers:  utility.FromStringPtrSlice(p.GitTagAuthorizedUsers),
+		GitTagAuthorizedTeams:  utility.FromStringPtrSlice(p.GitTagAuthorizedTeams),
+		GithubTriggerAliases:   utility.FromStringPtrSlice(p.GithubTriggerAliases),
+		Banner:                 p.Banner.ToService(),
 	}
 
 	// Copy triggers
 	if p.Triggers != nil {
 		triggers := []model.TriggerDefinition{}
-		for idx, t := range p.Triggers {
-			i, err = t.ToService()
-			if err != nil {
-				return nil, errors.Wrapf(err, "converting trigger definition at index %d to service model", idx)
-			}
-			newTrigger, ok := i.(model.TriggerDefinition)
-			if !ok {
-				return nil, errors.Errorf("programmatic error: expected trigger definition but got type %T", i)
-			}
-			triggers = append(triggers, newTrigger)
+		for _, t := range p.Triggers {
+			triggers = append(triggers, t.ToService())
 		}
 		projectRef.Triggers = triggers
 	}
@@ -634,69 +585,68 @@ func (p *APIProjectRef) ToService() (interface{}, error) {
 	// Copy periodic builds
 	if p.PeriodicBuilds != nil {
 		builds := []model.PeriodicBuildDefinition{}
-		for idx, t := range p.PeriodicBuilds {
-			i, err = t.ToService()
-			if err != nil {
-				return nil, errors.Wrapf(err, "converting periodic build definition at index %d to service model", idx)
-			}
-			newBuild, ok := i.(model.PeriodicBuildDefinition)
-			if !ok {
-				return nil, errors.Errorf("programmatic error: expected periodic build definition but got type %T", i)
-			}
-			builds = append(builds, newBuild)
+		for _, b := range p.PeriodicBuilds {
+			builds = append(builds, b.ToService())
 		}
 		projectRef.PeriodicBuilds = builds
 	}
 
+	// Copy External Links
+	if p.ExternalLinks != nil {
+		links := []model.ExternalLink{}
+		for _, l := range p.ExternalLinks {
+			links = append(links, l.ToService())
+		}
+		projectRef.ExternalLinks = links
+	}
 	if p.PatchTriggerAliases != nil {
 		patchTriggers := []patch.PatchTriggerDefinition{}
-		for idx, t := range p.PatchTriggerAliases {
-			i, err = t.ToService()
-			if err != nil {
-				return nil, errors.Wrapf(err, "converting patch trigger alias at index %d to service model", idx)
-			}
-			trigger, ok := i.(patch.PatchTriggerDefinition)
-			if !ok {
-				return nil, errors.Errorf("programmatic error: expected patch trigger definition but got type %T", i)
-			}
-			patchTriggers = append(patchTriggers, trigger)
+		for _, a := range p.PatchTriggerAliases {
+			patchTriggers = append(patchTriggers, a.ToService())
 		}
 		projectRef.PatchTriggerAliases = patchTriggers
 	}
+
+	for _, size := range p.ContainerSizeDefinitions {
+		projectRef.ContainerSizeDefinitions = append(projectRef.ContainerSizeDefinitions, size.ToService())
+	}
+
+	for idx, secret := range p.ContainerSecrets {
+		if utility.StringSliceContains(p.DeleteContainerSecrets, utility.FromStringPtr(secret.Name)) {
+			continue
+		}
+
+		apiContainerSecret, err := secret.ToService()
+		if err != nil {
+			return nil, errors.Wrapf(err, "converting container secret at index %d to service model", idx)
+		}
+		projectRef.ContainerSecrets = append(projectRef.ContainerSecrets, *apiContainerSecret)
+	}
+
 	return &projectRef, nil
 }
 
-func (p *APIProjectRef) BuildFromService(h interface{}) error {
-	var projectRef model.ProjectRef
-
-	switch v := h.(type) {
-	case model.ProjectRef:
-		projectRef = v
-	case *model.ProjectRef:
-		projectRef = *v
-	default:
-		return errors.Errorf("programmatic error: expected project ref but got type %T", v)
-	}
-
+// BuildPublicFields only builds the fields that anyone should be able to see
+// so that we can return these to non project admins.
+func (p *APIProjectRef) BuildPublicFields(projectRef model.ProjectRef) error {
+	p.Id = utility.ToStringPtr(projectRef.Id)
+	p.Identifier = utility.ToStringPtr(projectRef.Identifier)
+	p.DisplayName = utility.ToStringPtr(projectRef.DisplayName)
 	p.Owner = utility.ToStringPtr(projectRef.Owner)
 	p.Repo = utility.ToStringPtr(projectRef.Repo)
 	p.Branch = utility.ToStringPtr(projectRef.Branch)
-	p.Enabled = utility.BoolPtrCopy(projectRef.Enabled)
+	p.Enabled = utility.ToBoolPtr(projectRef.Enabled)
+	p.Admins = utility.ToStringPtrSlice(projectRef.Admins)
 	p.Private = utility.BoolPtrCopy(projectRef.Private)
 	p.Restricted = utility.BoolPtrCopy(projectRef.Restricted)
 	p.BatchTime = projectRef.BatchTime
 	p.RemotePath = utility.ToStringPtr(projectRef.RemotePath)
-	p.Id = utility.ToStringPtr(projectRef.Id)
-	p.Identifier = utility.ToStringPtr(projectRef.Identifier)
-	p.DisplayName = utility.ToStringPtr(projectRef.DisplayName)
 	p.DeactivatePrevious = projectRef.DeactivatePrevious
 	p.TracksPushEvents = utility.BoolPtrCopy(projectRef.TracksPushEvents)
-	p.DefaultLogger = utility.ToStringPtr(projectRef.DefaultLogger)
 	p.PRTestingEnabled = utility.BoolPtrCopy(projectRef.PRTestingEnabled)
 	p.ManualPRTestingEnabled = utility.BoolPtrCopy(projectRef.ManualPRTestingEnabled)
 	p.GitTagVersionsEnabled = utility.BoolPtrCopy(projectRef.GitTagVersionsEnabled)
 	p.GithubChecksEnabled = utility.BoolPtrCopy(projectRef.GithubChecksEnabled)
-	p.CedarTestResultsEnabled = utility.BoolPtrCopy(projectRef.CedarTestResultsEnabled)
 	p.UseRepoSettings = utility.ToBoolPtr(projectRef.UseRepoSettings())
 	p.RepoRefId = utility.ToStringPtr(projectRef.RepoRefId)
 	p.PerfEnabled = utility.BoolPtrCopy(projectRef.PerfEnabled)
@@ -704,54 +654,37 @@ func (p *APIProjectRef) BuildFromService(h interface{}) error {
 	p.PatchingDisabled = utility.BoolPtrCopy(projectRef.PatchingDisabled)
 	p.RepotrackerDisabled = utility.BoolPtrCopy(projectRef.RepotrackerDisabled)
 	p.DispatchingDisabled = utility.BoolPtrCopy(projectRef.DispatchingDisabled)
+	p.StepbackDisabled = utility.BoolPtrCopy(projectRef.StepbackDisabled)
 	p.VersionControlEnabled = utility.BoolPtrCopy(projectRef.VersionControlEnabled)
 	p.DisabledStatsCache = utility.BoolPtrCopy(projectRef.DisabledStatsCache)
-	p.FilesIgnoredFromCache = utility.ToStringPtrSlice(projectRef.FilesIgnoredFromCache)
 	p.NotifyOnBuildFailure = utility.BoolPtrCopy(projectRef.NotifyOnBuildFailure)
 	p.SpawnHostScriptPath = utility.ToStringPtr(projectRef.SpawnHostScriptPath)
-	p.Admins = utility.ToStringPtrSlice(projectRef.Admins)
 	p.GitTagAuthorizedUsers = utility.ToStringPtrSlice(projectRef.GitTagAuthorizedUsers)
 	p.GitTagAuthorizedTeams = utility.ToStringPtrSlice(projectRef.GitTagAuthorizedTeams)
 	p.GithubTriggerAliases = utility.ToStringPtrSlice(projectRef.GithubTriggerAliases)
 
 	cq := APICommitQueueParams{}
-	if err := cq.BuildFromService(projectRef.CommitQueue); err != nil {
-		return errors.Wrap(err, "converting commit queue settings to API model")
-	}
+	cq.BuildFromService(projectRef.CommitQueue)
 	p.CommitQueue = cq
 
 	var taskSync APITaskSyncOptions
-	if err := taskSync.BuildFromService(projectRef.TaskSync); err != nil {
-		return errors.Wrap(err, "converting task sync options to API model")
-	}
+	taskSync.BuildFromService(projectRef.TaskSync)
 	p.TaskSync = taskSync
 
-	workstationConfig := APIWorkstationConfig{}
-	if err := workstationConfig.BuildFromService(projectRef.WorkstationConfig); err != nil {
-		return errors.Wrap(err, "converting workstation config to API model")
-	}
-	p.WorkstationConfig = workstationConfig
-
 	buildbaronConfig := APIBuildBaronSettings{}
-	if err := buildbaronConfig.BuildFromService(projectRef.BuildBaronSettings); err != nil {
-		return errors.Wrap(err, "converting build baron settings to API model")
-	}
+	buildbaronConfig.BuildFromService(projectRef.BuildBaronSettings)
 	p.BuildBaronSettings = buildbaronConfig
 
-	taskannotationConfig := APITaskAnnotationSettings{}
-	if err := taskannotationConfig.BuildFromService(projectRef.TaskAnnotationSettings); err != nil {
-		return errors.Wrap(err, "converting task annotation settings to API model")
-	}
-	p.TaskAnnotationSettings = taskannotationConfig
+	projectBanner := APIProjectBanner{}
+	projectBanner.BuildFromService(projectRef.Banner)
+	p.Banner = projectBanner
 
 	// Copy triggers
 	if projectRef.Triggers != nil {
 		triggers := []APITriggerDefinition{}
 		for _, t := range projectRef.Triggers {
 			apiTrigger := APITriggerDefinition{}
-			if err := apiTrigger.BuildFromService(t); err != nil {
-				return err
-			}
+			apiTrigger.BuildFromService(t)
 			triggers = append(triggers, apiTrigger)
 		}
 		p.Triggers = triggers
@@ -760,11 +693,9 @@ func (p *APIProjectRef) BuildFromService(h interface{}) error {
 	// copy periodic builds
 	if projectRef.PeriodicBuilds != nil {
 		periodicBuilds := []APIPeriodicBuildDefinition{}
-		for idx, pb := range projectRef.PeriodicBuilds {
+		for _, pb := range projectRef.PeriodicBuilds {
 			periodicBuild := APIPeriodicBuildDefinition{}
-			if err := periodicBuild.BuildFromService(pb); err != nil {
-				return errors.Wrapf(err, "converting periodic build definition at index %d to service model", idx)
-			}
+			periodicBuild.BuildFromService(pb)
 			periodicBuilds = append(periodicBuilds, periodicBuild)
 		}
 		p.PeriodicBuilds = periodicBuilds
@@ -772,14 +703,54 @@ func (p *APIProjectRef) BuildFromService(h interface{}) error {
 
 	if projectRef.PatchTriggerAliases != nil {
 		patchTriggers := []APIPatchTriggerDefinition{}
-		for idx, t := range projectRef.PatchTriggerAliases {
+		for idx, a := range projectRef.PatchTriggerAliases {
 			trigger := APIPatchTriggerDefinition{}
-			if err := trigger.BuildFromService(t); err != nil {
+			if err := trigger.BuildFromService(a); err != nil {
 				return errors.Wrapf(err, "converting patch trigger alias at index %d to service model", idx)
 			}
 			patchTriggers = append(patchTriggers, trigger)
 		}
 		p.PatchTriggerAliases = patchTriggers
+	}
+
+	for _, size := range projectRef.ContainerSizeDefinitions {
+		var apiSize APIContainerResources
+		apiSize.BuildFromService(size)
+		p.ContainerSizeDefinitions = append(p.ContainerSizeDefinitions, apiSize)
+	}
+
+	// copy external links
+	if projectRef.ExternalLinks != nil {
+		externalLinks := []APIExternalLink{}
+		for _, l := range projectRef.ExternalLinks {
+			externalLink := APIExternalLink{}
+			externalLink.BuildFromService(l)
+			externalLinks = append(externalLinks, externalLink)
+		}
+		p.ExternalLinks = externalLinks
+	}
+	return nil
+}
+
+func (p *APIProjectRef) BuildFromService(projectRef model.ProjectRef) error {
+	if err := p.BuildPublicFields(projectRef); err != nil {
+		return err
+	}
+
+	taskAnnotationConfig := APITaskAnnotationSettings{}
+	taskAnnotationConfig.BuildFromService(projectRef.TaskAnnotationSettings)
+	p.TaskAnnotationSettings = taskAnnotationConfig
+
+	workstationConfig := APIWorkstationConfig{}
+	workstationConfig.BuildFromService(projectRef.WorkstationConfig)
+	p.WorkstationConfig = workstationConfig
+
+	for idx, secret := range projectRef.ContainerSecrets {
+		var apiSecret APIContainerSecret
+		if err := apiSecret.BuildFromService(secret); err != nil {
+			return errors.Wrapf(err, "converting container secret at index %d to service model", idx)
+		}
+		p.ContainerSecrets = append(p.ContainerSecrets, apiSecret)
 	}
 
 	return nil

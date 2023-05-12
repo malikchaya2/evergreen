@@ -50,14 +50,18 @@ type Distro struct {
 	IsVirtualWorkstation  bool                  `bson:"is_virtual_workstation" json:"is_virtual_workstation" mapstructure:"is_virtual_workstation"`
 	IsCluster             bool                  `bson:"is_cluster" json:"is_cluster" mapstructure:"is_cluster"`
 	HomeVolumeSettings    HomeVolumeSettings    `bson:"home_volume_settings" json:"home_volume_settings" mapstructure:"home_volume_settings"`
-	IcecreamSettings      IcecreamSettings      `bson:"icecream_settings,omitempty" json:"icecream_settings,omitempty" mapstructure:"icecream_settings,omitempty"`
+	IceCreamSettings      IceCreamSettings      `bson:"icecream_settings,omitempty" json:"icecream_settings,omitempty" mapstructure:"icecream_settings,omitempty"`
 }
 
+// DistroData is the same as a distro, with the only difference being that all
+// the provider settings are stored as maps instead of Birch BSON documents.
 type DistroData struct {
 	Distro              Distro                   `bson:",inline"`
 	ProviderSettingsMap []map[string]interface{} `bson:"provider_settings_list" json:"provider_settings_list"`
 }
 
+// NewDistroData creates distro data from this distro. The provider settings are
+// converted into maps instead of Birch BSON documents.
 func (d *Distro) NewDistroData() DistroData {
 	res := DistroData{ProviderSettingsMap: []map[string]interface{}{}}
 	res.Distro = *d
@@ -128,14 +132,14 @@ type HomeVolumeSettings struct {
 	FormatCommand string `bson:"format_command" json:"format_command" mapstructure:"format_command"`
 }
 
-type IcecreamSettings struct {
+type IceCreamSettings struct {
 	SchedulerHost string `bson:"scheduler_host,omitempty" json:"scheduler_host,omitempty" mapstructure:"scheduler_host,omitempty"`
 	ConfigPath    string `bson:"config_path,omitempty" json:"config_path,omitempty" mapstructure:"config_path,omitempty"`
 }
 
 // WriteConfigScript returns the shell script to update the icecream config
 // file.
-func (s IcecreamSettings) GetUpdateConfigScript() string {
+func (s IceCreamSettings) GetUpdateConfigScript() string {
 	if !s.Populated() {
 		return ""
 	}
@@ -161,7 +165,7 @@ fi
 	)
 }
 
-func (s IcecreamSettings) Populated() bool {
+func (s IceCreamSettings) Populated() bool {
 	return s.SchedulerHost != "" && s.ConfigPath != ""
 }
 
@@ -224,12 +228,13 @@ func (d *Distro) ShellBinary() string {
 }
 
 type HostAllocatorSettings struct {
-	Version                string        `bson:"version" json:"version" mapstructure:"version"`
-	MinimumHosts           int           `bson:"minimum_hosts" json:"minimum_hosts" mapstructure:"minimum_hosts"`
-	MaximumHosts           int           `bson:"maximum_hosts" json:"maximum_hosts" mapstructure:"maximum_hosts"`
-	RoundingRule           string        `bson:"rounding_rule" json:"rounding_rule" mapstructure:"rounding_rule"`
-	FeedbackRule           string        `bson:"feedback_rule" json:"feedback_rule" mapstructure:"feedback_rule"`
-	HostsOverallocatedRule string        `bson:"hosts_overallocated_rule" json:"hosts_overallocated_rule" mapstructure:"hosts_overallocated_rule"`
+	Version                string `bson:"version" json:"version" mapstructure:"version"`
+	MinimumHosts           int    `bson:"minimum_hosts" json:"minimum_hosts" mapstructure:"minimum_hosts"`
+	MaximumHosts           int    `bson:"maximum_hosts" json:"maximum_hosts" mapstructure:"maximum_hosts"`
+	RoundingRule           string `bson:"rounding_rule" json:"rounding_rule" mapstructure:"rounding_rule"`
+	FeedbackRule           string `bson:"feedback_rule" json:"feedback_rule" mapstructure:"feedback_rule"`
+	HostsOverallocatedRule string `bson:"hosts_overallocated_rule" json:"hosts_overallocated_rule" mapstructure:"hosts_overallocated_rule"`
+	// AcceptableHostIdleTime is the amount of time we wait for an idle host to be marked as idle.
 	AcceptableHostIdleTime time.Duration `bson:"acceptable_host_idle_time" json:"acceptable_host_idle_time" mapstructure:"acceptable_host_idle_time"`
 	FutureHostFraction     float64       `bson:"future_host_fraction" json:"future_host_fraction" mapstructure:"future_host_fraction"`
 }
@@ -279,9 +284,6 @@ const (
 	CommunicationMethodLegacySSH = "legacy-ssh"
 	CommunicationMethodSSH       = "ssh"
 	CommunicationMethodRPC       = "rpc"
-
-	CloneMethodLegacySSH = "legacy-ssh"
-	CloneMethodOAuth     = "oauth"
 )
 
 // validBootstrapMethods includes all recognized bootstrap methods.
@@ -297,12 +299,6 @@ var validCommunicationMethods = []string{
 	CommunicationMethodLegacySSH,
 	CommunicationMethodSSH,
 	CommunicationMethodRPC,
-}
-
-// validCloneMethods includes all recognized clone methods.
-var validCloneMethods = []string{
-	CloneMethodLegacySSH,
-	CloneMethodOAuth,
 }
 
 // Seed the random number generator for creating distro names
@@ -492,11 +488,12 @@ func (d *Distro) IsParent(s *evergreen.Settings) bool {
 	return false
 }
 
+// GetImageID returns the distro provider's image.
 func (d *Distro) GetImageID() (string, error) {
 	key := ""
 
 	switch d.Provider {
-	case evergreen.ProviderNameEc2Auto, evergreen.ProviderNameEc2OnDemand, evergreen.ProviderNameEc2Spot, evergreen.ProviderNameEc2Fleet:
+	case evergreen.ProviderNameEc2OnDemand, evergreen.ProviderNameEc2Spot, evergreen.ProviderNameEc2Fleet:
 		key = "ami"
 	case evergreen.ProviderNameDocker, evergreen.ProviderNameDockerMock:
 		key = "image_url"
@@ -565,15 +562,6 @@ func ValidateArch(arch string) error {
 
 	if _, ok := evergreen.ValidArchDisplayNames[arch]; !ok {
 		return errors.Errorf("'%s' is not a recognized architecture", arch)
-	}
-	return nil
-}
-
-// ValidateCloneMethod checks that the clone mechanism is one of the supported
-// methods.
-func ValidateCloneMethod(method string) error {
-	if !utility.StringSliceContains(validCloneMethods, method) {
-		return errors.Errorf("'%s' is not a valid clone method", method)
 	}
 	return nil
 }

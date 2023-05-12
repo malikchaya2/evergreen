@@ -3,7 +3,7 @@ package agent
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -18,6 +18,7 @@ import (
 	"github.com/mongodb/jasper"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"go.opentelemetry.io/otel"
 )
 
 func TestGetSenderLocal(t *testing.T) {
@@ -32,10 +33,8 @@ func TestCommandFileLogging(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
 
-	tmpDirName, err := ioutil.TempDir("", "agent-logging-")
-	require.NoError(err)
+	tmpDirName := t.TempDir()
 	require.NoError(os.Mkdir(fmt.Sprintf("%s/tmp", tmpDirName), 0666))
-	defer os.RemoveAll(tmpDirName)
 
 	agt := &Agent{
 		opts: Options{
@@ -45,7 +44,8 @@ func TestCommandFileLogging(t *testing.T) {
 			LogPrefix:        evergreen.LocalLoggingOverride,
 			WorkingDirectory: tmpDirName,
 		},
-		comm: client.NewHostCommunicator("www.example.com", "host", "secret"),
+		comm:   client.NewHostCommunicator("www.example.com", "host", "secret"),
+		tracer: otel.GetTracerProvider().Tracer("noop_tracer"),
 	}
 	jpm, err := jasper.NewSynchronizedManager(false)
 	require.NoError(err)
@@ -89,7 +89,7 @@ func TestCommandFileLogging(t *testing.T) {
 					}},
 				},
 				BuildVariants: model.BuildVariants{
-					{Name: "bv", Tasks: []model.BuildVariantTaskUnit{{Name: "task1"}}},
+					{Name: "bv", Tasks: []model.BuildVariantTaskUnit{{Name: "task1", Variant: "bv"}}},
 				},
 			},
 			Timeout: &internal.Timeout{IdleTimeoutSecs: 15, ExecTimeoutSecs: 15},
@@ -105,7 +105,8 @@ func TestCommandFileLogging(t *testing.T) {
 	// verify log contents
 	f, err := os.Open(fmt.Sprintf("%s/%s/%s/task.log", tmpDirName, taskLogDirectory, "shell.exec"))
 	require.NoError(err)
-	bytes, err := ioutil.ReadAll(f)
+	bytes, err := io.ReadAll(f)
+	assert.NoError(f.Close())
 	require.NoError(err)
 	assert.Contains(string(bytes), "hello world")
 
@@ -119,7 +120,8 @@ func TestCommandFileLogging(t *testing.T) {
 	// verify uploaded log contents
 	f, err = os.Open(fmt.Sprintf("%s/logs/%s/%d/%s/task.log", tmpDirName, tc.taskConfig.Task.Id, tc.taskConfig.Task.Execution, "shell.exec"))
 	require.NoError(err)
-	bytes, err = ioutil.ReadAll(f)
+	bytes, err = io.ReadAll(f)
+	assert.NoError(f.Close())
 	require.NoError(err)
 	assert.Contains(string(bytes), "hello world")
 
@@ -130,10 +132,7 @@ func TestCommandFileLogging(t *testing.T) {
 
 func TestStartLogging(t *testing.T) {
 	assert := assert.New(t)
-	require := require.New(t)
-	tmpDirName, err := ioutil.TempDir("", "reset-logging-")
-	require.NoError(err)
-	defer os.RemoveAll(tmpDirName)
+	tmpDirName := t.TempDir()
 	agt := &Agent{
 		opts: Options{
 			HostID:           "host",
@@ -156,6 +155,7 @@ func TestStartLogging(t *testing.T) {
 
 	ctx := context.Background()
 	assert.NoError(agt.fetchProjectConfig(ctx, tc))
+	require.NotNil(t, tc.project)
 	assert.EqualValues(model.EvergreenLogSender, tc.project.Loggers.Agent[0].Type)
 	assert.EqualValues(model.SplunkLogSender, tc.project.Loggers.System[0].Type)
 	assert.EqualValues(model.FileLogSender, tc.project.Loggers.Task[0].Type)
@@ -177,10 +177,7 @@ func TestStartLogging(t *testing.T) {
 
 func TestStartLoggingErrors(t *testing.T) {
 	assert := assert.New(t)
-	require := require.New(t)
-	tmpDirName, err := ioutil.TempDir("", "logging-error-")
-	require.NoError(err)
-	defer os.RemoveAll(tmpDirName)
+	tmpDirName := t.TempDir()
 	agt := &Agent{
 		opts: Options{
 			HostID:           "host",

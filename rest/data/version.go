@@ -11,7 +11,6 @@ import (
 	"github.com/evergreen-ci/evergreen/repotracker"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/gimlet"
-	"github.com/mongodb/grip"
 	"github.com/pkg/errors"
 )
 
@@ -28,9 +27,7 @@ func GetProjectVersionsWithOptions(projectName string, opts model.GetVersionsOpt
 	res := []restModel.APIVersion{}
 	for _, v := range versions {
 		apiVersion := restModel.APIVersion{}
-		if err = apiVersion.BuildFromService(&v); err != nil {
-			return nil, errors.Wrapf(err, "converting version '%s' to API model", v.Id)
-		}
+		apiVersion.BuildFromService(v)
 		res = append(res, apiVersion)
 	}
 	return res, nil
@@ -110,10 +107,7 @@ func GetVersionsAndVariants(skip, numVersionElements int, project *model.Project
 
 				// add the version data into the last rolled-up version
 				newVersion := restModel.APIVersion{}
-				err = newVersion.BuildFromService(&versionFromDB)
-				if err != nil {
-					return nil, errors.Wrapf(err, "converting version '%s' to API model", versionFromDB.Id)
-				}
+				newVersion.BuildFromService(versionFromDB)
 				lastRolledUpVersion.Versions = append(lastRolledUpVersion.Versions, newVersion)
 
 				// move on to the next version
@@ -157,19 +151,13 @@ func GetVersionsAndVariants(skip, numVersionElements int, project *model.Project
 			// if the version can not be rolled up, create a fully fledged
 			// version for it
 			activeVersion := restModel.APIVersion{}
-			err = activeVersion.BuildFromService(&versionFromDB)
-			if err != nil {
-				return nil, errors.Wrapf(err, "converting version '%s' to API model", versionFromDB.Id)
-			}
+			activeVersion.BuildFromService(versionFromDB)
 
 			// add the builds to the "row"
 			for _, b := range buildsInVersion {
 				currentRow := buildList[b.BuildVariant]
 				buildsForRow := restModel.APIBuild{}
-				err = buildsForRow.BuildFromService(b)
-				if err != nil {
-					return nil, errors.Wrapf(err, "converting build '%s' to API model", b.Id)
-				}
+				buildsForRow.BuildFromService(b, nil)
 				buildsForRow.SetTaskCache(tasksByBuild[b.Id])
 
 				currentRow.Builds[versionFromDB.Id] = buildsForRow
@@ -217,7 +205,7 @@ func addFailedAndStartedTests(rows map[string]restModel.BuildList, failedAndStar
 		failedTests := []string{}
 		for _, r := range t.LocalTestResults {
 			if r.Status == evergreen.TestFailedStatus {
-				failedTests = append(failedTests, r.TestFile)
+				failedTests = append(failedTests, r.GetDisplayTestName())
 			}
 		}
 		failedTestsByTaskId[t.Id] = failedTests
@@ -239,25 +227,12 @@ func addFailedAndStartedTests(rows map[string]restModel.BuildList, failedAndStar
 }
 
 func (vc *DBVersionConnector) CreateVersionFromConfig(ctx context.Context, projectInfo *model.ProjectInfo,
-	metadata model.VersionMetadata, active bool) (*model.Version, error) {
+	metadata model.VersionMetadata) (*model.Version, error) {
 	newVersion, err := repotracker.CreateVersionFromConfig(ctx, projectInfo, metadata, false, nil)
 	if err != nil {
 		return nil, gimlet.ErrorResponse{
 			StatusCode: http.StatusInternalServerError,
 			Message:    errors.Wrap(err, "creating version from config").Error(),
-		}
-	}
-
-	if active {
-		catcher := grip.NewBasicCatcher()
-		for _, b := range newVersion.BuildIds {
-			catcher.Add(model.SetBuildActivation(b, true, evergreen.DefaultTaskActivator))
-		}
-		if catcher.HasErrors() {
-			return nil, gimlet.ErrorResponse{
-				StatusCode: http.StatusInternalServerError,
-				Message:    errors.Wrap(catcher.Resolve(), "activating builds").Error(),
-			}
 		}
 	}
 

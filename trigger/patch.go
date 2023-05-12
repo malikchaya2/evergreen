@@ -30,10 +30,13 @@ type patchTriggers struct {
 func makePatchTriggers() eventHandler {
 	t := &patchTriggers{}
 	t.base.triggers = map[string]trigger{
-		event.TriggerOutcome:      t.patchOutcome,
-		event.TriggerFailure:      t.patchFailure,
-		event.TriggerSuccess:      t.patchSuccess,
-		event.TriggerPatchStarted: t.patchStarted,
+		event.TriggerFamilyOutcome: t.patchFamilyOutcome,
+		event.TriggerFamilyFailure: t.patchFamilyFailure,
+		event.TriggerFamilySuccess: t.patchFamilySuccess,
+		event.TriggerOutcome:       t.patchOutcome,
+		event.TriggerFailure:       t.patchFailure,
+		event.TriggerSuccess:       t.patchSuccess,
+		event.TriggerPatchStarted:  t.patchStarted,
 	}
 	return t
 }
@@ -41,17 +44,17 @@ func makePatchTriggers() eventHandler {
 func (t *patchTriggers) Fetch(e *event.EventLogEntry) error {
 	var err error
 	if err = t.uiConfig.Get(evergreen.GetEnvironment()); err != nil {
-		return errors.Wrap(err, "Failed to fetch ui config")
+		return errors.Wrap(err, "fetching UI config")
 	}
 
 	oid := mgobson.ObjectIdHex(e.ResourceId)
 
 	t.patch, err = patch.FindOne(patch.ById(oid))
 	if err != nil {
-		return errors.Wrapf(err, "failed to fetch patch '%s'", e.ResourceId)
+		return errors.Wrapf(err, "finding patch '%s'", e.ResourceId)
 	}
 	if t.patch == nil {
-		return errors.Errorf("can't find patch '%s'", e.ResourceId)
+		return errors.Errorf("patch '%s' not found", e.ResourceId)
 	}
 	var ok bool
 	t.data, ok = e.Data.(*event.PatchEventData)
@@ -64,24 +67,29 @@ func (t *patchTriggers) Fetch(e *event.EventLogEntry) error {
 }
 
 func (t *patchTriggers) Attributes() event.Attributes {
+	owner := []string{t.patch.Author}
+	if t.event.EventType == event.PatchChildrenCompletion {
+		eventData := t.event.Data.(*event.PatchEventData)
+		owner = []string{eventData.Author}
+	}
 	return event.Attributes{
 		ID:      []string{t.patch.Id.Hex()},
 		Object:  []string{event.ObjectPatch},
 		Project: []string{t.patch.Project},
-		Owner:   []string{t.patch.Author},
+		Owner:   owner,
 		Status:  []string{t.patch.Status},
 	}
 }
 
 func (t *patchTriggers) patchOutcome(sub *event.Subscription) (*notification.Notification, error) {
-	if t.data.Status != evergreen.PatchSucceeded && t.data.Status != evergreen.PatchFailed {
+	if (t.data.Status != evergreen.PatchSucceeded && t.data.Status != evergreen.PatchFailed) || t.event.EventType == event.PatchChildrenCompletion {
 		return nil, nil
 	}
 
 	if sub.Subscriber.Type == event.RunChildPatchSubscriberType {
 		target, ok := sub.Subscriber.Target.(*event.ChildPatchSubscriber)
 		if !ok {
-			return nil, errors.Errorf("target '%s' didn't not have expected type", sub.Subscriber.Target)
+			return nil, errors.Errorf("target '%s' had unexpected type %T", sub.Subscriber.Target, sub.Subscriber.Target)
 		}
 		ps := target.ParentStatus
 
@@ -91,133 +99,50 @@ func (t *patchTriggers) patchOutcome(sub *event.Subscription) (*notification.Not
 
 		successOutcome := (ps == evergreen.PatchSucceeded) && (t.data.Status == evergreen.PatchSucceeded)
 		failureOutcome := (ps == evergreen.PatchFailed) && (t.data.Status == evergreen.PatchFailed)
-		anyOutcome := (ps == evergreen.PatchAllOutcomes)
+		anyOutcome := ps == evergreen.PatchAllOutcomes
 
 		if successOutcome || failureOutcome || anyOutcome {
-			err := finalizeChildPatch(sub)
+			aborted, err := model.IsAborted(t.patch.Id.Hex())
+			if err != nil {
+				return nil, errors.Wrapf(err, "getting aborted status for patch '%s'", t.patch.Id.Hex())
+			}
+			if aborted {
+				return nil, nil
+			}
+			err = finalizeChildPatch(sub)
 
 			if err != nil {
-				return nil, errors.Wrap(err, "Failed to finalize child patch")
+				return nil, errors.Wrap(err, "finalizing child patch")
 			}
 			return nil, nil
 		}
 	}
-
-	isReady, err := t.waitOnChildrenOrSiblings(sub)
-	if err != nil {
-		return nil, err
-	}
-	if !isReady {
-		return nil, nil
-	}
-
 	return t.generate(sub)
-}
-
-func (t *patchTriggers) waitOnChildrenOrSiblings(sub *event.Subscription) (bool, error) {
-	if sub.Subscriber.Type != event.GithubPullRequestSubscriberType {
-		return true, nil
-	}
-	target, ok := sub.Subscriber.Target.(*event.GithubPullRequestSubscriber)
-	if !ok {
-		return false, errors.Errorf("target '%s' didn't not have expected type", sub.Subscriber.Target)
-	}
-	subType := target.Type
-
-	// notifications are only delayed if the patch is either a parent, or a child that is of subType event.WaitOnChild.
-	// we don't always wait on siblings when it is a childpatch, since childpatches need to let github know when they
-	// are done running so their status can be displayed to the user as they finish
-	if !(t.patch.IsParent() || (t.patch.IsChild() && subType == event.WaitOnChild)) {
-		return true, nil
-	}
-	// get the children or siblings to wait on
-	isReady, parentPatch, isFailingStatus, err := checkPatchStatus(t.patch)
-	if err != nil {
-		return false, errors.Wrapf(err, "error getting patch status for '%s'", t.patch.Id)
-	}
-
-	if isFailingStatus {
-		t.data.Status = evergreen.PatchFailed
-	}
-
-	if t.patch.IsChild() {
-		// we want the subscription to be on the parent
-		// now that the children are done, the parent can be considered done.
-		t.patch = parentPatch
-	}
-	return isReady, nil
-}
-
-func checkPatchStatus(p *patch.Patch) (bool, *patch.Patch, bool, error) {
-	isReady := false
-	childrenOrSiblings, parentPatch, err := p.GetPatchFamily()
-	if err != nil {
-		return isReady, parentPatch, false, errors.Wrap(err, "error getting child or sibling patches")
-	}
-
-	// make sure the parent is done, if not, wait for the parent
-	if p.IsChild() {
-		if !evergreen.IsFinishedPatchStatus(parentPatch.Status) {
-			return isReady, parentPatch, false, nil
-		}
-	}
-	childrenStatus, err := getChildrenOrSiblingsReadiness(childrenOrSiblings)
-	if err != nil {
-		return isReady, parentPatch, false, errors.Wrap(err, "error getting child or sibling information")
-	}
-	if !evergreen.IsFinishedPatchStatus(childrenStatus) {
-		return isReady, parentPatch, false, nil
-	}
-	isReady = true
-
-	isFailingStatus := false
-	if childrenStatus == evergreen.PatchFailed || (p.IsChild() && parentPatch.Status == evergreen.PatchFailed) {
-		isFailingStatus = true
-	}
-	return isReady, parentPatch, isFailingStatus, err
-
 }
 
 func (t *patchTriggers) patchFailure(sub *event.Subscription) (*notification.Notification, error) {
-	if t.data.Status != evergreen.PatchFailed {
+	if t.data.Status != evergreen.PatchFailed || t.event.EventType == event.PatchChildrenCompletion {
 		return nil, nil
 	}
 
 	return t.generate(sub)
-}
-
-func getChildrenOrSiblingsReadiness(childrenOrSiblings []string) (string, error) {
-	childrenStatus := evergreen.PatchSucceeded
-	for _, childPatch := range childrenOrSiblings {
-		childPatchDoc, err := patch.FindOneId(childPatch)
-		if err != nil {
-			return "", errors.Wrapf(err, "error getting tasks for child patch '%s'", childPatch)
-		}
-		if childPatchDoc == nil {
-			return "", errors.Errorf("child patch '%s' not found", childPatch)
-		}
-		if childPatchDoc.Status == evergreen.PatchFailed {
-			childrenStatus = evergreen.PatchFailed
-		}
-		if !evergreen.IsFinishedPatchStatus(childPatchDoc.Status) {
-			return childPatchDoc.Status, nil
-		}
-	}
-	return childrenStatus, nil
-
 }
 
 func finalizeChildPatch(sub *event.Subscription) error {
 	target, ok := sub.Subscriber.Target.(*event.ChildPatchSubscriber)
 	if !ok {
-		return errors.Errorf("target '%s' didn't not have expected type", sub.Subscriber.Target)
+		return errors.Errorf("target '%s' had unexpected type %T", sub.Subscriber.Target, sub.Subscriber.Target)
 	}
 	childPatch, err := patch.FindOneId(target.ChildPatchId)
 	if err != nil {
-		return errors.Wrap(err, "Failed to fetch child patch")
+		return errors.Wrap(err, "finding child patch")
 	}
 	if childPatch == nil {
-		return errors.Wrap(err, "child patch not found")
+		return errors.Errorf("child patch '%s' not found", target.ChildPatchId)
+	}
+	// Return if patch is already finalized
+	if childPatch.Version != "" {
+		return nil
 	}
 
 	ctx, cancel := evergreen.GetEnvironment().Context()
@@ -239,7 +164,7 @@ func finalizeChildPatch(sub *event.Subscription) error {
 }
 
 func (t *patchTriggers) patchSuccess(sub *event.Subscription) (*notification.Notification, error) {
-	if t.data.Status != evergreen.PatchSucceeded {
+	if t.data.Status != evergreen.PatchSucceeded || t.event.EventType == event.PatchChildrenCompletion {
 		return nil, nil
 	}
 
@@ -256,13 +181,35 @@ func (t *patchTriggers) patchStarted(sub *event.Subscription) (*notification.Not
 
 func (t *patchTriggers) makeData(sub *event.Subscription) (*commonTemplateData, error) {
 	api := restModel.APIPatch{}
-	if err := api.BuildFromService(*t.patch); err != nil {
-		return nil, errors.Wrap(err, "error building json model")
+	if err := api.BuildFromService(*t.patch, &restModel.APIPatchArgs{
+		IncludeProjectIdentifier: true,
+	}); err != nil {
+		return nil, errors.Wrap(err, "building patch args from service model")
 	}
 	projectName := t.patch.Project
 	if api.ProjectIdentifier != nil {
 		projectName = utility.FromStringPtr(api.ProjectIdentifier)
 	}
+
+	// For child patches, we only want to look at its own status because the collective status will be affected
+	// by other child patches' and the parent's status
+	collectiveStatus := t.data.Status
+	if t.patch.IsParent() {
+		var err error
+		collectiveStatus, err = t.patch.CollectiveStatus()
+		if err != nil {
+			return nil, errors.Wrapf(err, "getting collective patch status for patch '%s'", t.patch.Id)
+		}
+	}
+
+	grip.NoticeWhen(collectiveStatus != t.data.Status, message.Fields{
+		"message":                 "patch's current collective status does not match the patch event data's status",
+		"patch_collective_status": collectiveStatus,
+		"patch_status":            t.patch.Status,
+		"patch_event_status":      t.data.Status,
+		"patch":                   t.patch.Id.Hex(),
+		"subscription":            sub.ID,
+	})
 
 	data := commonTemplateData{
 		ID:                t.patch.Id.Hex(),
@@ -272,16 +219,16 @@ func (t *patchTriggers) makeData(sub *event.Subscription) (*commonTemplateData, 
 		Description:       t.patch.Description,
 		Object:            event.ObjectPatch,
 		Project:           projectName,
-		PastTenseStatus:   t.data.Status,
+		PastTenseStatus:   collectiveStatus,
 		apiModel:          &api,
 		githubState:       message.GithubStatePending,
 		githubDescription: "tasks are running",
 	}
 
 	if t.patch.IsChild() {
-		githubContext, err := t.getGithubContext()
+		githubContext, err := t.getGithubContext(projectName)
 		if err != nil {
-			return nil, errors.Wrapf(err, "failed to get githubContext for '%s'", t.patch.Id)
+			return nil, errors.Wrapf(err, "getting GitHub context for patch '%s'", t.patch.Id)
 		}
 		data.githubContext = githubContext
 		data.URL = versionLink(
@@ -309,17 +256,19 @@ func (t *patchTriggers) makeData(sub *event.Subscription) (*commonTemplateData, 
 	if utility.IsZeroTime(finishTime) {
 		finishTime = time.Now()
 	}
-	if t.data.Status == evergreen.PatchSucceeded {
+
+	if collectiveStatus == evergreen.PatchSucceeded {
 		slackColor = evergreenSuccessColor
 		data.githubState = message.GithubStateSuccess
 		data.githubDescription = fmt.Sprintf("patch finished in %s", finishTime.Sub(t.patch.StartTime).String())
-	} else if t.data.Status == evergreen.PatchFailed {
+	} else if collectiveStatus == evergreen.PatchFailed {
 		data.githubState = message.GithubStateFailure
 		data.githubDescription = fmt.Sprintf("patch finished in %s", finishTime.Sub(t.patch.StartTime).String())
 	}
+
 	if t.patch.IsGithubPRPatch() {
 		data.slack = append(data.slack, message.SlackAttachment{
-			Title:     "Github Pull Request",
+			Title:     "GitHub Pull Request",
 			TitleLink: fmt.Sprintf("https://github.com/%s/%s/pull/%d#partial-pull-merging", t.patch.GithubPatchData.BaseOwner, t.patch.GithubPatchData.BaseRepo, t.patch.GithubPatchData.PRNumber),
 			Color:     slackColor,
 		})
@@ -352,38 +301,58 @@ func (t *patchTriggers) makeData(sub *event.Subscription) (*commonTemplateData, 
 func (t *patchTriggers) generate(sub *event.Subscription) (*notification.Notification, error) {
 	data, err := t.makeData(sub)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to collect patch data")
+		return nil, errors.Wrap(err, "collecting patch data")
 	}
 
 	payload, err := makeCommonPayload(sub, t.Attributes(), data)
 	if err != nil {
-		return nil, errors.Wrap(err, "failed to build notification")
+		return nil, errors.Wrap(err, "building notification")
 	}
 	return notification.New(t.event.ID, sub.Trigger, &sub.Subscriber, payload)
 }
 
-func (t *patchTriggers) getGithubContext() (string, error) {
-	projectIdentifier, err := model.GetIdentifierForProject(t.patch.Project)
-	if err != nil { // default to ID
-		projectIdentifier = t.patch.Project
-	}
-
+func (t *patchTriggers) getGithubContext(projectIdentifier string) (string, error) {
 	parentPatch, err := patch.FindOneId(t.patch.Triggers.ParentPatch)
 	if err != nil {
-		return "", errors.Wrap(err, "can't get parent patch")
+		return "", errors.Wrapf(err, "getting parent patch '%s'", t.patch.Triggers.ParentPatch)
 	}
 	if parentPatch == nil {
-		return "", errors.Errorf("parent patch '%s' does not exist", t.patch.Triggers.ParentPatch)
+		return "", errors.Errorf("parent patch '%s' not found", t.patch.Triggers.ParentPatch)
 	}
-	patchIndex, err := t.patch.GetPatchIndex(parentPatch)
+	return patch.GetGithubContextForChildPatch(projectIdentifier, parentPatch, t.patch)
+}
+
+func (t *patchTriggers) patchFamilyOutcome(sub *event.Subscription) (*notification.Notification, error) {
+	if t.data.Status != evergreen.PatchSucceeded && t.data.Status != evergreen.PatchFailed {
+		return nil, nil
+	}
+	if t.event.EventType != event.PatchChildrenCompletion {
+		return nil, nil
+	}
+
+	// Don't notify the user of the patch outcome if they aborted the patch
+	aborted, err := model.IsAborted(t.patch.Id.Hex())
 	if err != nil {
-		return "", errors.Wrap(err, "error getting child patch index")
+		return nil, errors.Wrapf(err, "getting aborted status for patch '%s'", t.patch.Id.Hex())
 	}
-	var githubContext string
-	if patchIndex == 0 || patchIndex == -1 {
-		githubContext = fmt.Sprintf("evergreen/%s", projectIdentifier)
-	} else {
-		githubContext = fmt.Sprintf("evergreen/%s/%d", projectIdentifier, patchIndex)
+	if aborted {
+		return nil, nil
 	}
-	return githubContext, nil
+
+	return t.generate(sub)
+}
+
+func (t *patchTriggers) patchFamilySuccess(sub *event.Subscription) (*notification.Notification, error) {
+	if t.data.Status != evergreen.PatchSucceeded || t.event.EventType != event.PatchChildrenCompletion {
+		return nil, nil
+	}
+
+	return t.generate(sub)
+}
+
+func (t *patchTriggers) patchFamilyFailure(sub *event.Subscription) (*notification.Notification, error) {
+	if t.data.Status != evergreen.PatchFailed || t.event.EventType != event.PatchChildrenCompletion {
+		return nil, nil
+	}
+	return t.generate(sub)
 }

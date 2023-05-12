@@ -9,6 +9,7 @@ import (
 	mgobson "github.com/evergreen-ci/evergreen/db/mgo/bson"
 	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/evergreen/model/patch"
+	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/mongodb/amboy"
 	"github.com/mongodb/amboy/job"
 	"github.com/mongodb/amboy/registry"
@@ -24,6 +25,7 @@ const (
 	githubStatusUpdateJobName = "github-status-update"
 
 	githubUpdateTypeNewPatch              = "new-patch"
+	githubUpdateTypeSuccessMessage        = "success-message"
 	githubUpdateTypeRequestAuth           = "request-auth"
 	githubUpdateTypePushToCommitQueue     = "commit-queue-push"
 	githubUpdateTypeDeleteFromCommitQueue = "commit-queue-delete"
@@ -34,16 +36,20 @@ const (
 
 const (
 	// GitHub intent processing errors
-	ProjectDisabled        = "project was disabled"
-	PatchingDisabled       = "patching was disabled"
-	PatchTaskSyncDisabled  = "task sync was disabled for patches"
-	NoTasksOrVariants      = "no tasks/variants were configured"
-	NoSyncTasksOrVariants  = "no tasks/variants were configured for sync"
-	GitHubInternalError    = "GitHub returned an error"
-	InvalidConfig          = "config file was invalid"
-	EmptyConfig            = "config file was empty"
-	ProjectFailsValidation = "Project fails validation"
-	OtherErrors            = "Evergreen error"
+	ProjectDisabled             = "project was disabled"
+	PatchingDisabled            = "patching was disabled"
+	commitQueueDisabled         = "commit queue was disabled"
+	ignoredFiles                = "all patched files are ignored"
+	PatchTaskSyncDisabled       = "task sync was disabled for patches"
+	invalidAlias                = "alias not found"
+	NoTasksOrVariants           = "no tasks/variants were configured"
+	noChildPatchTasksOrVariants = "no tasks/variants were configured for child patch"
+	NoSyncTasksOrVariants       = "no tasks/variants were configured for sync"
+	GitHubInternalError         = "GitHub returned an error"
+	InvalidConfig               = "config file was invalid"
+	EmptyConfig                 = "config file was empty"
+	ProjectFailsValidation      = "Project fails validation"
+	OtherErrors                 = "Evergreen error"
 )
 
 func init() {
@@ -76,6 +82,19 @@ func makeGithubStatusUpdateJob() *githubStatusUpdateJob {
 	}
 	j.SetPriority(1)
 	return j
+}
+
+// NewGithubStatusUpdateJobWithSuccessMessage creates a job to send a passing status to Github with a message.
+func NewGithubStatusUpdateJobWithSuccessMessage(githubContext, owner, repo, ref, description string) amboy.Job {
+	job := makeGithubStatusUpdateJob()
+	job.GithubContext = githubContext
+	job.UpdateType = githubUpdateTypeSuccessMessage
+	job.Owner = owner
+	job.Repo = repo
+	job.Ref = ref
+	job.Description = description
+	job.SetID(fmt.Sprintf("%s:%s-%s", githubStatusUpdateJobName, job.UpdateType, time.Now().String()))
+	return job
 }
 
 // NewGithubStatusUpdateJobForNewPatch creates a job to update github's API
@@ -164,14 +183,14 @@ func (j *githubStatusUpdateJob) preamble() error {
 
 	flags, err := evergreen.GetServiceFlags()
 	if err != nil {
-		return errors.Wrap(err, "error retrieving admin settings")
+		return errors.Wrap(err, "getting service flags")
 	}
 	if flags.GithubStatusAPIDisabled {
 		grip.InfoWhen(sometimes.Percent(evergreen.DegradedLoggingPercent), message.Fields{
 			"job":     githubStatusUpdateJobName,
-			"message": "github status updates are disabled, not updating status",
+			"message": "GitHub status updates are disabled, not updating status",
 		})
-		return errors.New("github status updates are disabled, not updating status")
+		return errors.New("GitHub status updates are disabled, not updating status")
 	}
 
 	return nil
@@ -187,6 +206,11 @@ func (j *githubStatusUpdateJob) fetch() (*message.GithubStatus, error) {
 	if j.UpdateType == githubUpdateTypeProcessingError {
 		status.Context = j.GithubContext
 		status.State = message.GithubStateFailure
+		status.Description = j.Description
+
+	} else if j.UpdateType == githubUpdateTypeSuccessMessage {
+		status.Context = evergreenContext
+		status.State = message.GithubStateSuccess
 		status.Description = j.Description
 
 	} else if j.UpdateType == githubUpdateTypeNewPatch {
@@ -220,7 +244,7 @@ func (j *githubStatusUpdateJob) fetch() (*message.GithubStatus, error) {
 			return nil, errors.WithStack(err)
 		}
 		if patchDoc == nil {
-			return nil, errors.New("can't find patch")
+			return nil, errors.New("patch not found")
 		}
 
 		status.Owner = patchDoc.GithubPatchData.BaseOwner
@@ -253,4 +277,9 @@ func (j *githubStatusUpdateJob) Run(_ context.Context) {
 	j.AddError(c.SetPriority(level.Notice))
 
 	j.sender.Send(c)
+	grip.Info(message.Fields{
+		"ticket":  thirdparty.GithubInvestigation,
+		"message": "called github status send",
+		"caller":  githubStatusUpdateJobName,
+	})
 }

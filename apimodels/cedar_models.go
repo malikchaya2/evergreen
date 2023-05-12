@@ -5,8 +5,5 @@ type CedarConfig struct {
 	RPCPort  string `json:"rpc_port"`
 	Username string `json:"username"`
 	APIKey   string `json:"api_key,omitempty"`
-}
-
-type CedarTestResultsTaskInfo struct {
-	Failed bool `json:"failed"`
+	Insecure bool   `json:"insecure"`
 }

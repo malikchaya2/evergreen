@@ -1,7 +1,6 @@
 package util
 
 import (
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -9,6 +8,7 @@ import (
 
 	"github.com/evergreen-ci/utility"
 	. "github.com/smartystreets/goconvey/convey"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
@@ -25,19 +25,20 @@ func TestWriteToTempFile(t *testing.T) {
 		Convey("ensure the exact contents passed are written", func() {
 			fileData := "data"
 			filePath, err := WriteToTempFile(fileData)
-			require.NoError(t, err, "error writing to temp file %v")
-			fileBytes, err := ioutil.ReadFile(filePath)
-			require.NoError(t, err, "error reading from temp file %v")
+			require.NoError(t, err)
+			defer func() {
+				assert.NoError(t, os.Remove(filePath))
+			}()
+			fileBytes, err := os.ReadFile(filePath)
+			require.NoError(t, err)
 			So(string(fileBytes), ShouldEqual, fileData)
-			require.NoError(t, os.Remove(filePath),
-				"error removing to temp file %v")
 		})
 	})
 }
 
 func TestFileExists(t *testing.T) {
-	tmpfile, err := ioutil.TempFile("", "testFileOne")
-	require.NoError(t, err, "error creating test file")
+	tmpfile, err := os.CreateTemp("", "testFileOne")
+	require.NoError(t, err)
 	defer os.Remove(tmpfile.Name())
 
 	Convey("When testing that a file exists", t, func() {

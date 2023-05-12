@@ -1,6 +1,0 @@
-mutation {
-  restartTask(taskId: "nonexistent") {
-    status
-    id
-  }
-}

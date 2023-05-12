@@ -3,13 +3,14 @@ package route
 import (
 	"bytes"
 	"context"
-	"io/ioutil"
 	"net/http"
+	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
+	"github.com/evergreen-ci/evergreen/mock"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/evergreen/model/patch"
@@ -19,9 +20,9 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/amboy"
-	"github.com/mongodb/grip"
+	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -49,11 +50,12 @@ func (s *GithubWebhookRouteSuite) SetupSuite() {
 	ctx, cancel := context.WithCancel(context.Background())
 	s.canceler = cancel
 
-	s.env = testutil.NewEnvironment(ctx, s.T())
+	env := &mock.Environment{}
+	s.Require().NoError(env.Configure(ctx))
+	s.env = env
 	s.NotNil(s.env.Settings())
 	s.NotNil(s.env.Settings().Api)
 	s.NotEmpty(s.env.Settings().Api.GithubWebhookSecret)
-	s.Require().NoError(db.DropDatabases(s.env.Settings().Amboy.DB))
 
 	s.conf = testutil.TestConfig()
 	s.NotNil(s.conf)
@@ -64,35 +66,33 @@ func (s *GithubWebhookRouteSuite) TearDownSuite() {
 }
 
 func (s *GithubWebhookRouteSuite) SetupTest() {
-	grip.Critical(s.conf.Api)
-
 	s.NoError(db.Clear(model.ProjectRefCollection))
 	s.NoError(db.Clear(commitqueue.Collection))
 
-	s.queue = evergreen.GetEnvironment().LocalQueue()
+	s.queue = s.env.LocalQueue()
 	s.mockSc = &data.MockGitHubConnector{
 		MockGitHubConnectorImpl: data.MockGitHubConnectorImpl{},
 	}
 
-	s.rm = makeGithubHooksRoute(s.sc, s.queue, []byte(s.conf.Api.GithubWebhookSecret), evergreen.GetEnvironment().Settings())
-	s.mockRm = makeGithubHooksRoute(s.mockSc, s.queue, []byte(s.conf.Api.GithubWebhookSecret), evergreen.GetEnvironment().Settings())
+	s.rm = makeGithubHooksRoute(s.sc, s.queue, []byte(s.conf.Api.GithubWebhookSecret), s.env.Settings())
+	s.mockRm = makeGithubHooksRoute(s.mockSc, s.queue, []byte(s.conf.Api.GithubWebhookSecret), s.env.Settings())
 
 	s.Require().NoError(commitqueue.InsertQueue(&commitqueue.CommitQueue{ProjectID: "mci"}))
 
 	var err error
-	s.prBody, err = ioutil.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "pull_request.json"))
+	s.prBody, err = os.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "pull_request.json"))
 	s.NoError(err)
 	s.Len(s.prBody, 24731)
-	s.pushBody, err = ioutil.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "push_event.json"))
+	s.pushBody, err = os.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "push_event.json"))
 	s.NoError(err)
 	s.Len(s.pushBody, 7597)
-	s.commitQueueCommentBody, err = ioutil.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "commit_queue_comment_event.json"))
+	s.commitQueueCommentBody, err = os.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "commit_queue_comment_event.json"))
 	s.NoError(err)
 	s.Len(s.commitQueueCommentBody, 11494)
-	s.retryCommentBody, err = ioutil.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "retry_comment_event.json"))
+	s.retryCommentBody, err = os.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "retry_comment_event.json"))
 	s.NoError(err)
 	s.Len(s.retryCommentBody, 11468)
-	s.patchCommentBody, err = ioutil.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "patch_comment_event.json"))
+	s.patchCommentBody, err = os.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "patch_comment_event.json"))
 	s.NoError(err)
 	s.Len(s.patchCommentBody, 11468)
 
@@ -134,7 +134,7 @@ func (s *GithubWebhookRouteSuite) TestAddIntentAndFailsWithDuplicate() {
 		Owner:            "baxterthehacker",
 		Repo:             "public-repo",
 		Branch:           "main",
-		Enabled:          utility.TruePtr(),
+		Enabled:          true,
 		BatchTime:        10,
 		Id:               "ident0",
 		PRTestingEnabled: utility.TruePtr(),
@@ -227,7 +227,7 @@ func makeRequest(uid, event string, body, secret []byte) (*http.Request, error) 
 func (s *GithubWebhookRouteSuite) TestPushEventTriggersRepoTracker() {
 	ref := &model.ProjectRef{
 		Id:      "meh",
-		Enabled: utility.TruePtr(),
+		Enabled: true,
 		Owner:   "baxterthehacker",
 		Repo:    "public-repo",
 		Branch:  "changes",
@@ -257,7 +257,7 @@ func (s *GithubWebhookRouteSuite) TestCommitQueueCommentTrigger() {
 		Owner:   "baxterthehacker",
 		Repo:    "public-repo",
 		Branch:  "main",
-		Enabled: utility.TruePtr(),
+		Enabled: true,
 		CommitQueue: model.CommitQueueParams{
 			Enabled: utility.TruePtr(),
 		},
@@ -303,11 +303,18 @@ func (s *GithubWebhookRouteSuite) TestRetryCommentTrigger() {
 	commentString := issueComment.Comment.GetBody()
 	s.Equal(retryComment, commentString)
 
-	s.True(triggersPatch("created", commentString))
-	s.False(triggersPatch("deleted", commentString))
+	s.True(triggersPatch(commentString))
 
 	//test whitespace trimming
-	s.True(triggersPatch("created", "  evergreen retry "))
+	s.True(triggersPatch("  evergreen retry "))
+}
+
+func (s *GithubWebhookRouteSuite) TestRefreshStatusTrigger() {
+	s.True(triggersStatusRefresh(refreshStatusComment))
+	s.False(triggersStatusRefresh(retryComment))
+
+	//test whitespace trimming
+	s.True(triggersStatusRefresh("  evergreen refresh "))
 }
 
 func (s *GithubWebhookRouteSuite) TestPatchCommentTrigger() {
@@ -320,11 +327,32 @@ func (s *GithubWebhookRouteSuite) TestPatchCommentTrigger() {
 	commentString := issueComment.Comment.GetBody()
 	s.Equal(patchComment, commentString)
 
-	s.True(triggersPatch("created", commentString))
-	s.False(triggersPatch("deleted", commentString))
+	s.True(triggersPatch(commentString))
 
 	//test whitespace trimming
-	s.True(triggersPatch("created", "  evergreen patch "))
+	s.True(triggersPatch("  evergreen patch "))
+}
+
+func (s *CommitQueueSuite) TestCommentTrigger() {
+	comment := "no dice"
+	s.False(triggersCommitQueue(comment))
+
+	comment = commitQueueMergeComment
+	s.True(triggersCommitQueue(comment))
+}
+
+func (s *CommitQueueSuite) TestCommentCleanup() {
+	trigger := " \n Evergreen       \n  Merge \n It's me, hi, I'm the comment it's me \n "
+	patch := " \n Evergreen       \n  Patch \n "
+	retry := " \n Evergreen       \n  Retry \n "
+
+	s.False(triggersCommitQueue(patch))
+	s.False(isPatchComment(retry))
+	s.False(isRetryComment(trigger))
+
+	s.True(triggersCommitQueue(trigger))
+	s.True(isPatchComment(patch))
+	s.True(isRetryComment(retry))
 }
 
 func (s *GithubWebhookRouteSuite) TestUnknownEventType() {
@@ -339,74 +367,6 @@ func (s *GithubWebhookRouteSuite) TestUnknownEventType() {
 	if s.NotNil(resp) {
 		s.Equal(http.StatusOK, resp.Status())
 	}
-}
-
-func (s *GithubWebhookRouteSuite) TestTryDequeueCommitQueueItemForPR() {
-	s.NoError(db.ClearCollections(model.ProjectRefCollection, commitqueue.Collection))
-	projectRef := &model.ProjectRef{
-		Id:      "bth",
-		Owner:   "baxterthehacker",
-		Repo:    "public-repo",
-		Branch:  "main",
-		Enabled: utility.TruePtr(),
-		CommitQueue: model.CommitQueueParams{
-			Enabled: utility.TruePtr(),
-		},
-	}
-	s.NoError(projectRef.Insert())
-	cq := &commitqueue.CommitQueue{ProjectID: "bth"}
-	s.NoError(commitqueue.InsertQueue(cq))
-
-	owner := "baxterthehacker"
-	repo := "public-repo"
-	branch := "main"
-	number := 1
-
-	fillerString := "a"
-	fillerBool := false
-	pr := &github.PullRequest{
-		MergeCommitSHA: &fillerString,
-		User:           &github.User{Login: &fillerString},
-		Base: &github.PullRequestBranch{
-			Repo: &github.Repository{
-				Owner: &github.User{
-					Login: &owner,
-				},
-				Name:     &repo,
-				FullName: &fillerString,
-			},
-			Ref: &branch,
-			SHA: &fillerString,
-		},
-		Head:    &github.PullRequestBranch{SHA: &fillerString},
-		Title:   &fillerString,
-		HTMLURL: &fillerString,
-		Merged:  &fillerBool,
-	}
-
-	// try dequeue errors if the PR is missing information (PR number)
-	s.Error(s.h.tryDequeueCommitQueueItemForPR(pr))
-
-	// try dequeue returns no error if there is no matching item
-	newNumber := 2
-	pr.Number = &newNumber
-	s.NoError(s.h.tryDequeueCommitQueueItemForPR(pr))
-
-	pr.Number = &number
-	// try dequeue returns no errors if there is no matching queue
-	s.NoError(s.h.tryDequeueCommitQueueItemForPR(pr))
-
-	// try dequeue works when an item matches
-	_, err := data.EnqueueItem("bth", restModel.APICommitQueueItem{Issue: utility.ToStringPtr("1")}, false)
-	s.NoError(err)
-	s.NoError(s.h.tryDequeueCommitQueueItemForPR(pr))
-	queue, err := data.FindCommitQueueForProject("bth")
-	s.NoError(err)
-	s.Empty(queue.Queue)
-
-	// try dequeue returns no error if no projectRef matches the PR
-	owner = "octocat"
-	s.NoError(s.h.tryDequeueCommitQueueItemForPR(pr))
 }
 
 func (s *GithubWebhookRouteSuite) TestCreateVersionForTag() {
@@ -439,4 +399,108 @@ func (s *GithubWebhookRouteSuite) TestCreateVersionForTag() {
 	v, err := s.mock.createVersionForTag(context.Background(), pRef, nil, model.Revision{}, tag, "")
 	s.NoError(err)
 	s.NotNil(v)
+}
+
+func TestGetHelpTextFromProjects(t *testing.T) {
+	cqAndPREnabledProject := model.ProjectRef{
+		Id:      "cqEnabled",
+		Enabled: true,
+		CommitQueue: model.CommitQueueParams{
+			Enabled: utility.TruePtr(),
+		},
+		PRTestingEnabled: utility.TruePtr(),
+	}
+	manualPRProject := model.ProjectRef{
+		Id:                     "manualEnabled",
+		Enabled:                true,
+		ManualPRTestingEnabled: utility.TruePtr(),
+	}
+	cqDisabledWithTextProject := model.ProjectRef{
+		Id:      "cqDisabled",
+		Enabled: true,
+		CommitQueue: model.CommitQueueParams{
+			Enabled: utility.FalsePtr(),
+			Message: "this commit queue isn't enabled",
+		},
+	}
+	disabledProject := model.ProjectRef{
+		Id:      "disabled",
+		Enabled: false,
+	}
+	repoRefWithPRTesting := &model.RepoRef{ProjectRef: model.ProjectRef{
+		Id:                     "enabled",
+		PRTestingEnabled:       utility.TruePtr(),
+		ManualPRTestingEnabled: utility.TruePtr(),
+	}}
+	repoRefWithoutPRTesting := &model.RepoRef{ProjectRef: model.ProjectRef{
+		Id:               "notEnabled",
+		PRTestingEnabled: nil,
+	}}
+
+	for testCase, test := range map[string]func(*testing.T){
+		"cqEnabledAndDisabled": func(t *testing.T) {
+			pRefs := []model.ProjectRef{cqAndPREnabledProject, cqDisabledWithTextProject}
+			helpText := getHelpTextFromProjects(nil, pRefs)
+			assert.Contains(t, helpText, refreshStatusComment)
+			assert.Contains(t, helpText, commitQueueMergeComment)
+			assert.NotContains(t, helpText, cqDisabledWithTextProject.CommitQueue.Message)
+			assert.Contains(t, helpText, retryComment)
+			assert.NotContains(t, helpText, patchComment)
+		},
+		"manualAndAutomaticPRTestingEnabled": func(t *testing.T) {
+			pRefs := []model.ProjectRef{cqAndPREnabledProject, manualPRProject}
+			helpText := getHelpTextFromProjects(nil, pRefs)
+			assert.Contains(t, helpText, refreshStatusComment)
+			assert.Contains(t, helpText, commitQueueMergeComment)
+			assert.Contains(t, helpText, patchComment)
+			assert.Contains(t, helpText, retryComment)
+		},
+		"manualPRTestingEnabled": func(t *testing.T) {
+			pRefs := []model.ProjectRef{manualPRProject}
+			helpText := getHelpTextFromProjects(nil, pRefs)
+			assert.Contains(t, helpText, refreshStatusComment)
+			assert.Contains(t, helpText, patchComment)
+			assert.NotContains(t, helpText, retryComment)
+			assert.NotContains(t, helpText, commitQueueMergeComment)
+		},
+		"cqDisabled": func(t *testing.T) {
+			pRefs := []model.ProjectRef{cqDisabledWithTextProject}
+			helpText := getHelpTextFromProjects(nil, pRefs)
+			assert.Contains(t, helpText, commitQueueMergeComment)
+			assert.Contains(t, helpText, cqDisabledWithTextProject.CommitQueue.Message)
+			assert.NotContains(t, helpText, refreshStatusComment)
+			assert.NotContains(t, helpText, retryComment)
+			assert.NotContains(t, helpText, patchComment)
+		},
+		"repoPRTestingEnabled": func(t *testing.T) {
+			pRefs := []model.ProjectRef{cqDisabledWithTextProject}
+			helpText := getHelpTextFromProjects(repoRefWithPRTesting, pRefs)
+			assert.Contains(t, helpText, commitQueueMergeComment)
+			assert.Contains(t, helpText, cqDisabledWithTextProject.CommitQueue.Message)
+			assert.Contains(t, helpText, refreshStatusComment)
+			assert.Contains(t, helpText, patchComment)
+			assert.Contains(t, helpText, retryComment)
+		},
+		"repoNoTestingEnabled": func(t *testing.T) {
+			pRefs := []model.ProjectRef{cqDisabledWithTextProject}
+			helpText := getHelpTextFromProjects(repoRefWithoutPRTesting, pRefs)
+			assert.Contains(t, helpText, commitQueueMergeComment)
+			assert.Contains(t, helpText, cqDisabledWithTextProject.CommitQueue.Message)
+			assert.NotContains(t, helpText, refreshStatusComment)
+			assert.NotContains(t, helpText, patchComment)
+			assert.NotContains(t, helpText, retryComment)
+		},
+		"repoPRTestingNotUsed": func(t *testing.T) {
+			// We only use repo PR testing if there are no disabled projects.
+			pRefs := []model.ProjectRef{disabledProject}
+			helpText := getHelpTextFromProjects(repoRefWithPRTesting, pRefs)
+			assert.NotContains(t, helpText, refreshStatusComment)
+			assert.NotContains(t, helpText, patchComment)
+			assert.NotContains(t, helpText, retryComment)
+			assert.NotContains(t, helpText, commitQueueMergeComment)
+		},
+	} {
+
+		t.Run(testCase, test)
+	}
 }

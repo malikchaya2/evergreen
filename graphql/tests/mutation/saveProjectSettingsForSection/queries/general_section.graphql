@@ -1,0 +1,25 @@
+mutation {
+    saveProjectSettingsForSection(
+        projectSettings: {
+            projectRef: {
+                id: "sandbox_project_id",
+                identifier: "sandbox",
+                enabled: true,
+                remotePath: "my_path_is_new"
+                owner: "evergreen-ci"
+                repo: "commit-queue-sandbox"
+                branch: "main"
+            }
+        },
+        section: GENERAL
+    ) {
+        projectRef {
+            enabled
+            remotePath
+            spawnHostScriptPath ## overwritten
+        }
+        vars {
+            vars ## should be unchanged
+        }
+    }
+}

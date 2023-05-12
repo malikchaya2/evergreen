@@ -35,6 +35,8 @@ type PodDispatcher struct {
 	// ModificationCount is an incrementing lock used to resolve conflicting
 	// updates to the dispatcher.
 	ModificationCount int `bson:"modification_count" json:"modification_count"`
+	// LastModified is the timestamp when the pod dispatcher was last modified.
+	LastModified time.Time `bson:"last_modified" json:"last_modified"`
 }
 
 // NewPodDispatcher returns a new pod dispatcher.
@@ -61,15 +63,16 @@ func (pd *PodDispatcher) atomicUpsertQuery() bson.M {
 	}
 }
 
-func (pd *PodDispatcher) atomicUpsertUpdate() bson.M {
+func (pd *PodDispatcher) atomicUpsertUpdate(lastModified time.Time) bson.M {
 	return bson.M{
 		"$setOnInsert": bson.M{
 			IDKey:      pd.ID,
 			GroupIDKey: pd.GroupID,
 		},
 		"$set": bson.M{
-			PodIDsKey:  pd.PodIDs,
-			TaskIDsKey: pd.TaskIDs,
+			PodIDsKey:       pd.PodIDs,
+			TaskIDsKey:      pd.TaskIDs,
+			LastModifiedKey: lastModified,
 		},
 		"$inc": bson.M{
 			ModificationCountKey: 1,
@@ -80,11 +83,13 @@ func (pd *PodDispatcher) atomicUpsertUpdate() bson.M {
 // UpsertAtomically inserts/updates the pod dispatcher depending on whether the
 // document already exists.
 func (pd *PodDispatcher) UpsertAtomically() (*adb.ChangeInfo, error) {
-	change, err := UpsertOne(pd.atomicUpsertQuery(), pd.atomicUpsertUpdate())
+	lastModified := utility.BSONTime(time.Now())
+	change, err := UpsertOne(pd.atomicUpsertQuery(), pd.atomicUpsertUpdate(lastModified))
 	if err != nil {
 		return change, err
 	}
 	pd.ModificationCount++
+	pd.LastModified = lastModified
 	return change, nil
 }
 
@@ -92,8 +97,8 @@ func (pd *PodDispatcher) UpsertAtomically() (*adb.ChangeInfo, error) {
 // there's no task available to run. If the pod is already running a task, this
 // will return an error.
 func (pd *PodDispatcher) AssignNextTask(ctx context.Context, env evergreen.Environment, p *pod.Pod) (*task.Task, error) {
-	if p.RunningTask != "" {
-		return nil, errors.Errorf("cannot assign a new task to a pod that is already running task '%s'", p.RunningTask)
+	if p.TaskRuntimeInfo.RunningTaskID != "" {
+		return nil, errors.Errorf("cannot assign a new task to a pod that is already running task '%s' execution %d", p.TaskRuntimeInfo.RunningTaskID, p.TaskRuntimeInfo.RunningTaskExecution)
 	}
 
 	grip.WarningWhen(len(pd.TaskIDs) > 1, message.Fields{
@@ -179,11 +184,11 @@ func (pd *PodDispatcher) dispatchTaskAtomically(ctx context.Context, env evergre
 
 func (pd *PodDispatcher) dispatchTask(env evergreen.Environment, p *pod.Pod, t *task.Task) func(mongo.SessionContext) (interface{}, error) {
 	return func(sessCtx mongo.SessionContext) (interface{}, error) {
-		if err := p.SetRunningTask(sessCtx, env, t.Id); err != nil {
+		if err := p.SetRunningTask(sessCtx, env, t.Id, t.Execution); err != nil {
 			return nil, errors.Wrapf(err, "setting pod's running task")
 		}
 
-		if err := t.MarkAsContainerDispatched(sessCtx, env, p.AgentVersion); err != nil {
+		if err := t.MarkAsContainerDispatched(sessCtx, env, p.ID, p.AgentVersion); err != nil {
 			return nil, errors.Wrapf(err, "marking task as dispatched")
 		}
 
@@ -205,7 +210,8 @@ func (pd *PodDispatcher) dequeue(ctx context.Context, env evergreen.Environment)
 		}
 	}()
 
-	res, err := env.DB().Collection(Collection).UpdateOne(ctx, pd.atomicUpsertQuery(), pd.atomicUpsertUpdate())
+	lastModified := utility.BSONTime(time.Now())
+	res, err := env.DB().Collection(Collection).UpdateOne(ctx, pd.atomicUpsertQuery(), pd.atomicUpsertUpdate(lastModified))
 	if err != nil {
 		return errors.Wrap(err, "upserting dispatcher")
 	}
@@ -214,6 +220,7 @@ func (pd *PodDispatcher) dequeue(ctx context.Context, env evergreen.Environment)
 	}
 
 	pd.ModificationCount++
+	pd.LastModified = lastModified
 
 	return nil
 }
@@ -271,7 +278,7 @@ func (pd *PodDispatcher) checkTaskIsDispatchable(ctx context.Context, env evergr
 	// Disabled projects generally are not allowed to run tasks. The one
 	// exception is that GitHub PR tasks are still allowed to run for disabled
 	// hidden projects.
-	if !ref.IsEnabled() && (t.Requester != evergreen.GithubPRRequester || !ref.IsHidden()) {
+	if !ref.Enabled && (t.Requester != evergreen.GithubPRRequester || !ref.IsHidden()) {
 		grip.Notice(message.Fields{
 			"message":    "project ref is disabled",
 			"outcome":    "task is not dispatchable",
@@ -309,7 +316,12 @@ func (pd *PodDispatcher) RemovePod(ctx context.Context, env evergreen.Environmen
 	if len(pd.PodIDs) == 1 && len(pd.TaskIDs) > 0 {
 		// The last pod is about to be removed, so there will be no pod
 		// remaining to run the tasks still in the dispatch queue.
-		if err := task.MarkManyContainerDeallocated(pd.TaskIDs); err != nil {
+
+		if err := model.MarkUnallocatableContainerTasksSystemFailed(env.Settings(), pd.TaskIDs); err != nil {
+			return errors.Wrap(err, "marking unallocatable container tasks as system-failed")
+		}
+
+		if err := task.MarkTasksAsContainerDeallocated(pd.TaskIDs); err != nil {
 			return errors.Wrap(err, "marking all tasks in dispatcher as container deallocated")
 		}
 
@@ -355,7 +367,8 @@ func (pd *PodDispatcher) removePodsAndTasks(ctx context.Context, env evergreen.E
 		}
 	}()
 
-	res, err := env.DB().Collection(Collection).UpdateOne(ctx, pd.atomicUpsertQuery(), pd.atomicUpsertUpdate())
+	lastModified := utility.BSONTime(time.Now())
+	res, err := env.DB().Collection(Collection).UpdateOne(ctx, pd.atomicUpsertQuery(), pd.atomicUpsertUpdate(lastModified))
 	if err != nil {
 		return errors.Wrap(err, "upserting dispatcher")
 	}
@@ -364,6 +377,7 @@ func (pd *PodDispatcher) removePodsAndTasks(ctx context.Context, env evergreen.E
 	}
 
 	pd.ModificationCount++
+	pd.LastModified = lastModified
 
 	return nil
 }

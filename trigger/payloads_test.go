@@ -10,6 +10,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testresult"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/utility"
@@ -49,6 +50,8 @@ func (s *payloadSuite) SetupTest() {
 		DisplayName:     "display-1234",
 		Object:          "patch",
 		Project:         "test",
+		EventID:         "eventid",
+		SubscriptionID:  "subscriptionid",
 		URL:             s.url,
 		PastTenseStatus: s.status,
 		Headers:         headers,
@@ -65,6 +68,8 @@ func (s *payloadSuite) TestEmailWithNilContent() {
 	s.Contains(m.Body, "> has failed.")
 	s.Contains(m.Body, `href="`+s.url+`"`)
 	s.Contains(m.Body, "X-Evergreen-test:something")
+	s.Contains(m.Body, "Subscription: subscriptionid")
+	s.Contains(m.Body, "Event: eventid")
 }
 
 func (s *payloadSuite) TestEmailWithTaskContent() {
@@ -76,12 +81,12 @@ func (s *payloadSuite) TestEmailWithTaskContent() {
 			TimedOut: false,
 		},
 	}
-	s.t.FailedTests = []task.TestResult{
+	s.t.FailedTests = []testresult.TestResult{
 		{
-			TestFile: "test0",
+			TestName: "test0",
 		},
 		{
-			TestFile:        "test1",
+			TestName:        "test1",
 			DisplayTestName: "display_test1",
 		},
 	}
@@ -102,6 +107,8 @@ func (s *payloadSuite) TestEmailWithTaskContent() {
 	s.Contains(m.Body, "display_test1")
 	s.Contains(m.Body, "theproject")
 	s.Contains(m.Body, "buildname")
+	s.Contains(m.Body, "subscriptionid")
+	s.Contains(m.Body, "eventid")
 
 	s.t.Task.DisplayTask = &task.Task{
 		DisplayName: "thedisplaytask",
@@ -152,17 +159,19 @@ func (s *payloadSuite) TestSlack() {
 }
 
 func (s *payloadSuite) TestGetFailedTestsFromTemplate() {
-	test1 := task.TestResult{
-		URL:    "http://www.something.com/absolute",
-		Status: evergreen.TestSucceededStatus,
+	test1 := testresult.TestResult{
+		TestName: "test1",
+		LogURL:   "http://www.something.com/absolute",
+		Status:   evergreen.TestSucceededStatus,
 	}
-	test2 := task.TestResult{
-		URL:    "http://www.something.com/absolute",
-		Status: evergreen.TestFailedStatus,
+	test2 := testresult.TestResult{
+		TestName: "test2",
+		LogURL:   "http://www.something.com/absolute",
+		Status:   evergreen.TestFailedStatus,
 	}
-	test3 := task.TestResult{
-		LogId:  "abc",
-		Status: evergreen.TestFailedStatus,
+	test3 := testresult.TestResult{
+		TestName: "test3",
+		Status:   evergreen.TestFailedStatus,
 	}
 	t := task.Task{
 		Id:          "taskid",
@@ -170,7 +179,7 @@ func (s *payloadSuite) TestGetFailedTestsFromTemplate() {
 		Details: apimodels.TaskEndDetail{
 			TimedOut: false,
 		},
-		LocalTestResults: []task.TestResult{test1, test2, test3},
+		LocalTestResults: []testresult.TestResult{test1, test2, test3},
 	}
 	settings, err := evergreen.GetConfig()
 	s.NoError(err)
@@ -179,8 +188,8 @@ func (s *payloadSuite) TestGetFailedTestsFromTemplate() {
 	tr, err := getFailedTestsFromTemplate(t)
 	s.NoError(err)
 	s.Require().Len(tr, 2)
-	s.Equal(test2.GetLogURL(evergreen.LogViewerHTML), tr[0].URL)
-	s.Equal(test3.GetLogURL(evergreen.LogViewerHTML), tr[1].URL)
+	s.Equal(test2.GetLogURL(evergreen.GetEnvironment(), evergreen.LogViewerHTML), tr[0].LogURL)
+	s.Equal(test3.GetLogURL(evergreen.GetEnvironment(), evergreen.LogViewerHTML), tr[1].LogURL)
 }
 
 func TestTruncateString(t *testing.T) {

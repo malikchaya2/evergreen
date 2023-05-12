@@ -9,17 +9,19 @@ import (
 )
 
 type CommitQueueConfig struct {
-	MergeTaskDistro string `yaml:"merge_task_distro" bson:"merge_task_distro" json:"merge_task_distro"`
-	CommitterName   string `yaml:"committer_name" bson:"committer_name" json:"committer_name"`
-	CommitterEmail  string `yaml:"committer_email" bson:"committer_email" json:"committer_email"`
-	BatchSize       int    `yaml:"batch_size" bson:"batch_size" json:"batch_size"`
+	MergeTaskDistro            string `yaml:"merge_task_distro" bson:"merge_task_distro" json:"merge_task_distro"`
+	CommitterName              string `yaml:"committer_name" bson:"committer_name" json:"committer_name"`
+	CommitterEmail             string `yaml:"committer_email" bson:"committer_email" json:"committer_email"`
+	BatchSize                  int    `yaml:"batch_size" bson:"batch_size" json:"batch_size"`
+	MaxSystemFailedTaskRetries int    `yaml:"max_system_failed_task_retries" bson:"max_system_failed_task_retries" json:"max_system_failed_task_retries"`
 }
 
 var (
-	mergeTaskDistroKey      = bsonutil.MustHaveTag(CommitQueueConfig{}, "MergeTaskDistro")
-	committerNameKey        = bsonutil.MustHaveTag(CommitQueueConfig{}, "CommitterName")
-	committerEmailKey       = bsonutil.MustHaveTag(CommitQueueConfig{}, "CommitterEmail")
-	commitQueueBatchSizeKey = bsonutil.MustHaveTag(CommitQueueConfig{}, "BatchSize")
+	mergeTaskDistroKey            = bsonutil.MustHaveTag(CommitQueueConfig{}, "MergeTaskDistro")
+	committerNameKey              = bsonutil.MustHaveTag(CommitQueueConfig{}, "CommitterName")
+	committerEmailKey             = bsonutil.MustHaveTag(CommitQueueConfig{}, "CommitterEmail")
+	commitQueueBatchSizeKey       = bsonutil.MustHaveTag(CommitQueueConfig{}, "BatchSize")
+	maxSystemFailedTaskRetriesKey = bsonutil.MustHaveTag(CommitQueueConfig{}, "MaxSystemFailedTaskRetries")
 )
 
 func (c *CommitQueueConfig) SectionId() string { return "commit_queue" }
@@ -36,11 +38,11 @@ func (c *CommitQueueConfig) Get(env Environment) error {
 			return nil
 		}
 
-		return errors.Wrapf(err, "error retrieving section %s", c.SectionId())
+		return errors.Wrapf(err, "getting config section '%s'", c.SectionId())
 	}
 
 	if err := res.Decode(c); err != nil {
-		return errors.Wrap(err, "problem decoding result")
+		return errors.Wrapf(err, "decoding config section '%s'", c.SectionId())
 	}
 
 	return nil
@@ -55,13 +57,14 @@ func (c *CommitQueueConfig) Set() error {
 
 	_, err := coll.UpdateOne(ctx, byId(c.SectionId()), bson.M{
 		"$set": bson.M{
-			mergeTaskDistroKey:      c.MergeTaskDistro,
-			committerNameKey:        c.CommitterName,
-			committerEmailKey:       c.CommitterEmail,
-			commitQueueBatchSizeKey: c.BatchSize,
+			mergeTaskDistroKey:            c.MergeTaskDistro,
+			committerNameKey:              c.CommitterName,
+			committerEmailKey:             c.CommitterEmail,
+			commitQueueBatchSizeKey:       c.BatchSize,
+			maxSystemFailedTaskRetriesKey: c.MaxSystemFailedTaskRetries,
 		},
 	}, options.Update().SetUpsert(true))
-	return errors.Wrapf(err, "error updating section %s", c.SectionId())
+	return errors.Wrapf(err, "updating config section '%s'", c.SectionId())
 }
 
 func (c *CommitQueueConfig) ValidateAndDefault() error {

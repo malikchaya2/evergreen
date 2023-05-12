@@ -85,12 +85,11 @@ func (j *versionActivationCatchup) Run(ctx context.Context) {
 	count := 0
 	projectsActivated := []string{}
 	for _, ref := range projects {
-		if !ref.IsEnabled() {
+		if !ref.Enabled {
 			continue
 		}
 		ok, err := repotracker.ActivateBuildsForProject(ref, ts)
-		j.AddError(errors.Wrapf(err,
-			"problem activating builds for project %s", ref.Id))
+		j.AddError(errors.Wrapf(err, "activating builds for project '%s'", ref.Id))
 		if ok {
 			projectsActivated = append(projectsActivated, ref.Identifier)
 		}

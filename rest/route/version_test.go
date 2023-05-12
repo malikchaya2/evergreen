@@ -7,6 +7,7 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
+	"github.com/evergreen-ci/evergreen/mock"
 	serviceModel "github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/task"
@@ -20,6 +21,9 @@ import (
 // VersionSuite enables testing for version related routes.
 type VersionSuite struct {
 	bv, bi []string // build variants and build indices for testing
+	env    evergreen.Environment
+	ctx    context.Context
+	cancel context.CancelFunc
 
 	suite.Suite
 }
@@ -34,6 +38,12 @@ var versionId, revision, author, authorEmail, msg, status, repo, branch, project
 // SetupSuite sets up the test suite for routes related to version.
 // More version-related routes will be implemented later.
 func (s *VersionSuite) SetupSuite() {
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+
+	env := &mock.Environment{}
+	s.Require().NoError(env.Configure(s.ctx))
+	s.env = env
+
 	// Initialize values for version field variables.
 	versionId = "versionId"
 	revision = "revision"
@@ -88,6 +98,7 @@ func (s *VersionSuite) SetupSuite() {
 	tasks := []task.Task{
 		{Id: "task1", Version: versionId, Aborted: false, Status: evergreen.TaskStarted},
 		{Id: "task2", Version: versionId, Aborted: false, Status: evergreen.TaskDispatched},
+		{Id: "task3", Version: versionId, Aborted: false, Status: evergreen.TaskUndispatched, BuildId: testBuild1.Id},
 	}
 
 	builds := []build.Build{testBuild1, testBuild2}
@@ -101,6 +112,10 @@ func (s *VersionSuite) SetupSuite() {
 	for _, item := range builds {
 		s.Require().NoError(item.Insert())
 	}
+}
+
+func (s *VersionSuite) TearDownSuite() {
+	s.cancel()
 }
 
 // TestFindByVersionId tests the route for finding version by its ID.
@@ -123,9 +138,42 @@ func (s *VersionSuite) TestFindByVersionId() {
 	s.Equal(utility.ToStringPtr(project), h.Project)
 }
 
+func (s *VersionSuite) TestPatchVersionVersion() {
+	ctx := context.Background()
+	ctx = gimlet.AttachUser(ctx, &user.DBUser{Id: "caller1"})
+	handler := &versionPatchHandler{
+		versionId: versionId,
+		Activated: utility.TruePtr(),
+	}
+
+	res := handler.Run(ctx)
+	s.NotNil(res)
+	s.Equal(http.StatusOK, res.Status())
+
+	v, err := serviceModel.VersionFindOneId(versionId)
+	s.Nil(err)
+	for _, b := range v.BuildIds {
+		build, err := build.FindOneId(b)
+		s.Nil(err)
+		s.Equal(true, build.Activated)
+	}
+	s.Equal(versionId, v.Id)
+	s.Equal(revision, v.Revision)
+	s.Equal(author, v.Author)
+	s.Equal(authorEmail, v.AuthorEmail)
+	s.Equal(msg, v.Message)
+	s.Equal(evergreen.VersionStarted, v.Status)
+	s.Equal(repo, v.Repo)
+	s.Equal(branch, v.Branch)
+	s.Equal(utility.TruePtr(), v.Activated)
+}
+
 // TestFindAllBuildsForVersion tests the route for finding all builds for a version.
 func (s *VersionSuite) TestFindAllBuildsForVersion() {
-	handler := &buildsForVersionHandler{versionId: "versionId"}
+	handler := &buildsForVersionHandler{
+		versionId: "versionId",
+		env:       s.env,
+	}
 	res := handler.Run(context.TODO())
 	s.Equal(http.StatusOK, res.Status())
 	s.NotNil(res)
@@ -143,11 +191,14 @@ func (s *VersionSuite) TestFindAllBuildsForVersion() {
 }
 
 func (s *VersionSuite) TestFindBuildsForVersionByVariant() {
-	handler := &buildsForVersionHandler{versionId: "versionId"}
+	handler := &buildsForVersionHandler{
+		versionId: "versionId",
+		env:       s.env,
+	}
 
 	for i, variant := range s.bv {
 		handler.variant = variant
-		res := handler.Run(context.Background())
+		res := handler.Run(s.ctx)
 		s.Equal(http.StatusOK, res.Status())
 		s.NotNil(res)
 
@@ -181,7 +232,9 @@ func (s *VersionSuite) TestAbortVersion() {
 	for _, t := range tasks {
 		foundTask, err := task.FindOneId(t)
 		s.NoError(err)
-		s.Equal(foundTask.Aborted, true)
+		if utility.StringSliceContains(evergreen.TaskAbortableStatuses, foundTask.Status) {
+			s.Equal(foundTask.Aborted, true)
+		}
 	}
 }
 

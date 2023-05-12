@@ -5,15 +5,13 @@ import (
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
-	"github.com/evergreen-ci/evergreen/db"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 func init() {
-	registry.AddType(ResourceTypeHost, hostEventDataFactory)
+	registry.AddType(ResourceTypeHost, func() interface{} { return &HostEventData{} })
 	registry.AllowSubscription(ResourceTypeHost, EventHostExpirationWarningSent)
 	registry.AllowSubscription(ResourceTypeHost, EventVolumeExpirationWarningSent)
 	registry.AllowSubscription(ResourceTypeHost, EventHostProvisioned)
@@ -51,12 +49,13 @@ const (
 	EventHostRunningTaskSet              = "HOST_RUNNING_TASK_SET"
 	EventHostRunningTaskCleared          = "HOST_RUNNING_TASK_CLEARED"
 	EventHostMonitorFlag                 = "HOST_MONITOR_FLAG"
-	EventTaskFinished                    = "HOST_TASK_FINISHED"
+	EventHostTaskFinished                = "HOST_TASK_FINISHED"
 	EventHostTerminatedExternally        = "HOST_TERMINATED_EXTERNALLY"
 	EventHostExpirationWarningSent       = "HOST_EXPIRATION_WARNING_SENT"
 	EventHostScriptExecuted              = "HOST_SCRIPT_EXECUTED"
 	EventHostScriptExecuteFailed         = "HOST_SCRIPT_EXECUTE_FAILED"
 	EventVolumeExpirationWarningSent     = "VOLUME_EXPIRATION_WARNING_SENT"
+	EventVolumeMigrationFailed           = "VOLUME_MIGRATION_FAILED"
 )
 
 // implements EventData
@@ -70,7 +69,6 @@ type HostEventData struct {
 	Hostname           string        `bson:"hn,omitempty" json:"hostname,omitempty"`
 	ProvisioningMethod string        `bson:"prov_method" json:"provisioning_method,omitempty"`
 	TaskId             string        `bson:"t_id,omitempty" json:"task_id,omitempty"`
-	TaskExecution      int           `bson:"t_execution,omitempty" json:"task_execution,omitempty"`
 	TaskPid            string        `bson:"t_pid,omitempty" json:"task_pid,omitempty"`
 	TaskStatus         string        `bson:"t_st,omitempty" json:"task_status,omitempty"`
 	Execution          string        `bson:"execution,omitempty" json:"execution,omitempty"`
@@ -81,9 +79,7 @@ type HostEventData struct {
 }
 
 var (
-	hostDataStatusKey        = bsonutil.MustHaveTag(HostEventData{}, "TaskStatus")
-	hostDataTaskIDKey        = bsonutil.MustHaveTag(HostEventData{}, "TaskId")
-	hostDataTaskExecutionKey = bsonutil.MustHaveTag(HostEventData{}, "Execution")
+	hostDataStatusKey = bsonutil.MustHaveTag(HostEventData{}, "TaskStatus")
 )
 
 func LogHostEvent(hostId string, eventType string, eventData HostEventData) {
@@ -95,8 +91,7 @@ func LogHostEvent(hostId string, eventType string, eventData HostEventData) {
 		ResourceType: ResourceTypeHost,
 	}
 
-	logger := NewDBEventLogger(AllLogCollection)
-	if err := logger.LogEvent(&event); err != nil {
+	if err := event.Log(); err != nil {
 		grip.Error(message.WrapError(err, message.Fields{
 			"resource_type": ResourceTypeHost,
 			"message":       "error logging event",
@@ -106,7 +101,13 @@ func LogHostEvent(hostId string, eventType string, eventData HostEventData) {
 }
 
 func LogHostCreated(hostId string) {
-	LogHostEvent(hostId, EventHostCreated, HostEventData{})
+	LogHostEvent(hostId, EventHostCreated, HostEventData{Successful: true})
+}
+
+// LogHostCreationFailed logs an event indicating that the host errored while it
+// was being created.
+func LogHostCreationFailed(hostID, logs string) {
+	LogHostEvent(hostID, EventHostCreated, HostEventData{Successful: false, Logs: logs})
 }
 
 // LogHostStartSucceeded logs an event indicating that the host was successfully
@@ -227,14 +228,20 @@ func LogHostProvisioned(hostId string) {
 	LogHostEvent(hostId, EventHostProvisioned, HostEventData{})
 }
 
-func LogHostRunningTaskSet(hostId string, taskId string) {
+func LogHostRunningTaskSet(hostId string, taskId string, taskExecution int) {
 	LogHostEvent(hostId, EventHostRunningTaskSet,
-		HostEventData{TaskId: taskId})
+		HostEventData{
+			TaskId:    taskId,
+			Execution: strconv.Itoa(taskExecution),
+		})
 }
 
-func LogHostRunningTaskCleared(hostId string, taskId string) {
+func LogHostRunningTaskCleared(hostId string, taskId string, taskExecution int) {
 	LogHostEvent(hostId, EventHostRunningTaskCleared,
-		HostEventData{TaskId: taskId})
+		HostEventData{
+			TaskId:    taskId,
+			Execution: strconv.Itoa(taskExecution),
+		})
 }
 
 // LogHostProvisionFailed is used when Evergreen gives up on provisioning a host
@@ -251,26 +258,15 @@ func LogVolumeExpirationWarningSent(volumeID string) {
 	LogHostEvent(volumeID, EventVolumeExpirationWarningSent, HostEventData{})
 }
 
-// UpdateHostTaskExecutions updates host events to track multiple executions of
-// the same host task.
-func UpdateHostTaskExecutions(hostId, taskId string, execution int) error {
-	query := bson.M{
-		ResourceIdKey: hostId,
-		bsonutil.GetDottedKeyName(DataKey, hostDataTaskIDKey): taskId,
-	}
-	update := bson.M{
-		"$set": bson.M{
-			bsonutil.GetDottedKeyName(DataKey, hostDataTaskExecutionKey): strconv.Itoa(execution),
-		},
-	}
-	_, err := db.UpdateAll(AllLogCollection, query, update)
-	return err
-}
-
 func LogHostScriptExecuted(hostID string, logs string) {
 	LogHostEvent(hostID, EventHostScriptExecuted, HostEventData{Logs: logs})
 }
 
 func LogHostScriptExecuteFailed(hostID string, err error) {
 	LogHostEvent(hostID, EventHostScriptExecuteFailed, HostEventData{Logs: err.Error()})
+}
+
+// LogVolumeMigrationFailed is used when a volume is unable to migrate to a new host.
+func LogVolumeMigrationFailed(hostID string, err error) {
+	LogHostEvent(hostID, EventVolumeMigrationFailed, HostEventData{Logs: err.Error()})
 }

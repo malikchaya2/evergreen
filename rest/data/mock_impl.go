@@ -5,10 +5,11 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/testresult"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/utility"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/pkg/errors"
 )
 
@@ -21,7 +22,7 @@ type MockGitHubConnectorImpl struct {
 	StoredError     error
 }
 
-func (pc *MockGitHubConnectorImpl) GetGitHubPR(ctx context.Context, owner, repo string, PRNum int) (*github.PullRequest, error) {
+func (pc *MockGitHubConnectorImpl) GetGitHubPR(ctx context.Context, owner, repo string, prNum int) (*github.PullRequest, error) {
 	return &github.PullRequest{
 		User: &github.User{
 			ID:    github.Int64(1234),
@@ -33,17 +34,22 @@ func (pc *MockGitHubConnectorImpl) GetGitHubPR(ctx context.Context, owner, repo 
 		Head: &github.PullRequestBranch{
 			SHA: github.String("abcdef1234"),
 		},
+		MergeableState: utility.ToStringPtr("clean"),
 	}, nil
 }
 
-func (pc *MockGitHubConnectorImpl) AddPatchForPr(ctx context.Context, projectRef model.ProjectRef, prNum int, modules []restModel.APIModule, messageOverride string) (string, error) {
-	return "", nil
+func (pc *MockGitHubConnectorImpl) AddPatchForPR(ctx context.Context, projectRef model.ProjectRef, prNum int, modules []restModel.APIModule, messageOverride string) (*patch.Patch, error) {
+	return &patch.Patch{}, nil
+}
+
+func (pc *MockGitHubConnectorImpl) AddCommentToPR(ctx context.Context, owner, repo string, prNum int, comment string) error {
+	return nil
 }
 
 func (pc *MockGitHubConnectorImpl) IsAuthorizedToPatchAndMerge(ctx context.Context, settings *evergreen.Settings, args UserRepoInfo) (bool, error) {
 	_, err := settings.GetGithubOauthToken()
 	if err != nil {
-		return false, errors.Wrap(err, "can't get Github OAuth token from configuration")
+		return false, errors.Wrap(err, "can't get GitHub OAuth token from configuration")
 	}
 
 	permission, ok := pc.UserPermissions[args]
@@ -80,47 +86,9 @@ tasks:
 	}, err
 }
 
-func (mvc *MockGitHubConnectorImpl) CreateVersionFromConfig(ctx context.Context, projectInfo *model.ProjectInfo, metadata model.VersionMetadata, active bool) (*model.Version, error) {
+func (mvc *MockGitHubConnectorImpl) CreateVersionFromConfig(ctx context.Context, projectInfo *model.ProjectInfo, metadata model.VersionMetadata) (*model.Version, error) {
 	return &model.Version{
 		Requester:         evergreen.GitTagRequester,
 		TriggeredByGitTag: metadata.GitTag,
 	}, nil
-}
-
-func (mtc *MockGitHubConnectorImpl) FindTestsByTaskId(opts FindTestsByTaskIdOpts) ([]testresult.TestResult, error) {
-	if mtc.StoredError != nil {
-		return []testresult.TestResult{}, mtc.StoredError
-	}
-
-	// loop until the testId is found
-	for ix, t := range mtc.CachedTests {
-		if string(t.ID) == opts.TestID { // We've found the test to start from
-			if opts.TestName == "" {
-				return mtc.findAllTestsFromIx(ix, opts.Limit), nil
-			}
-			return mtc.findTestsByNameFromIx(opts.TestName, ix, opts.Limit), nil
-		}
-	}
-	return nil, nil
-}
-
-func (mtc *MockGitHubConnectorImpl) findAllTestsFromIx(ix, limit int) []testresult.TestResult {
-	if ix+limit > len(mtc.CachedTests) {
-		return mtc.CachedTests[ix:]
-	}
-	return mtc.CachedTests[ix : ix+limit]
-}
-
-func (mtc *MockGitHubConnectorImpl) findTestsByNameFromIx(name string, ix, limit int) []testresult.TestResult {
-	possibleTests := mtc.CachedTests[ix:]
-	testResults := []testresult.TestResult{}
-	for jx, t := range possibleTests {
-		if t.TestFile == name {
-			testResults = append(testResults, possibleTests[jx])
-		}
-		if len(testResults) == limit {
-			return testResults
-		}
-	}
-	return testResults
 }

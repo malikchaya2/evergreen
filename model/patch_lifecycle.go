@@ -3,7 +3,6 @@ package model
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -92,42 +91,45 @@ func ValidateTVPairs(p *Project, in []TVPair) error {
 
 // Given a patch version and a list of variant/task pairs, creates the set of new builds that
 // do not exist yet out of the set of pairs, and adds tasks for builds which already exist.
-func addNewTasksAndBuildsForPatch(ctx context.Context, syncOpts patch.SyncAtEndOptions, patchVersion *Version, project *Project,
-	pairs TaskVariantPairs, pRef *ProjectRef) error {
-	existingBuilds, err := build.Find(build.ByIds(patchVersion.BuildIds).WithFields(build.IdKey, build.BuildVariantKey, build.CreateTimeKey, build.RequesterKey))
+func addNewTasksAndBuildsForPatch(ctx context.Context, creationInfo TaskCreationInfo) error {
+	existingBuilds, err := build.Find(build.ByIds(creationInfo.Version.BuildIds).WithFields(build.IdKey, build.BuildVariantKey, build.CreateTimeKey, build.RequesterKey))
 	if err != nil {
 		return err
 	}
-	_, err = addNewBuilds(ctx, specificActivationInfo{}, patchVersion, project, pairs, existingBuilds, syncOpts, pRef, "")
+	_, err = addNewBuilds(ctx, creationInfo, existingBuilds)
 	if err != nil {
 		return errors.Wrap(err, "adding new builds")
 	}
-	_, err = addNewTasks(ctx, specificActivationInfo{}, patchVersion, project, pRef, pairs, existingBuilds, syncOpts, "")
-	return errors.Wrap(err, "adding new tasks")
+	_, err = addNewTasks(ctx, creationInfo, existingBuilds)
+	if err != nil {
+		return errors.Wrap(err, "adding new tasks")
+	}
+	err = activateExistingInactiveTasks(creationInfo, existingBuilds)
+	return errors.Wrap(err, "activating existing inactive tasks")
 }
 
 type PatchUpdate struct {
 	Description         string               `json:"description"`
-	Parameters          []patch.Parameter    `json:"parameters,omitempty"` // TODO: maybe shouldn't be API?
+	Parameters          []patch.Parameter    `json:"parameters,omitempty"`
 	PatchTriggerAliases []string             `json:"patch_trigger_aliases,omitempty"`
 	VariantsTasks       []patch.VariantTasks `json:"variants_tasks,omitempty"`
 }
 
 // ConfigurePatch validates and creates the updated tasks/variants, and updates description if needed.
 // Returns an http status code and error.
-func ConfigurePatch(ctx context.Context, p *patch.Patch, version *Version, proj *ProjectRef, patchUpdateReq PatchUpdate) (int, error) {
+func ConfigurePatch(ctx context.Context, settings *evergreen.Settings, p *patch.Patch, version *Version, proj *ProjectRef, patchUpdateReq PatchUpdate) (int, error) {
 	var err error
-	project := &Project{}
-	if _, err := LoadProjectInto(ctx, []byte(p.PatchedParserProject), nil, p.Project, project); err != nil {
+	project, _, err := FindAndTranslateProjectForPatch(ctx, settings, p)
+	if err != nil {
 		return http.StatusInternalServerError, errors.Wrap(err, "unmarshalling project config")
 	}
 
 	addDisplayTasksToPatchReq(&patchUpdateReq, *project)
 	tasks := VariantTasksToTVPairs(patchUpdateReq.VariantsTasks)
-	tasks.ExecTasks, err = IncludeDependencies(project, tasks.ExecTasks, p.GetRequester())
+	tasks.ExecTasks, err = IncludeDependencies(project, tasks.ExecTasks, p.GetRequester(), nil)
 	grip.Warning(message.WrapError(err, message.Fields{
 		"message": "error including dependencies for patch",
-		"patch":   p.Id,
+		"patch":   p.Id.Hex(),
 	}))
 	if err = ValidateTVPairs(project, tasks.ExecTasks); err != nil {
 		return http.StatusBadRequest, err
@@ -164,7 +166,16 @@ func ConfigurePatch(ctx context.Context, p *patch.Patch, version *Version, proj 
 		}
 
 		// First add new tasks to existing builds, if necessary
-		err = addNewTasksAndBuildsForPatch(context.Background(), p.SyncAtEndOpts, version, project, tasks, proj)
+		creationInfo := TaskCreationInfo{
+			Project:        project,
+			ProjectRef:     proj,
+			Version:        version,
+			Pairs:          tasks,
+			SyncAtEndOpts:  p.SyncAtEndOpts,
+			ActivationInfo: specificActivationInfo{},
+			GeneratedBy:    "",
+		}
+		err = addNewTasksAndBuildsForPatch(context.Background(), creationInfo)
 		if err != nil {
 			return http.StatusInternalServerError, errors.Wrapf(err, "creating new tasks/builds for version '%s'", version.Id)
 		}
@@ -191,33 +202,8 @@ func addDisplayTasksToPatchReq(req *PatchUpdate, p Project) {
 	}
 }
 
-// GetPatchedProject creates and validates a project created by fetching latest commit information from GitHub
-// and applying the patch to the latest remote configuration. Also returns the condensed yaml string for storage.
-// The error returned can be a validation error.
-func GetPatchedProject(ctx context.Context, p *patch.Patch, githubOauthToken string) (*Project, *PatchConfig, error) {
-	if p.Version != "" {
-		return nil, nil, errors.Errorf("patch '%s' already finalized", p.Version)
-	}
-
-	project := &Project{}
-	projectRef, opts, err := getLoadProjectOptsForPatch(p, githubOauthToken)
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "fetching project options for patch")
-	}
-	// if the patched config exists, use that as the project file bytes.
-	if p.PatchedParserProject != "" {
-		if _, err := LoadProjectInto(ctx, []byte(p.PatchedParserProject), opts, p.Project, project); err != nil {
-			return nil, nil, errors.WithStack(err)
-		}
-		patchConfig := &PatchConfig{
-			PatchedParserProject: p.PatchedParserProject,
-			PatchedProjectConfig: p.PatchedProjectConfig,
-		}
-		return project, patchConfig, nil
-	}
-
-	var cancel context.CancelFunc
-	ctx, cancel = context.WithTimeout(ctx, 10*time.Second)
+func getPatchedProjectYAML(ctx context.Context, projectRef *ProjectRef, opts *GetProjectOpts, p *patch.Patch) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, fetchProjectFilesTimeout)
 	defer cancel()
 	env := evergreen.GetEnvironment()
 
@@ -238,9 +224,9 @@ func GetPatchedProject(ctx context.Context, p *patch.Patch, githubOauthToken str
 	}
 	opts.RemotePath = path
 	opts.PatchOpts.env = env
-	projectFileBytes, err = getFileForPatchDiff(ctx, *opts)
+	projectFileBytes, err := getFileForPatchDiff(ctx, *opts)
 	if err != nil {
-		return nil, nil, errors.Wrap(err, "fetching remote configuration file")
+		return nil, errors.Wrap(err, "fetching remote configuration file")
 	}
 
 	// apply remote configuration patch if needed
@@ -248,40 +234,147 @@ func GetPatchedProject(ctx context.Context, p *patch.Patch, githubOauthToken str
 		opts.ReadFileFrom = ReadFromPatchDiff
 		projectFileBytes, err = MakePatchedConfig(ctx, env, p, path, string(projectFileBytes))
 		if err != nil {
-			return nil, nil, errors.Wrap(err, "patching remote configuration file")
+			return nil, errors.Wrap(err, "patching remote configuration file")
 		}
 	}
+
+	return projectFileBytes, nil
+}
+
+// GetPatchedProject creates and validates a project by fetching latest commit
+// information from GitHub and applying the patch to the latest remote
+// configuration. Also returns the condensed yaml string for storage. The error
+// returned can be a validation error.
+func GetPatchedProject(ctx context.Context, settings *evergreen.Settings, p *patch.Patch, githubOauthToken string) (*Project, *PatchConfig, error) {
+	if p.Version != "" {
+		return nil, nil, errors.Errorf("patch '%s' already finalized", p.Version)
+	}
+
+	if p.ProjectStorageMethod != "" || p.PatchedParserProject != "" {
+		// If the patch has already been created but has not been finalized, it
+		// has either already stored the parser project document or stored the
+		// parser project as a string (which is the fallback case for old
+		// patches).
+		project, pp, err := FindAndTranslateProjectForPatch(ctx, settings, p)
+		if err != nil {
+			return nil, nil, errors.Wrap(err, "finding and translating project")
+		}
+
+		patchedParserProjectYAML := p.PatchedParserProject
+		if patchedParserProjectYAML == "" {
+			ppOut, err := yaml.Marshal(pp)
+			if err != nil {
+				return nil, nil, errors.Wrap(err, "marshalling parser project into YAML")
+			}
+			patchedParserProjectYAML = string(ppOut)
+		}
+		patchConfig := &PatchConfig{
+			PatchedParserProjectYAML: patchedParserProjectYAML,
+			PatchedParserProject:     pp,
+			PatchedProjectConfig:     p.PatchedProjectConfig,
+		}
+		return project, patchConfig, nil
+	}
+
+	projectRef, opts, err := getLoadProjectOptsForPatch(p, githubOauthToken)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "fetching project options for patch")
+	}
+
+	projectFileBytes, err := getPatchedProjectYAML(ctx, projectRef, opts, p)
+	if err != nil {
+		return nil, nil, errors.Wrap(err, "getting patched project file as YAML")
+	}
+
+	var pc string
+	if projectRef.IsVersionControlEnabled() {
+		pc, err = getProjectConfigYAML(p, projectFileBytes)
+		if err != nil {
+			return nil, nil, errors.Wrap(err, "getting patched project config")
+		}
+	}
+
+	project := &Project{}
 	pp, err := LoadProjectInto(ctx, projectFileBytes, opts, p.Project, project)
 	if err != nil {
 		return nil, nil, errors.WithStack(err)
 	}
-	var pc *ProjectConfig
-	if projectRef.IsVersionControlEnabled() {
-		pc, err = CreateProjectConfig(projectFileBytes, p.Project)
-		if err != nil {
-			return nil, nil, errors.WithStack(err)
-		}
-	}
+	// LoadProjectInto does not set the parser project's identifier, so set it
+	// here.
+	pp.Identifier = utility.ToStringPtr(p.Project)
 	ppOut, err := yaml.Marshal(pp)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "marshalling parser project into YAML")
 	}
+
 	patchConfig := &PatchConfig{
-		PatchedParserProject: string(ppOut),
-	}
-	if pc != nil {
-		pcOut, err := yaml.Marshal(pc)
-		if err != nil {
-			return nil, nil, errors.Wrap(err, "marshalling project config into YAML")
-		}
-		patchConfig.PatchedProjectConfig = string(pcOut)
+		PatchedParserProjectYAML: string(ppOut),
+		PatchedParserProject:     pp,
+		PatchedProjectConfig:     pc,
 	}
 	return project, patchConfig, nil
 }
 
-// MakePatchedConfig takes in the path to a remote configuration a stringified version
-// of the current project and returns an unmarshalled version of the project
-// with the patch applied
+// GetPatchedProjectConfig returns the project configuration by fetching the
+// latest commit information from GitHub and applying the patch to the latest
+// remote configuration. The error returned can be a validation error.
+func GetPatchedProjectConfig(ctx context.Context, settings *evergreen.Settings, p *patch.Patch, githubOauthToken string) (string, error) {
+	if p.Version != "" {
+		return "", errors.Errorf("patch '%s' already finalized", p.Version)
+	}
+
+	if p.ProjectStorageMethod != "" || p.PatchedParserProject != "" {
+		// If the patch has been created but not finalized, it has either
+		// already saved the project config as a string (if any), stored the
+		// parser project document (i.e. ProjectStorageMethod), or has the
+		// entire patched parser project as a string (i.e.
+		// PatchedParserProject). Since the project config is optional, the
+		// patch may be created and have already evaluated the patched project
+		// config, but there simply was none. Therefore, this is a valid way to
+		// check and get the PatchedProjectConfig after the patch is already
+		// created.
+		return p.PatchedProjectConfig, nil
+	}
+
+	projectRef, opts, err := getLoadProjectOptsForPatch(p, githubOauthToken)
+	if err != nil {
+		return "", errors.Wrap(err, "fetching project options for patch")
+	}
+
+	if !projectRef.IsVersionControlEnabled() {
+		return "", nil
+	}
+
+	projectFileBytes, err := getPatchedProjectYAML(ctx, projectRef, opts, p)
+	if err != nil {
+		return "", errors.Wrap(err, "getting patched project file as YAML")
+	}
+
+	return getProjectConfigYAML(p, projectFileBytes)
+}
+
+// getProjectConfigYAML creates a project config from the project YAML string
+// and returns the project configuration as a string.
+func getProjectConfigYAML(p *patch.Patch, projectFileBytes []byte) (string, error) {
+	pc, err := CreateProjectConfig(projectFileBytes, p.Project)
+	if err != nil {
+		return "", errors.Wrap(err, "creating project config")
+	}
+	if pc == nil {
+		return "", nil
+	}
+
+	yamlProjectConfig, err := yaml.Marshal(pc)
+	if err != nil {
+		return "", errors.Wrap(err, "marshalling project config into YAML")
+	}
+	return string(yamlProjectConfig), nil
+}
+
+// MakePatchedConfig takes in the project's remote file path containing the
+// project YAML configuration and a stringified version of the project YAML
+// configuration, and returns an unmarshalled version of the project with the
+// patch applied.
 func MakePatchedConfig(ctx context.Context, env evergreen.Environment, p *patch.Patch, remoteConfigPath, projectConfig string) ([]byte, error) {
 	for _, patchPart := range p.Patches {
 		// we only need to patch the main project and not any other modules
@@ -308,13 +401,13 @@ func MakePatchedConfig(ctx context.Context, env evergreen.Environment, p *patch.
 			}
 		}
 
-		defer os.Remove(patchFilePath) //nolint: evg-lint
+		defer os.Remove(patchFilePath) //nolint:evg-lint
 		// write project configuration
 		configFilePath, err := util.WriteToTempFile(projectConfig)
 		if err != nil {
 			return nil, errors.Wrap(err, "writing config file")
 		}
-		defer os.Remove(configFilePath) //nolint: evg-lint
+		defer os.Remove(configFilePath) //nolint:evg-lint
 
 		// clean the working directory
 		workingDirectory := filepath.Dir(patchFilePath)
@@ -349,15 +442,21 @@ func MakePatchedConfig(ctx context.Context, env evergreen.Environment, p *patch.
 				remoteConfigPath, patchFilePath),
 		}
 
+		output := util.NewMBCappedWriter()
 		err = env.JasperManager().CreateCommand(ctx).Add([]string{"bash", "-c", strings.Join(patchCommandStrings, "\n")}).
-			SetErrorSender(level.Error, grip.GetSender()).SetOutputSender(level.Info, grip.GetSender()).
-			Directory(workingDirectory).Run(ctx)
+			Directory(workingDirectory).SetCombinedWriter(output).Run(ctx)
 		if err != nil {
+			grip.Error(message.WrapError(err, message.Fields{
+				"message":       "error running patch command",
+				"patch_id":      p.Id.Hex(),
+				"output":        output.String(),
+				"patch_command": patchCommandStrings,
+			}))
 			return nil, errors.Wrap(err, "running patch command (possibly due to merge conflict on evergreen configuration file)")
 		}
 
 		// read in the patched config file
-		data, err := ioutil.ReadFile(localConfigPath)
+		data, err := os.ReadFile(localConfigPath)
 		if err != nil {
 			return nil, errors.Wrap(err, "reading patched config file")
 		}
@@ -369,13 +468,14 @@ func MakePatchedConfig(ctx context.Context, env evergreen.Environment, p *patch.
 	return nil, errors.New("no patch on project")
 }
 
-// FinalizePatch Finalizes a patch:
+// FinalizePatch finalizes a patch:
 // Patches a remote project's configuration file if needed.
 // Creates a version for this patch and links it.
 // Creates builds based on the Version
+// Creates a manifest based on the Version
 func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, githubOauthToken string) (*Version, error) {
+	settings, err := evergreen.GetConfig()
 	if githubOauthToken == "" {
-		settings, err := evergreen.GetConfig()
 		if err != nil {
 			return nil, err
 		}
@@ -384,17 +484,17 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 			return nil, err
 		}
 	}
-	// unmarshal the project YAML for storage
-	project := &Project{}
-	projectRef, opts, err := getLoadProjectOptsForPatch(p, githubOauthToken)
+	projectRef, err := FindMergedProjectRef(p.Project, p.Version, true)
 	if err != nil {
-		return nil, errors.Wrap(err, "fetching project options for patch")
+		return nil, errors.Wrapf(err, "finding project '%s'", p.Project)
 	}
-	intermediateProject, err := LoadProjectInto(ctx, []byte(p.PatchedParserProject), opts, p.Project, project)
+	if projectRef == nil {
+		return nil, errors.Errorf("project '%s' not found", p.Project)
+	}
+
+	project, intermediateProject, err := FindAndTranslateProjectForPatch(ctx, settings, p)
 	if err != nil {
-		return nil, errors.Wrapf(err,
-			"marshalling patched parser project from repository revision '%s'",
-			p.Githash)
+		return nil, errors.Wrapf(err, "finding and translating project for patch '%s'", p.Id.Hex())
 	}
 	var config *ProjectConfig
 	if projectRef.IsVersionControlEnabled() {
@@ -405,7 +505,6 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 				p.Githash)
 		}
 	}
-	intermediateProject.Id = p.Id.Hex()
 	if config != nil {
 		config.Project = p.Project
 		config.Id = p.Id.Hex()
@@ -433,6 +532,25 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 		parentPatchNumber = parentPatch.PatchNumber
 	}
 
+	params, err := getFullPatchParams(p)
+	if err != nil {
+		return nil, errors.Wrap(err, "fetching patch parameters")
+	}
+
+	authorEmail := ""
+	if p.GitInfo != nil {
+		authorEmail = p.GitInfo.Email
+	}
+	if p.Author != "" {
+		u, err := user.FindOneById(p.Author)
+		if err != nil {
+			return nil, errors.Wrap(err, "getting user")
+		}
+		if u != nil {
+			authorEmail = u.Email()
+		}
+	}
+
 	patchVersion := &Version{
 		Id:                  p.Id.Hex(),
 		CreateTime:          time.Now(),
@@ -449,10 +567,15 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 		Branch:              projectRef.Branch,
 		RevisionOrderNumber: p.PatchNumber,
 		AuthorID:            p.Author,
-		Parameters:          p.Parameters,
+		Parameters:          params,
 		Activated:           utility.TruePtr(),
+		AuthorEmail:         authorEmail,
 	}
-	intermediateProject.CreateTime = patchVersion.CreateTime
+
+	mfst, err := constructManifest(patchVersion, projectRef, project.Modules, settings)
+	if err != nil {
+		return nil, errors.Wrap(err, "constructing manifest")
+	}
 
 	tasks := TaskVariantPairs{}
 	if len(p.VariantsTasks) > 0 {
@@ -477,10 +600,18 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 	if p.IsCommitQueuePatch() && len(p.VariantsTasks) == 0 {
 		return nil, errors.Errorf("no builds or tasks for commit queue version in projects '%s', githash '%s'", p.Project, p.Githash)
 	}
-	taskIds := NewPatchTaskIdTable(project, patchVersion, tasks, projectRef.Identifier)
+	taskIds, err := NewPatchTaskIdTable(project, patchVersion, tasks, projectRef.Identifier)
+	if err != nil {
+		return nil, errors.Wrap(err, "creating patch's task ID table")
+	}
 	variantsProcessed := map[string]bool{}
 
-	createTime, err := getTaskCreateTime(p.Project, patchVersion)
+	creationInfo := TaskCreationInfo{
+		Version:    patchVersion,
+		Project:    project,
+		ProjectRef: projectRef,
+	}
+	createTime, err := getTaskCreateTime(creationInfo)
 	if err != nil {
 		return nil, errors.Wrapf(err, "getting create time for tasks in '%s', githash '%s'", p.Project, p.Githash)
 	}
@@ -498,22 +629,22 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 			displayNames = append(displayNames, dt.Name)
 		}
 		taskNames := tasks.ExecTasks.TaskNames(vt.Variant)
-		buildArgs := BuildCreateArgs{
-			Project:        *project,
-			ProjectRef:     *projectRef,
-			Version:        *patchVersion,
-			TaskIDs:        taskIds,
-			BuildName:      vt.Variant,
-			ActivateBuild:  true,
-			TaskNames:      taskNames,
-			DisplayNames:   displayNames,
-			DistroAliases:  distroAliases,
-			TaskCreateTime: createTime,
-			SyncAtEndOpts:  p.SyncAtEndOpts,
+		buildCreationArgs := TaskCreationInfo{
+			Project:          creationInfo.Project,
+			ProjectRef:       creationInfo.ProjectRef,
+			Version:          creationInfo.Version,
+			TaskIDs:          taskIds,
+			BuildVariantName: vt.Variant,
+			ActivateBuild:    true,
+			TaskNames:        taskNames,
+			DisplayNames:     displayNames,
+			DistroAliases:    distroAliases,
+			TaskCreateTime:   createTime,
+			SyncAtEndOpts:    p.SyncAtEndOpts,
 		}
 		var build *build.Build
 		var tasks task.Tasks
-		build, tasks, err = CreateBuildFromVersionNoInsert(buildArgs)
+		build, tasks, err = CreateBuildFromVersionNoInsert(buildCreationArgs)
 		if err != nil {
 			return nil, errors.WithStack(err)
 		}
@@ -538,7 +669,29 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 			},
 		)
 	}
-	mongoClient := evergreen.GetEnvironment().Client()
+
+	// Newer patches always stored the parser project during patch creation.
+	// However, it used to be that the parser project was not stored until
+	// patches were finalized. For backward compatibility with the old
+	// unfinalized patches, try storing the parser project now that it's
+	// finalizing.
+
+	ppStorageMethod := p.ProjectStorageMethod
+	if ppStorageMethod == "" {
+		ppStorageMethod = evergreen.ProjectStorageMethodDB
+	}
+
+	if p.PatchedParserProject != "" {
+		intermediateProject.Init(p.Id.Hex(), patchVersion.CreateTime)
+		ppStorageMethod, err = ParserProjectUpsertOneWithS3Fallback(ctx, settings, ppStorageMethod, intermediateProject)
+		if err != nil {
+			return nil, errors.Wrapf(err, "upserting parser project for patch '%s'", p.Id.Hex())
+		}
+	}
+	patchVersion.ProjectStorageMethod = ppStorageMethod
+
+	env := evergreen.GetEnvironment()
+	mongoClient := env.Client()
 	session, err := mongoClient.StartSession()
 	if err != nil {
 		return nil, errors.Wrap(err, "starting DB session")
@@ -546,19 +699,20 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 	defer session.EndSession(ctx)
 
 	txFunc := func(sessCtx mongo.SessionContext) (interface{}, error) {
-		db := evergreen.GetEnvironment().DB()
+		db := env.DB()
 		_, err = db.Collection(VersionCollection).InsertOne(sessCtx, patchVersion)
 		if err != nil {
 			return nil, errors.Wrapf(err, "inserting version '%s'", patchVersion.Id)
-		}
-		_, err = db.Collection(ParserProjectCollection).InsertOne(sessCtx, intermediateProject)
-		if err != nil {
-			return nil, errors.Wrapf(err, "inserting parser project for version '%s'", patchVersion.Id)
 		}
 		if config != nil {
 			_, err = db.Collection(ProjectConfigCollection).InsertOne(sessCtx, config)
 			if err != nil {
 				return nil, errors.Wrapf(err, "inserting project config for version '%s'", patchVersion.Id)
+			}
+		}
+		if mfst != nil {
+			if err = mfst.InsertWithContext(sessCtx); err != nil {
+				return nil, errors.Wrapf(err, "inserting manifest for version '%s'", patchVersion.Id)
 			}
 		}
 		if err = buildsToInsert.InsertMany(sessCtx, false); err != nil {
@@ -567,7 +721,7 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 		if err = tasksToInsert.InsertUnordered(sessCtx); err != nil {
 			return nil, errors.Wrapf(err, "inserting tasks for version '%s'", patchVersion.Id)
 		}
-		if err = p.SetActivated(sessCtx, patchVersion.Id); err != nil {
+		if err = p.SetFinalized(sessCtx, patchVersion.Id); err != nil {
 			return nil, errors.Wrapf(err, "activating patch '%s'", patchVersion.Id)
 		}
 		return nil, err
@@ -604,6 +758,37 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 	}
 
 	return patchVersion, nil
+}
+
+// getFullPatchParams will retrieve a merged list of parameters defined on the patch alias (if any)
+// with the parameters that were explicitly user-specified, with the latter taking precedence.
+func getFullPatchParams(p *patch.Patch) ([]patch.Parameter, error) {
+	paramsMap := map[string]string{}
+	if p.Alias == "" || !IsPatchAlias(p.Alias) {
+		return p.Parameters, nil
+	}
+	aliases, err := findAliasesForPatch(p.Project, p.Alias, p)
+	if err != nil {
+		return nil, errors.Wrapf(err, "retrieving alias '%s' for patch '%s'", p.Alias, p.Id.Hex())
+	}
+	for _, alias := range aliases {
+		if len(alias.Parameters) > 0 {
+			for _, aliasParam := range alias.Parameters {
+				paramsMap[aliasParam.Key] = aliasParam.Value
+			}
+		}
+	}
+	for _, param := range p.Parameters {
+		paramsMap[param.Key] = param.Value
+	}
+	var fullParams []patch.Parameter
+	for k, v := range paramsMap {
+		fullParams = append(fullParams, patch.Parameter{
+			Key:   k,
+			Value: v,
+		})
+	}
+	return fullParams, nil
 }
 
 func getLoadProjectOptsForPatch(p *patch.Patch, githubOauthToken string) (*ProjectRef, *GetProjectOpts, error) {
@@ -686,6 +871,7 @@ func SubscribeOnParentOutcome(parentStatus string, childPatchId string, parentPa
 	return nil
 }
 
+// CancelPatch aborts all of a patch's in-progress tasks and deactivates its undispatched tasks.
 func CancelPatch(p *patch.Patch, reason task.AbortInfo) error {
 	if p.Version != "" {
 		if err := SetVersionActivation(p.Version, false, reason.User); err != nil {
@@ -697,10 +883,12 @@ func CancelPatch(p *patch.Patch, reason task.AbortInfo) error {
 	return errors.WithStack(patch.Remove(patch.ById(p.Id)))
 }
 
-// AbortPatchesWithGithubPatchData runs CancelPatch on patches created before
-// the given time, with the same pr number, and base repository. Tasks which
-// are abortable (see model/task.IsAbortable()) will be aborted, while
-// dispatched/running/completed tasks will not be affected
+// AbortPatchesWithGithubPatchData aborts patches and commit queue items created
+// before the given time, with the same PR number, and base repository. Tasks
+// which are abortable will be aborted, while completed tasks will not be
+// affected. This function makes one exception for commit queue items so that if
+// the item is currently running the merge task, then that patch is not aborted
+// and is allowed to finish.
 func AbortPatchesWithGithubPatchData(createdBefore time.Time, closed bool, newPatch, owner, repo string, prNumber int) error {
 	patches, err := patch.Find(patch.ByGithubPRAndCreatedBefore(createdBefore, owner, repo, prNumber))
 	if err != nil {
@@ -726,6 +914,11 @@ func AbortPatchesWithGithubPatchData(createdBefore time.Time, closed bool, newPa
 				if mergeTask == nil {
 					return errors.New("no merge task found")
 				}
+				if mergeTask.Status == evergreen.TaskStarted || evergreen.IsFinishedTaskStatus(mergeTask.Status) {
+					// If the merge task already started, the PR merge is
+					// already ongoing, so it's better to just let it complete.
+					continue
+				}
 				catcher.Add(DequeueAndRestartForTask(nil, mergeTask, message.GithubStateFailure, evergreen.APIServerTaskActivator, "new push to pull request"))
 			} else if err = CancelPatch(&p, task.AbortInfo{User: evergreen.GithubPatchUser, NewVersion: newPatch, PRClosed: closed}); err != nil {
 				grip.Error(message.WrapError(err, message.Fields{
@@ -734,7 +927,7 @@ func AbortPatchesWithGithubPatchData(createdBefore time.Time, closed bool, newPa
 					"owner":          owner,
 					"repo":           repo,
 					"message":        "failed to abort patch's version",
-					"patch_id":       p.Id,
+					"patch_id":       p.Id.Hex(),
 					"pr":             p.GithubPatchData.PRNumber,
 					"project":        p.Project,
 					"version":        p.Version,
@@ -808,8 +1001,9 @@ func (e *EnqueuePatch) Send() error {
 		return errors.Errorf("no commit queue for project '%s'", existingPatch.Project)
 	}
 
-	ctx := context.Background()
-	mergePatch, err := MakeMergePatchFromExisting(ctx, existingPatch, "")
+	ctx, cancel := context.WithTimeout(context.Background(), DefaultParserProjectAccessTimeout)
+	defer cancel()
+	mergePatch, err := MakeMergePatchFromExisting(ctx, evergreen.GetEnvironment().Settings(), existingPatch, "")
 	if err != nil {
 		return errors.Wrap(err, "making merge patch")
 	}
@@ -823,12 +1017,14 @@ func (e *EnqueuePatch) Valid() bool {
 	return patch.IsValidId(e.PatchID)
 }
 
-func MakeMergePatchFromExisting(ctx context.Context, existingPatch *patch.Patch, commitMessage string) (*patch.Patch, error) {
+// MakeMergePatchFromExisting creates a merge patch from an existing one to be
+// put in the commit queue. Is also creates the parser project associated with
+// the patch.
+func MakeMergePatchFromExisting(ctx context.Context, settings *evergreen.Settings, existingPatch *patch.Patch, commitMessage string) (*patch.Patch, error) {
 	if !existingPatch.HasValidGitInfo() {
 		return nil, errors.Errorf("enqueueing patch '%s' without metadata", existingPatch.Id.Hex())
 	}
 
-	// verify the commit queue is on
 	projectRef, err := FindMergedProjectRef(existingPatch.Project, existingPatch.Version, true)
 	if err != nil {
 		return nil, errors.Wrapf(err, "getting project ref '%s'", existingPatch.Project)
@@ -840,9 +1036,9 @@ func MakeMergePatchFromExisting(ctx context.Context, existingPatch *patch.Patch,
 		return nil, errors.WithStack(err)
 	}
 
-	project := &Project{}
-	if _, err = LoadProjectInto(ctx, []byte(existingPatch.PatchedParserProject), nil, existingPatch.Project, project); err != nil {
-		return nil, errors.Wrap(err, "loading project")
+	project, _, err := FindAndTranslateProjectForPatch(ctx, settings, existingPatch)
+	if err != nil {
+		return nil, errors.Wrap(err, "loading existing project")
 	}
 
 	patchDoc := &patch.Patch{
@@ -852,7 +1048,7 @@ func MakeMergePatchFromExisting(ctx context.Context, existingPatch *patch.Patch,
 		Githash:              existingPatch.Githash,
 		Status:               evergreen.PatchCreated,
 		Alias:                evergreen.CommitQueueAlias,
-		PatchedParserProject: existingPatch.PatchedParserProject,
+		PatchedProjectConfig: existingPatch.PatchedProjectConfig,
 		CreateTime:           time.Now(),
 		MergedFrom:           existingPatch.Id.Hex(),
 	}
@@ -880,6 +1076,14 @@ func MakeMergePatchFromExisting(ctx context.Context, existingPatch *patch.Patch,
 	if err != nil {
 		return nil, errors.Wrap(err, "computing patch num")
 	}
+
+	// The parser project is typically inserted at the same time as the patch.
+	// However, commit queue items made from CLI patches are a special exception
+	// that do not follow this behavior, because the existing patch may have be
+	// very outdated compared to the tracking branch's latest commit. The commit
+	// queue should ideally test against the most recent available project
+	// config, so it will resolve the parser project later on, when it's
+	// processed in the commit queue.
 
 	if err = patchDoc.Insert(); err != nil {
 		return nil, errors.Wrap(err, "inserting patch")
@@ -997,6 +1201,14 @@ func restartDiffItem(p patch.Patch, cq *commitqueue.CommitQueue) error {
 		PatchNumber:     patchNumber,
 	}
 
+	// The parser project is typically inserted at the same time as the patch.
+	// However, commit queue items made from CLI patches are a special exception
+	// that do not follow this behavior, because the existing patch may have be
+	// very outdated compared to the tracking branch's latest commit. The commit
+	// queue should ideally test against the most recent available project
+	// config, so it will resolve the parser project later on, when it's
+	// processed in the commit queue.
+
 	if err = newPatch.Insert(); err != nil {
 		return errors.Wrap(err, "inserting patch")
 	}
@@ -1006,6 +1218,8 @@ func restartDiffItem(p patch.Patch, cq *commitqueue.CommitQueue) error {
 	return nil
 }
 
+// SendCommitQueueResult sends an updated GitHub PR status for a commit queue
+// result. If the patch is not part of a PR, this is a no-op.
 func SendCommitQueueResult(p *patch.Patch, status message.GithubState, description string) error {
 	if p.GithubPatchData.PRNumber == 0 {
 		return nil
@@ -1023,7 +1237,7 @@ func SendCommitQueueResult(p *patch.Patch, status message.GithubState, descripti
 		if err != nil {
 			return errors.Wrap(err, "unable to get settings")
 		}
-		url = fmt.Sprintf("%s/version/%s", settings.Ui.Url, p.Version)
+		url = fmt.Sprintf("%s/version/%s?redirect_spruce_users=true", settings.Ui.Url, p.Version)
 	}
 	msg := message.GithubStatus{
 		Owner:       projectRef.Owner,
@@ -1039,6 +1253,11 @@ func SendCommitQueueResult(p *patch.Patch, status message.GithubState, descripti
 		return errors.Wrap(err, "getting GitHub sender")
 	}
 	sender.Send(message.NewGithubStatusMessageWithRepo(level.Notice, msg))
-
+	grip.Info(message.Fields{
+		"ticket":   thirdparty.GithubInvestigation,
+		"message":  "called github status send",
+		"caller":   "commit queue result",
+		"patch_id": p.Id,
+	})
 	return nil
 }

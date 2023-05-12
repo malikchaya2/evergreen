@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"math"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -135,14 +136,12 @@ var projectErrorValidators = []projectValidator{
 	validateHostCreates,
 	validateDuplicateBVTasks,
 	validateGenerateTasks,
-	validateAliases,
 }
 
 // Functions used to validate the syntax of project configs representing properties found on the project page.
 var projectConfigErrorValidators = []projectConfigValidator{
 	validateProjectConfigAliases,
 	validateProjectConfigPlugins,
-	validateProjectConfigPeriodicBuilds,
 	validateProjectConfigContainers,
 }
 
@@ -227,6 +226,10 @@ func CheckProjectWarnings(project *model.Project) ValidationErrors {
 			projectWarningValidator(project)...)
 	}
 	return validationErrs
+}
+
+func CheckAliasWarnings(project *model.Project, aliases model.ProjectAliases) ValidationErrors {
+	return validateAliasCoverage(project, aliases)
 }
 
 // verify that the project configuration syntax is valid
@@ -342,7 +345,7 @@ func validateAllDependenciesSpec(project *model.Project) ValidationErrors {
 
 func validateContainers(project *model.Project, ref *model.ProjectRef, _ bool) ValidationErrors {
 	errs := ValidationErrors{}
-	err := model.ValidateContainers(ref, project.Containers)
+	err := model.ValidateContainers(evergreen.GetEnvironment().Settings().Providers.AWS.Pod.ECS, ref, project.Containers)
 	if err != nil {
 		errs = append(errs,
 			ValidationError{
@@ -406,23 +409,11 @@ func tvToTaskUnit(p *model.Project) map[model.TVPair]model.BuildVariantTaskUnit 
 	return tasksByNameAndVariant
 }
 
-func validateProjectConfigPeriodicBuilds(pc *model.ProjectConfig) ValidationErrors {
-	validationErrs := ValidationErrors{}
-	for _, periodicBuild := range pc.PeriodicBuilds {
-		if err := periodicBuild.Validate(); err != nil {
-			validationErrs = append(validationErrs, ValidationError{
-				Message: errors.Wrap(err, "error validating periodic builds").Error(),
-				Level:   Error,
-			})
-		}
-	}
-	return validationErrs
-}
-
 func validateProjectConfigAliases(pc *model.ProjectConfig) ValidationErrors {
 	errs := []string{}
+	pc.SetInternalAliases()
 	errs = append(errs, model.ValidateProjectAliases(pc.GitHubPRAliases, "GitHub PR Aliases")...)
-	errs = append(errs, model.ValidateProjectAliases(pc.GitHubChecksAliases, "Github Checks Aliases")...)
+	errs = append(errs, model.ValidateProjectAliases(pc.GitHubChecksAliases, "GitHub Checks Aliases")...)
 	errs = append(errs, model.ValidateProjectAliases(pc.CommitQueueAliases, "Commit Queue Aliases")...)
 	errs = append(errs, model.ValidateProjectAliases(pc.PatchAliases, "Patch Aliases")...)
 	errs = append(errs, model.ValidateProjectAliases(pc.GitTagAliases, "Git Tag Aliases")...)
@@ -437,17 +428,174 @@ func validateProjectConfigAliases(pc *model.ProjectConfig) ValidationErrors {
 	return validationErrs
 }
 
+// validateAliasCoverage validates that all commit queue aliases defined match some variants/tasks.
+func validateAliasCoverage(p *model.Project, aliases model.ProjectAliases) ValidationErrors {
+	aliasMap := map[string]model.ProjectAlias{}
+	for _, a := range aliases {
+		aliasMap[a.ID.Hex()] = a
+	}
+	aliasNeedsVariant, aliasNeedsTask, err := getAliasCoverage(p, aliasMap)
+	if err != nil {
+		return ValidationErrors{
+			{
+				Message: "error checking alias coverage, continuing without validation",
+				Level:   Warning,
+			},
+		}
+	}
+	return constructAliasWarnings(aliasMap, aliasNeedsVariant, aliasNeedsTask)
+}
+
+// constructAliasWarnings returns validation errors given a map of aliases, and whether they need variants/tasks to match.
+func constructAliasWarnings(aliasMap map[string]model.ProjectAlias, aliasNeedsVariant, aliasNeedsTask map[string]bool) ValidationErrors {
+	res := ValidationErrors{}
+	errs := []string{}
+	for aliasID, a := range aliasMap {
+		needsVariant := aliasNeedsVariant[aliasID]
+		needsTask := aliasNeedsTask[aliasID]
+		if !needsVariant && !needsTask {
+			continue
+		}
+
+		msgComponents := []string{}
+		switch a.Alias {
+		case evergreen.CommitQueueAlias:
+			msgComponents = append(msgComponents, "Commit queue alias")
+		case evergreen.GithubPRAlias:
+			msgComponents = append(msgComponents, "GitHub PR alias")
+		case evergreen.GitTagAlias:
+			msgComponents = append(msgComponents, "Git tag alias")
+		case evergreen.GithubChecksAlias:
+			msgComponents = append(msgComponents, "GitHub check alias")
+		default:
+			msgComponents = append(msgComponents, "Patch alias")
+		}
+		if len(a.VariantTags) > 0 {
+			msgComponents = append(msgComponents, fmt.Sprintf("matching variant tags '%v'", a.VariantTags))
+		} else {
+			msgComponents = append(msgComponents, fmt.Sprintf("matching variant regexp '%s'", a.Variant))
+		}
+		if needsVariant {
+			msgComponents = append(msgComponents, "has no matching variants")
+		} else {
+			// This is only relevant information if the alias matches the variant but not the task.
+			if len(a.TaskTags) > 0 {
+				msgComponents = append(msgComponents, fmt.Sprintf("and matching task tags '%v'", a.TaskTags))
+			} else {
+				msgComponents = append(msgComponents, fmt.Sprintf("and matching task regexp '%s'", a.Task))
+			}
+			msgComponents = append(msgComponents, "has no matching tasks")
+		}
+		errs = append(errs, strings.Join(msgComponents, " "))
+	}
+	sort.Strings(errs)
+	for _, err := range errs {
+		res = append(res, ValidationError{
+			Message: err,
+			Level:   Warning,
+		})
+	}
+
+	return res
+}
+
+// getAliasCoverage returns a map of aliases that don't match variants and a map of aliases that don't match tasks.
+func getAliasCoverage(p *model.Project, aliasMap map[string]model.ProjectAlias) (map[string]bool, map[string]bool, error) {
+	type taskInfo struct {
+		name string
+		tags []string
+	}
+	aliasNeedsVariant := map[string]bool{}
+	aliasNeedsTask := map[string]bool{}
+	bvtCache := map[string]taskInfo{}
+	for a := range aliasMap {
+		aliasNeedsVariant[a] = true
+		aliasNeedsTask[a] = true
+	}
+	for _, bv := range p.BuildVariants {
+		for aliasID, alias := range aliasMap {
+			if !aliasNeedsVariant[aliasID] && !aliasNeedsTask[aliasID] { // Have already found both variants and tasks.
+				continue
+			}
+			// If we still need a task to match the variant, still check if the alias matches, so we know if checking tasks is needed.
+			matchesThisVariant, err := alias.HasMatchingVariant(bv.Name, bv.Tags)
+			if err != nil {
+				return nil, nil, err
+			}
+			if !matchesThisVariant { // If the variant doesn't match, then there's no reason to keep checking tasks.
+				continue
+			}
+			aliasNeedsVariant[aliasID] = false
+			// Loop through all tasks to verify if there is task coverage.
+			for _, t := range bv.Tasks {
+				var name string
+				var tags []string
+				if info, ok := bvtCache[t.Name]; ok {
+					name = info.name
+					tags = info.tags
+				} else {
+					name, tags, _ = p.GetTaskNameAndTags(t)
+					// Even if we can't find the name/tags, still store it, so we don't try again.
+					bvtCache[t.Name] = taskInfo{name: name, tags: tags}
+				}
+				if name != "" {
+					if t.IsGroup {
+						matchesTaskGroupTask, err := aliasMatchesTaskGroupTask(p, alias, name)
+						if err != nil {
+							return nil, nil, err
+						}
+						if matchesTaskGroupTask {
+							aliasNeedsTask[aliasID] = false
+							break
+						}
+					}
+					matchesThisTask, err := alias.HasMatchingTask(name, tags)
+					if err != nil {
+						return nil, nil, err
+					}
+					if matchesThisTask {
+						aliasNeedsTask[aliasID] = false
+						break
+					}
+				}
+			}
+		}
+	}
+	return aliasNeedsVariant, aliasNeedsTask, nil
+}
+
+func aliasMatchesTaskGroupTask(p *model.Project, alias model.ProjectAlias, tgName string) (bool, error) {
+	tg := p.FindTaskGroup(tgName)
+	if tg == nil {
+		return false, errors.Errorf("definition for task group '%s' not found", tgName)
+	}
+	for _, tgTask := range tg.Tasks {
+		t := p.FindProjectTask(tgTask)
+		if t == nil {
+			return false, errors.Errorf("task '%s' in task group '%s' not found", tgTask, tgName)
+		}
+		matchesTaskInTaskGroup, err := alias.HasMatchingTask(t.Name, t.Tags)
+		if err != nil {
+			return false, err
+		}
+		if matchesTaskInTaskGroup {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
 func validateProjectConfigContainers(pc *model.ProjectConfig) ValidationErrors {
 	errs := ValidationErrors{}
-	for name, containerResource := range pc.ContainerSizes {
-		if name == "" {
+	for _, size := range pc.ContainerSizeDefinitions {
+		if size.Name == "" {
 			errs = append(errs, ValidationError{
 				Message: "container size name cannot be empty",
 				Level:   Error,
 			})
 		}
 
-		if err := containerResource.Validate(); err != nil {
+		if err := size.Validate(evergreen.GetEnvironment().Settings().Providers.AWS.Pod.ECS); err != nil {
 			errs = append(errs,
 				ValidationError{
 					Message: errors.Wrap(err, "error validating container resources").Error(),
@@ -466,6 +614,10 @@ func validateProjectConfigPlugins(pc *model.ProjectConfig) ValidationErrors {
 	if annotationSettings != nil {
 		webhook = &annotationSettings.FileTicketWebhook
 	}
+	// skip validation if no build baron configuration exists
+	if pc.BuildBaronSettings == nil {
+		return ValidationErrors{}
+	}
 	err := model.ValidateBbProject(pc.Project, *pc.BuildBaronSettings, webhook)
 	if err != nil {
 		errs = append(errs,
@@ -478,22 +630,13 @@ func validateProjectConfigPlugins(pc *model.ProjectConfig) ValidationErrors {
 	return errs
 }
 
-func validateAliases(p *model.Project) ValidationErrors {
-	errs := []string{}
-	errs = append(errs, model.ValidateProjectAliases(p.GitHubPRAliases, "GitHub PR Aliases")...)
-	errs = append(errs, model.ValidateProjectAliases(p.GitHubChecksAliases, "Github Checks Aliases")...)
-	errs = append(errs, model.ValidateProjectAliases(p.CommitQueueAliases, "Commit Queue Aliases")...)
-	errs = append(errs, model.ValidateProjectAliases(p.PatchAliases, "Patch Aliases")...)
-	errs = append(errs, model.ValidateProjectAliases(p.GitTagAliases, "Git Tag Aliases")...)
-
-	validationErrs := ValidationErrors{}
-	for _, errorMsg := range errs {
-		validationErrs = append(validationErrs, ValidationError{
-			Message: errorMsg,
-			Level:   Error,
-		})
+func hasValidRunOn(runOn []string) bool {
+	for _, d := range runOn {
+		if d != "" {
+			return true
+		}
 	}
-	return validationErrs
+	return false
 }
 
 // Ensures that the project has at least one buildvariant and also that all the
@@ -535,41 +678,38 @@ func validateBVFields(project *model.Project) ValidationErrors {
 			continue
 		}
 
-		hasTaskWithoutDistro := false
 		for _, task := range buildVariant.Tasks {
-			taskHasValidDistro := false
-			for _, d := range task.RunOn {
-				if d != "" {
-					taskHasValidDistro = true
-					break
-				}
+			taskHasValidDistro := hasValidRunOn(task.RunOn)
+			if taskHasValidDistro {
+				break
 			}
-			if !taskHasValidDistro {
-				// check for a default in the task definition
-				pt := project.FindProjectTask(task.Name)
-				if pt != nil {
-					for _, d := range pt.RunOn {
-						if d != "" {
+			if task.IsGroup {
+				for _, t := range project.FindTaskGroup(task.Name).Tasks {
+					pt := project.FindProjectTask(t)
+					if pt != nil {
+						if hasValidRunOn(pt.RunOn) {
 							taskHasValidDistro = true
 							break
 						}
 					}
 				}
+			} else {
+				// check for a default in the task definition
+				pt := project.FindProjectTask(task.Name)
+				if pt != nil {
+					taskHasValidDistro = hasValidRunOn(pt.RunOn)
+				}
 			}
 			if !taskHasValidDistro {
-				hasTaskWithoutDistro = true
+				errs = append(errs,
+					ValidationError{
+						Message: fmt.Sprintf("buildvariant '%s' "+
+							"must either specify run_on field or have every task specify run_on",
+							buildVariant.Name),
+					},
+				)
 				break
 			}
-		}
-
-		if hasTaskWithoutDistro {
-			errs = append(errs,
-				ValidationError{
-					Message: fmt.Sprintf("buildvariant '%s' "+
-						"must either specify run_on field or have every task specify run_on",
-						buildVariant.Name),
-				},
-			)
 		}
 	}
 	return errs
@@ -618,6 +758,27 @@ func checkProjectFields(project *model.Project) ValidationErrors {
 	return errs
 }
 
+func validateBuildVariantTaskNames(task string, variant string, allTaskNames map[string]bool, taskGroupTaskSet map[string]string) []ValidationError {
+	var errs []ValidationError
+	if _, ok := allTaskNames[task]; !ok {
+		if task == "" {
+			errs = append(errs, ValidationError{
+				Message: fmt.Sprintf("tasks for buildvariant '%s' must each have a name field",
+					variant),
+				Level: Error,
+			})
+
+		} else {
+			errs = append(errs, ValidationError{
+				Message: fmt.Sprintf("buildvariant '%s' references a non-existent task '%s'",
+					variant, task),
+				Level: Error,
+			})
+		}
+	}
+	return errs
+}
+
 // ensureReferentialIntegrity checks all fields that reference other entities defined in the YAML and ensure that they are referring to valid names.
 func ensureReferentialIntegrity(project *model.Project, containerNameMap map[string]bool, distroIDs []string, distroAliases []string) ValidationErrors {
 	errs := ValidationErrors{}
@@ -637,27 +798,12 @@ func ensureReferentialIntegrity(project *model.Project, containerNameMap map[str
 	for _, buildVariant := range project.BuildVariants {
 		buildVariantTasks := map[string]bool{}
 		for _, task := range buildVariant.Tasks {
-			if _, ok := allTaskNames[task.Name]; !ok {
-				if task.Name == "" {
-					errs = append(errs,
-						ValidationError{
-							Message: fmt.Sprintf("tasks for buildvariant '%s' must each have a name field",
-								buildVariant.Name),
-							Level: Error,
-						},
-					)
-				} else {
-					errs = append(errs,
-						ValidationError{
-							Message: fmt.Sprintf("buildvariant '%s' references a non-existent task '%s'",
-								buildVariant.Name, task.Name),
-							Level: Error,
-						},
-					)
+			if task.TaskGroup != nil {
+				for _, taskGroupTask := range task.TaskGroup.Tasks {
+					errs = append(errs, validateBuildVariantTaskNames(taskGroupTask, buildVariant.Name, allTaskNames, taskGroupTaskSet)...)
 				}
 			}
-			buildVariantTasks[task.Name] = true
-
+			errs = append(errs, validateBuildVariantTaskNames(task.Name, buildVariant.Name, allTaskNames, taskGroupTaskSet)...)
 			if _, ok := taskGroupTaskSet[task.Name]; ok {
 				errs = append(errs,
 					ValidationError{
@@ -666,6 +812,7 @@ func ensureReferentialIntegrity(project *model.Project, containerNameMap map[str
 						Level: Warning,
 					})
 			}
+			buildVariantTasks[task.Name] = true
 			runOnHasDistro := false
 			runOnHasContainer := false
 			for _, name := range task.RunOn {
@@ -964,7 +1111,7 @@ func validateBVBatchTimes(project *model.Project) ValidationErrors {
 						Level:   Error,
 					})
 			}
-			if _, err := model.GetActivationTimeWithCron(time.Now(), t.CronBatchTime); err != nil {
+			if _, err := model.GetNextCronTime(time.Now(), t.CronBatchTime); err != nil {
 				errs = append(errs,
 					ValidationError{
 						Message: errors.Wrapf(err, "task cron batchtime '%s' has invalid syntax for task '%s' for build variant '%s'",
@@ -985,7 +1132,7 @@ func validateBVBatchTimes(project *model.Project) ValidationErrors {
 					Level:   Error,
 				})
 		}
-		if _, err := model.GetActivationTimeWithCron(time.Now(), buildVariant.CronBatchTime); err != nil {
+		if _, err := model.GetNextCronTime(time.Now(), buildVariant.CronBatchTime); err != nil {
 			errs = append(errs,
 				ValidationError{
 					Message: errors.Wrapf(err, "cron batchtime '%s' has invalid syntax", buildVariant.CronBatchTime).Error(),
@@ -1057,7 +1204,7 @@ func validateCommands(section string, project *model.Project,
 
 	for _, cmd := range commands {
 		commandName := fmt.Sprintf("'%s' command", cmd.Command)
-		_, err := command.Render(cmd, project)
+		_, err := command.Render(cmd, project, "")
 		if err != nil {
 			if cmd.Function != "" {
 				commandName = fmt.Sprintf("'%s' function", cmd.Function)
@@ -1074,12 +1221,6 @@ func validateCommands(section string, project *model.Project,
 			errs = append(errs, ValidationError{
 				Level:   Error,
 				Message: fmt.Sprintf("cannot specify both command '%s' and function '%s'", cmd.Command, cmd.Function),
-			})
-		}
-		if cmd.Command == evergreen.ShellExecCommandName && cmd.Params["script"] == nil {
-			errs = append(errs, ValidationError{
-				Level:   Warning,
-				Message: fmt.Sprintf("%s section: command '%s' specified without a script.", section, cmd.Command),
 			})
 		}
 	}
@@ -1357,7 +1498,15 @@ func validateParameters(p *model.Project) ValidationErrors {
 
 func validateTaskGroups(p *model.Project) ValidationErrors {
 	errs := ValidationErrors{}
-	for _, tg := range p.TaskGroups {
+	taskGroups := p.TaskGroups
+	for _, bv := range p.BuildVariants {
+		for _, t := range bv.Tasks {
+			if t.TaskGroup != nil {
+				taskGroups = append(taskGroups, *t.TaskGroup)
+			}
+		}
+	}
+	for _, tg := range taskGroups {
 		// validate that there is at least 1 task
 		if len(tg.Tasks) < 1 {
 			errs = append(errs, ValidationError{
@@ -1407,7 +1556,15 @@ func checkTaskGroups(p *model.Project) ValidationErrors {
 	errs := ValidationErrors{}
 	tasksInTaskGroups := map[string]string{}
 	names := map[string]bool{}
-	for _, tg := range p.TaskGroups {
+	taskGroups := p.TaskGroups
+	for _, bv := range p.BuildVariants {
+		for _, t := range bv.Tasks {
+			if t.TaskGroup != nil {
+				taskGroups = append(taskGroups, *t.TaskGroup)
+			}
+		}
+	}
+	for _, tg := range taskGroups {
 		if _, ok := names[tg.Name]; ok {
 			errs = append(errs, ValidationError{
 				Level:   Warning,
@@ -1448,7 +1605,10 @@ func validateDuplicateBVTasks(p *model.Project) ValidationErrors {
 		for _, t := range bv.Tasks {
 
 			if t.IsGroup {
-				tg := p.FindTaskGroup(t.Name)
+				tg := t.TaskGroup
+				if tg == nil {
+					tg = p.FindTaskGroup(t.Name)
+				}
 				if tg == nil {
 					continue
 				}
@@ -1677,7 +1837,10 @@ func bvsWithTasksThatCallCommand(p *model.Project, cmd string) (map[string]map[s
 
 		for _, bvtu := range bv.Tasks {
 			if bvtu.IsGroup {
-				tg := p.FindTaskGroup(bvtu.Name)
+				tg := bvtu.TaskGroup
+				if tg == nil {
+					tg = p.FindTaskGroup(bvtu.Name)
+				}
 				if tg == nil {
 					catcher.Errorf("cannot find definition of task group '%s' used in build variant '%s'", bvtu.Name, bv.Name)
 					continue

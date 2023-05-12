@@ -30,37 +30,53 @@ func TestTaskSetPriority(t *testing.T) {
 
 	Convey("With a task", t, func() {
 
-		require.NoError(t, db.ClearCollections(task.Collection, build.Collection))
+		require.NoError(t, db.ClearCollections(task.Collection, build.Collection, VersionCollection))
+
+		v := &Version{Id: "abcdef"}
+		require.NoError(t, v.Insert())
 
 		tasks := []task.Task{
 			{
-				Id:        "one",
-				DependsOn: []task.Dependency{{TaskId: "two", Status: ""}, {TaskId: "three", Status: ""}, {TaskId: "four", Status: ""}},
-				Activated: true,
-				BuildId:   "b0",
+				Id:             "one",
+				DependsOn:      []task.Dependency{{TaskId: "two", Status: ""}, {TaskId: "three", Status: ""}, {TaskId: "four", Status: ""}},
+				Activated:      true,
+				BuildId:        "b0",
+				Version:        v.Id,
+				DisplayOnly:    true,
+				ExecutionTasks: []string{"six"},
 			},
 			{
 				Id:        "two",
 				Priority:  5,
 				Activated: true,
+				BuildId:   "b0",
+				Version:   v.Id,
 			},
 			{
 				Id:        "three",
 				DependsOn: []task.Dependency{{TaskId: "five", Status: ""}},
 				Activated: true,
+				BuildId:   "b0",
+				Version:   v.Id,
 			},
 			{
 				Id:        "four",
 				DependsOn: []task.Dependency{{TaskId: "five", Status: ""}},
 				Activated: true,
+				BuildId:   "b0",
+				Version:   v.Id,
 			},
 			{
 				Id:        "five",
 				Activated: true,
+				BuildId:   "b0",
+				Version:   v.Id,
 			},
 			{
 				Id:        "six",
 				Activated: true,
+				BuildId:   "b0",
+				Version:   v.Id,
 			},
 		}
 
@@ -106,11 +122,11 @@ func TestTaskSetPriority(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(t, ShouldNotBeNil)
 			So(t.Id, ShouldEqual, "six")
-			So(t.Priority, ShouldEqual, 0)
+			So(t.Priority, ShouldEqual, 1)
 
 		})
 
-		Convey("decreasing priority should update the task but not its dependencies", func() {
+		Convey("decreasing priority should update the task and its execution tasks but not its dependencies", func() {
 			So(SetTaskPriority(tasks[0], 1, "user"), ShouldBeNil)
 			So(tasks[0].Activated, ShouldEqual, true)
 			So(SetTaskPriority(tasks[0], -1, "user"), ShouldBeNil)
@@ -151,8 +167,8 @@ func TestTaskSetPriority(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(t, ShouldNotBeNil)
 			So(t.Id, ShouldEqual, "six")
-			So(t.Priority, ShouldEqual, 0)
-			So(t.Activated, ShouldEqual, true)
+			So(t.Priority, ShouldEqual, -1)
+			So(t.Activated, ShouldEqual, false)
 		})
 	})
 }
@@ -161,20 +177,21 @@ func TestBuildSetPriority(t *testing.T) {
 
 	Convey("With a build", t, func() {
 
-		require.NoError(t, db.ClearCollections(build.Collection, task.Collection))
+		require.NoError(t, db.ClearCollections(build.Collection, task.Collection, VersionCollection))
 
-		b := &build.Build{
-			Id: "build",
-		}
+		b := &build.Build{Id: "build"}
 		So(b.Insert(), ShouldBeNil)
 
-		taskOne := &task.Task{Id: "taskOne", BuildId: b.Id}
+		v := &Version{Id: "abcdef"}
+		require.NoError(t, v.Insert())
+
+		taskOne := &task.Task{Id: "taskOne", BuildId: b.Id, Version: v.Id}
 		So(taskOne.Insert(), ShouldBeNil)
 
-		taskTwo := &task.Task{Id: "taskTwo", BuildId: b.Id}
+		taskTwo := &task.Task{Id: "taskTwo", BuildId: b.Id, Version: v.Id}
 		So(taskTwo.Insert(), ShouldBeNil)
 
-		taskThree := &task.Task{Id: "taskThree", BuildId: b.Id}
+		taskThree := &task.Task{Id: "taskThree", BuildId: b.Id, Version: v.Id}
 		So(taskThree.Insert(), ShouldBeNil)
 
 		Convey("setting its priority should update the priority"+
@@ -195,14 +212,21 @@ func TestBuildSetPriority(t *testing.T) {
 }
 
 func TestBuildRestart(t *testing.T) {
+	defer func() {
+		assert.NoError(t, db.ClearCollections(task.Collection, task.OldCollection, VersionCollection, build.Collection))
+	}()
+
+	// Running a multi-document transaction requires the collections to exist
+	// first before any documents can be inserted.
+	require.NoError(t, db.CreateCollections(task.Collection, task.OldCollection, VersionCollection, build.Collection))
+	require.NoError(t, db.ClearCollections(task.Collection, task.OldCollection, build.Collection))
+	v := &Version{Id: "version"}
+	require.NoError(t, v.Insert())
+	b := &build.Build{Id: "build", Version: "version"}
+	require.NoError(t, b.Insert())
 	Convey("Restarting a build", t, func() {
-
 		Convey("with task abort should update the status of"+
-			" non in-progress tasks and abort in-progress ones", func() {
-
-			require.NoError(t, db.ClearCollections(build.Collection, task.Collection, task.OldCollection))
-			b := &build.Build{Id: "build"}
-			So(b.Insert(), ShouldBeNil)
+			" non in-progress tasks and abort in-progress ones and mark them to be reset", func() {
 
 			taskOne := &task.Task{
 				Id:          "task1",
@@ -222,7 +246,7 @@ func TestBuildRestart(t *testing.T) {
 			}
 			So(taskTwo.Insert(), ShouldBeNil)
 
-			So(RestartBuild(b.Id, []string{"task1", "task2"}, true, evergreen.DefaultTaskActivator), ShouldBeNil)
+			So(RestartBuild(b, []string{"task1", "task2"}, true, evergreen.DefaultTaskActivator), ShouldBeNil)
 			var err error
 			b, err = build.FindOne(build.ById(b.Id))
 			So(err, ShouldBeNil)
@@ -234,15 +258,11 @@ func TestBuildRestart(t *testing.T) {
 			taskTwo, err = task.FindOne(db.Query(task.ById("task2")))
 			So(err, ShouldBeNil)
 			So(taskTwo.Aborted, ShouldEqual, true)
+			So(taskTwo.ResetWhenFinished, ShouldBeTrue)
 		})
 
 		Convey("without task abort should update the status"+
 			" of only those build tasks not in-progress", func() {
-
-			require.NoError(t, db.ClearCollections(build.Collection))
-			b := &build.Build{Id: "build"}
-			So(b.Insert(), ShouldBeNil)
-
 			taskThree := &task.Task{
 				Id:          "task3",
 				DisplayName: "task3",
@@ -261,10 +281,9 @@ func TestBuildRestart(t *testing.T) {
 			}
 			So(taskFour.Insert(), ShouldBeNil)
 
-			So(RestartBuild(b.Id, []string{"task3", "task4"}, false, evergreen.DefaultTaskActivator), ShouldBeNil)
+			So(RestartBuild(b, []string{"task3", "task4"}, false, evergreen.DefaultTaskActivator), ShouldBeNil)
 			var err error
 			b, err = build.FindOne(build.ById(b.Id))
-			So(err, ShouldBeNil)
 			So(err, ShouldBeNil)
 			So(b.Status, ShouldEqual, evergreen.BuildStarted)
 			taskThree, err = task.FindOne(db.Query(task.ById("task3")))
@@ -274,6 +293,93 @@ func TestBuildRestart(t *testing.T) {
 			So(err, ShouldBeNil)
 			So(taskFour.Aborted, ShouldEqual, false)
 			So(taskFour.Status, ShouldEqual, evergreen.TaskDispatched)
+		})
+
+		Convey("single host task group tasks be omitted from the immediate restart logic", func() {
+
+			taskFive := &task.Task{
+				Id:                "task5",
+				DisplayName:       "task5",
+				BuildId:           b.Id,
+				Status:            evergreen.TaskSucceeded,
+				Activated:         true,
+				TaskGroup:         "tg",
+				TaskGroupMaxHosts: 1,
+			}
+			So(taskFive.Insert(), ShouldBeNil)
+
+			taskSix := &task.Task{
+				Id:                "task6",
+				DisplayName:       "task6",
+				BuildId:           b.Id,
+				Status:            evergreen.TaskDispatched,
+				Activated:         true,
+				TaskGroup:         "tg",
+				TaskGroupMaxHosts: 1,
+			}
+			So(taskSix.Insert(), ShouldBeNil)
+
+			taskSeven := &task.Task{
+				Id:          "task7",
+				DisplayName: "task7",
+				BuildId:     b.Id,
+				Status:      evergreen.TaskSucceeded,
+				Activated:   true,
+			}
+			So(taskSeven.Insert(), ShouldBeNil)
+
+			So(RestartBuild(b, []string{"task5", "task6", "task7"}, false, evergreen.DefaultTaskActivator), ShouldBeNil)
+			var err error
+			b, err = build.FindOne(build.ById(b.Id))
+			So(err, ShouldBeNil)
+			So(b.Status, ShouldEqual, evergreen.BuildStarted)
+			taskFive, err = task.FindOne(db.Query(task.ById("task5")))
+			So(err, ShouldBeNil)
+			So(taskFive.Status, ShouldEqual, evergreen.TaskSucceeded)
+			So(taskFive.ResetWhenFinished, ShouldBeTrue)
+			taskSix, err = task.FindOne(db.Query(task.ById("task6")))
+			So(err, ShouldBeNil)
+			taskSeven, err = task.FindOne(db.Query(task.ById("task7")))
+			So(err, ShouldBeNil)
+			So(taskSeven.Status, ShouldEqual, evergreen.TaskUndispatched)
+		})
+
+		Convey("a fully completed single host task group should get reset", func() {
+			taskEight := &task.Task{
+				Id:                "task8",
+				DisplayName:       "task8",
+				BuildId:           b.Id,
+				Version:           v.Id,
+				Status:            evergreen.TaskSucceeded,
+				Activated:         true,
+				TaskGroup:         "tg2",
+				TaskGroupMaxHosts: 1,
+			}
+			So(taskEight.Insert(), ShouldBeNil)
+
+			taskNine := &task.Task{
+				Id:                "task9",
+				DisplayName:       "task9",
+				BuildId:           b.Id,
+				Version:           v.Id,
+				Status:            evergreen.TaskSucceeded,
+				Activated:         true,
+				TaskGroup:         "tg2",
+				TaskGroupMaxHosts: 1,
+			}
+			So(taskNine.Insert(), ShouldBeNil)
+
+			So(RestartBuild(b, []string{"task8", "task9"}, false, evergreen.DefaultTaskActivator), ShouldBeNil)
+			var err error
+			b, err = build.FindOne(build.ById(b.Id))
+			So(err, ShouldBeNil)
+			So(b.Status, ShouldEqual, evergreen.BuildStarted)
+			taskEight, err = task.FindOne(db.Query(task.ById("task8")))
+			So(err, ShouldBeNil)
+			So(taskEight.Status, ShouldEqual, evergreen.TaskUndispatched)
+			taskNine, err = task.FindOne(db.Query(task.ById("task9")))
+			So(err, ShouldBeNil)
+			So(taskNine.Status, ShouldEqual, evergreen.TaskUndispatched)
 		})
 
 	})
@@ -367,20 +473,20 @@ func TestSetVersionActivation(t *testing.T) {
 	require.NoError(t, db.ClearCollections(build.Collection, task.Collection, VersionCollection))
 
 	vID := "abcdef"
-	v := &Version{Id: vID}
+	v := &Version{Id: vID, BuildIds: []string{"b0", "b1"}}
 	require.NoError(t, v.Insert())
 
 	builds := []build.Build{
-		{Id: "b0", Version: vID, Activated: true},
-		{Id: "b1", Version: vID, Activated: true},
+		{Id: "b0", Version: vID, Activated: true, Tasks: []build.TaskCache{{Id: "t0"}}, Status: evergreen.BuildCreated},
+		{Id: "b1", Version: vID, Activated: true, Tasks: []build.TaskCache{{Id: "t1"}}, Status: evergreen.BuildSucceeded},
 	}
 	for _, build := range builds {
 		require.NoError(t, build.Insert())
 	}
 
 	tasks := []task.Task{
-		{Id: "t0", BuildId: "b0", Activated: true, Status: evergreen.TaskUndispatched},
-		{Id: "t1", BuildId: "b1", Activated: true, Status: evergreen.TaskSucceeded},
+		{Id: "t0", BuildId: "b0", Version: vID, Activated: true, Status: evergreen.TaskUndispatched},
+		{Id: "t1", BuildId: "b1", Version: vID, Activated: true, Status: evergreen.TaskSucceeded},
 	}
 	for _, task := range tasks {
 		require.NoError(t, task.Insert())
@@ -422,6 +528,7 @@ func TestBuildSetActivated(t *testing.T) {
 					Activated:    true,
 					BuildVariant: "bv",
 					Version:      vID,
+					Status:       evergreen.BuildStarted,
 				}
 				So(b.Insert(), ShouldBeNil)
 
@@ -486,7 +593,7 @@ func TestBuildSetActivated(t *testing.T) {
 				}
 				So(canary.Insert(), ShouldBeNil)
 
-				So(SetBuildActivation(b.Id, false, evergreen.DefaultTaskActivator), ShouldBeNil)
+				So(ActivateBuildsAndTasks([]string{b.Id}, false, evergreen.DefaultTaskActivator), ShouldBeNil)
 				// the build should have been updated in the db
 				b, err := build.FindOne(build.ById(b.Id))
 				So(err, ShouldBeNil)
@@ -505,7 +612,7 @@ func TestBuildSetActivated(t *testing.T) {
 				So(differentUserTask.Activated, ShouldBeTrue)
 				So(differentUserTask.ActivatedBy, ShouldEqual, user)
 
-				So(SetBuildActivation(b.Id, true, evergreen.DefaultTaskActivator), ShouldBeNil)
+				So(ActivateBuildsAndTasks([]string{b.Id}, true, evergreen.DefaultTaskActivator), ShouldBeNil)
 				activatedTasks, err := task.Find(task.ByActivation(true))
 				So(err, ShouldBeNil)
 				So(len(activatedTasks), ShouldEqual, 5)
@@ -551,7 +658,7 @@ func TestBuildSetActivated(t *testing.T) {
 				So(matching2.Insert(), ShouldBeNil)
 
 				// have a user set the build activation to true
-				So(SetBuildActivation(b.Id, true, user), ShouldBeNil)
+				So(ActivateBuildsAndTasks([]string{b.Id}, true, user), ShouldBeNil)
 
 				// task with the different user activating should be activated with that user
 				task1, err := task.FindOne(db.Query(task.ById(matching.Id)))
@@ -572,7 +679,7 @@ func TestBuildSetActivated(t *testing.T) {
 				So(b.ActivatedBy, ShouldEqual, user)
 
 				// deactivate the task from evergreen and nothing should be deactivated.
-				So(SetBuildActivation(b.Id, false, evergreen.DefaultTaskActivator), ShouldBeNil)
+				So(ActivateBuildsAndTasks([]string{b.Id}, false, evergreen.DefaultTaskActivator), ShouldBeNil)
 
 				// refresh from the database and check again
 				b, err = build.FindOne(build.ById(b.Id))
@@ -728,16 +835,29 @@ func TestCreateBuildFromVersion(t *testing.T) {
 				},
 			},
 		}
-
-		smallContainerSize := ContainerResources{
-			MemoryMB: 128,
-			CPU:      256,
+		buildVar5 := parserBV{
+			Name:        "buildVar5",
+			DisplayName: "Build Variant 5",
+			RunOn:       []string{"arch"},
+			Tasks: parserBVTaskUnits{
+				{Name: "singleHostTaskGroup"},
+			},
 		}
+
 		pref := &ProjectRef{
 			Id:         "projectId",
 			Identifier: "projectName",
-			ContainerSizes: map[string]ContainerResources{
-				"small": smallContainerSize,
+			ContainerSizeDefinitions: []ContainerResources{
+				{
+					Name:     "small",
+					CPU:      256,
+					MemoryMB: 128,
+				},
+				{
+					Name:     "large",
+					CPU:      512,
+					MemoryMB: 256,
+				},
 			},
 		}
 		So(pref.Insert(), ShouldBeNil)
@@ -758,6 +878,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 				OperatingSystem: evergreen.LinuxOS,
 				CPUArchitecture: evergreen.ArchARM64,
 			},
+			Credential: "repo_creds",
 		}
 		container2 := Container{
 			Name:       "container2",
@@ -772,6 +893,13 @@ func TestCreateBuildFromVersion(t *testing.T) {
 		}
 		parserProject := &ParserProject{
 			Identifier: utility.ToStringPtr("projectId"),
+			TaskGroups: []parserTaskGroup{
+				{
+					Name:     "singleHostTaskGroup",
+					MaxHosts: 1,
+					Tasks:    []string{"singleHostTaskGroup1", "singleHostTaskGroup2", "singleHostTaskGroup3"},
+				},
+			},
 			Tasks: []parserTask{
 				{
 					Name:      "taskA",
@@ -813,9 +941,18 @@ func TestCreateBuildFromVersion(t *testing.T) {
 						},
 					},
 				},
+				{
+					Name: "singleHostTaskGroup1",
+				},
+				{
+					Name: "singleHostTaskGroup2",
+				},
+				{
+					Name: "singleHostTaskGroup3",
+				},
 			},
 			Containers:    []Container{container1, container2},
-			BuildVariants: []parserBV{buildVar1, buildVar2, buildVar3, buildVar4},
+			BuildVariants: []parserBV{buildVar1, buildVar2, buildVar3, buildVar4, buildVar5},
 		}
 
 		// the mock version we'll be using
@@ -840,6 +977,10 @@ func TestCreateBuildFromVersion(t *testing.T) {
 				},
 				{
 					BuildVariant:     buildVar4.Name,
+					ActivationStatus: ActivationStatus{Activated: true},
+				},
+				{
+					BuildVariant:     buildVar5.Name,
 					ActivationStatus: ActivationStatus{Activated: true},
 				},
 			},
@@ -875,17 +1016,16 @@ func TestCreateBuildFromVersion(t *testing.T) {
 		})
 
 		Convey("if a non-existent build variant is passed in, an error should be returned", func() {
-
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     "blecch",
-				ActivateBuild: false,
-				TaskNames:     []string{},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: "blecch",
+				ActivateBuild:    false,
+				TaskNames:        []string{},
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldNotBeNil)
 			So(build, ShouldBeNil)
 			So(tasks, ShouldBeNil)
@@ -893,24 +1033,23 @@ func TestCreateBuildFromVersion(t *testing.T) {
 
 		Convey("if no task names are passed in to be used, all of the default"+
 			" tasks for the build variant should be created", func() {
-
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: false,
-				TaskNames:     []string{},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    false,
+				TaskNames:        []string{},
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build, ShouldNotBeNil)
 			So(build.Id, ShouldNotEqual, "")
 			So(len(tasks), ShouldEqual, 6)
 
-			args.BuildName = buildVar2.Name
-			build, tasks, err = CreateBuildFromVersionNoInsert(args)
+			creationInfo.BuildVariantName = buildVar2.Name
+			build, tasks, err = CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build, ShouldNotBeNil)
 			So(build.Id, ShouldNotEqual, "")
@@ -920,17 +1059,16 @@ func TestCreateBuildFromVersion(t *testing.T) {
 
 		Convey("if a non-empty list of task names is passed in, only the"+
 			" specified tasks should be created", func() {
-
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: true,
-				TaskNames:     []string{"taskA", "taskB"},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    true,
+				TaskNames:        []string{"taskA", "taskB"},
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 			So(len(tasks), ShouldEqual, 2)
@@ -941,19 +1079,19 @@ func TestCreateBuildFromVersion(t *testing.T) {
 
 		Convey("if a non-empty list of TasksWithBatchTime is passed in, only the specified tasks should be activated", func() {
 			batchTimeTasks := []string{"taskA", "taskB"}
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: true,
-				TaskNames:     []string{"taskA", "taskB", "taskC", "taskD"}, // excluding display tasks
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    true,
+				TaskNames:        []string{"taskA", "taskB", "taskC", "taskD"}, // excluding display tasks
 				ActivationInfo: specificActivationInfo{activationTasks: map[string][]string{
 					buildVar1.Name: batchTimeTasks},
 				},
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 			So(len(tasks), ShouldEqual, 4)
@@ -967,35 +1105,33 @@ func TestCreateBuildFromVersion(t *testing.T) {
 		})
 
 		Convey("if an alias is passed in, dependencies are also created", func() {
-
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar2.Name,
-				ActivateBuild: false,
-				Aliases:       []ProjectAlias{alias},
-				TaskNames:     []string{"taskA", "taskB", "taskC"},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar2.Name,
+				ActivateBuild:    false,
+				Aliases:          []ProjectAlias{alias},
+				TaskNames:        []string{"taskA", "taskB", "taskC"},
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 			So(len(tasks), ShouldEqual, 3)
 		})
 
 		Convey("ensure distro is populated to tasks", func() {
-
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: false,
-				TaskNames:     []string{"taskA", "taskB"},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    false,
+				TaskNames:        []string{"taskA", "taskB"},
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 			for _, t := range tasks {
@@ -1005,15 +1141,15 @@ func TestCreateBuildFromVersion(t *testing.T) {
 		})
 
 		Convey("host execution mode should be populated for execution tasks running on a distro", func() {
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: false,
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    false,
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 			for _, t := range tasks {
@@ -1026,31 +1162,32 @@ func TestCreateBuildFromVersion(t *testing.T) {
 		})
 
 		Convey("execution platform should be set to containers and container options should be populated when run_on contains a container name", func() {
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar4.Name,
-				ActivateBuild: false,
-				TaskNames:     []string{},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar4.Name,
+				ActivateBuild:    false,
+				TaskNames:        []string{},
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 			So(len(build.Tasks), ShouldEqual, 4)
 
 			bvContainerOpts := task.ContainerOptions{
-				CPU:        container1.Resources.CPU,
-				MemoryMB:   container1.Resources.MemoryMB,
-				WorkingDir: container1.WorkingDir,
-				Image:      container1.Image,
-				OS:         container1.System.OperatingSystem,
-				Arch:       container1.System.CPUArchitecture,
+				CPU:           container1.Resources.CPU,
+				MemoryMB:      container1.Resources.MemoryMB,
+				WorkingDir:    container1.WorkingDir,
+				Image:         container1.Image,
+				OS:            container1.System.OperatingSystem,
+				Arch:          container1.System.CPUArchitecture,
+				RepoCredsName: container1.Credential,
 			}
 			taskContainerOpts := task.ContainerOptions{
-				CPU:        smallContainerSize.CPU,
-				MemoryMB:   smallContainerSize.MemoryMB,
+				CPU:        256,
+				MemoryMB:   128,
 				WorkingDir: container2.WorkingDir,
 				Image:      container2.Image,
 				OS:         container2.System.OperatingSystem,
@@ -1070,17 +1207,16 @@ func TestCreateBuildFromVersion(t *testing.T) {
 
 		Convey("the build should contain task caches that correspond exactly"+
 			" to the tasks created", func() {
-
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar2.Name,
-				ActivateBuild: false,
-				TaskNames:     []string{},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar2.Name,
+				ActivateBuild:    false,
+				TaskNames:        []string{},
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 			So(len(tasks), ShouldEqual, 4)
@@ -1095,16 +1231,16 @@ func TestCreateBuildFromVersion(t *testing.T) {
 		})
 
 		Convey("a task cache should not contain execution tasks that are part of a display task", func() {
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: false,
-				TaskNames:     []string{},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    false,
+				TaskNames:        []string{},
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 			So(len(build.Tasks), ShouldEqual, 2)
@@ -1123,26 +1259,25 @@ func TestCreateBuildFromVersion(t *testing.T) {
 		})
 		Convey("all of the tasks created should have the dependencies"+
 			"and priorities specified in the project", func() {
-
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: false,
-				TaskNames:     []string{},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    false,
+				TaskNames:        []string{},
 			}
-			build, tasks1, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks1, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 
-			args.BuildName = buildVar2.Name
-			build, tasks2, err := CreateBuildFromVersionNoInsert(args)
+			creationInfo.BuildVariantName = buildVar2.Name
+			build, tasks2, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
-			args.BuildName = buildVar3.Name
-			build, tasks3, err := CreateBuildFromVersionNoInsert(args)
+			creationInfo.BuildVariantName = buildVar3.Name
+			build, tasks3, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 
@@ -1186,21 +1321,20 @@ func TestCreateBuildFromVersion(t *testing.T) {
 			So(dbTasks[7].DependsOn, ShouldContain, task.Dependency{TaskId: dbTasks[5].Id, Status: evergreen.TaskSucceeded})
 
 			So(dbTasks[8].DisplayName, ShouldEqual, "taskE")
-			So(len(dbTasks[8].DependsOn), ShouldEqual, 12)
+			So(len(dbTasks[8].DependsOn), ShouldEqual, 15)
 		})
 
 		Convey("all of the build's essential fields should be set correctly", func() {
-
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: false,
-				TaskNames:     []string{},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    false,
+				TaskNames:        []string{},
 			}
-			build, _, err := CreateBuildFromVersionNoInsert(args)
+			build, _, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 
@@ -1221,15 +1355,14 @@ func TestCreateBuildFromVersion(t *testing.T) {
 		})
 
 		Convey("all of the tasks' essential fields should be set correctly", func() {
-
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: false,
-				TaskNames:     []string{},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    false,
+				TaskNames:        []string{},
 				SyncAtEndOpts: patch.SyncAtEndOptions{
 					BuildVariants: []string{buildVar1.Name},
 					Tasks:         []string{"taskA", "taskB"},
@@ -1242,7 +1375,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 				},
 				TaskCreateTime: time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC),
 			}
-			build, tasks, err := CreateBuildFromVersionNoInsert(args)
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			So(build.Id, ShouldNotEqual, "")
 
@@ -1253,7 +1386,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 			So(tasks[2].BuildId, ShouldEqual, build.Id)
 			So(tasks[2].DistroId, ShouldEqual, "arch")
 			So(tasks[2].BuildVariant, ShouldEqual, buildVar1.Name)
-			So(tasks[2].CreateTime.Equal(args.TaskCreateTime), ShouldBeTrue)
+			So(tasks[2].CreateTime.Equal(creationInfo.TaskCreateTime), ShouldBeTrue)
 			So(tasks[2].Status, ShouldEqual, evergreen.TaskUndispatched)
 			So(tasks[2].Activated, ShouldBeFalse)
 			So(tasks[2].ActivatedTime.Equal(utility.ZeroTime), ShouldBeTrue)
@@ -1270,7 +1403,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 			So(tasks[3].BuildId, ShouldEqual, build.Id)
 			So(tasks[3].DistroId, ShouldEqual, "arch")
 			So(tasks[3].BuildVariant, ShouldEqual, buildVar1.Name)
-			So(tasks[3].CreateTime.Equal(args.TaskCreateTime), ShouldBeTrue)
+			So(tasks[3].CreateTime.Equal(creationInfo.TaskCreateTime), ShouldBeTrue)
 			So(tasks[3].Status, ShouldEqual, evergreen.TaskUndispatched)
 			So(tasks[3].Activated, ShouldBeFalse)
 			So(tasks[3].ActivatedTime.Equal(utility.ZeroTime), ShouldBeTrue)
@@ -1287,7 +1420,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 			So(tasks[4].BuildId, ShouldEqual, build.Id)
 			So(tasks[4].DistroId, ShouldEqual, "arch")
 			So(tasks[4].BuildVariant, ShouldEqual, buildVar1.Name)
-			So(tasks[4].CreateTime.Equal(args.TaskCreateTime), ShouldBeTrue)
+			So(tasks[4].CreateTime.Equal(creationInfo.TaskCreateTime), ShouldBeTrue)
 			So(tasks[4].Status, ShouldEqual, evergreen.TaskUndispatched)
 			So(tasks[4].Activated, ShouldBeFalse)
 			So(tasks[4].ActivatedTime.Equal(utility.ZeroTime), ShouldBeTrue)
@@ -1304,7 +1437,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 			So(tasks[5].BuildId, ShouldEqual, build.Id)
 			So(tasks[5].DistroId, ShouldEqual, "arch")
 			So(tasks[5].BuildVariant, ShouldEqual, buildVar1.Name)
-			So(tasks[5].CreateTime.Equal(args.TaskCreateTime), ShouldBeTrue)
+			So(tasks[5].CreateTime.Equal(creationInfo.TaskCreateTime), ShouldBeTrue)
 			So(tasks[5].Status, ShouldEqual, evergreen.TaskUndispatched)
 			So(tasks[5].Activated, ShouldBeFalse)
 			So(tasks[5].ActivatedTime.Equal(utility.ZeroTime), ShouldBeTrue)
@@ -1318,18 +1451,17 @@ func TestCreateBuildFromVersion(t *testing.T) {
 
 		Convey("if the activated flag is set, the build and all its tasks should be activated",
 			func() {
-
-				args := BuildCreateArgs{
-					Project:        *project,
-					ProjectRef:     *pref,
-					Version:        *v,
-					TaskIDs:        table,
-					BuildName:      buildVar1.Name,
-					ActivateBuild:  true,
-					TaskNames:      []string{},
-					TaskCreateTime: time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC),
+				creationInfo := TaskCreationInfo{
+					Project:          project,
+					ProjectRef:       pref,
+					Version:          v,
+					TaskIDs:          table,
+					BuildVariantName: buildVar1.Name,
+					ActivateBuild:    true,
+					TaskNames:        []string{},
+					TaskCreateTime:   time.Date(2009, time.November, 10, 23, 0, 0, 0, time.UTC),
 				}
-				build, tasks, err := CreateBuildFromVersionNoInsert(args)
+				build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 				So(err, ShouldBeNil)
 				So(build.Id, ShouldNotEqual, "")
 				So(build.Activated, ShouldBeTrue)
@@ -1342,7 +1474,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 				So(tasks[2].BuildId, ShouldEqual, build.Id)
 				So(tasks[2].DistroId, ShouldEqual, "arch")
 				So(tasks[2].BuildVariant, ShouldEqual, buildVar1.Name)
-				So(tasks[2].CreateTime.Equal(args.TaskCreateTime), ShouldBeTrue)
+				So(tasks[2].CreateTime.Equal(creationInfo.TaskCreateTime), ShouldBeTrue)
 				So(tasks[2].Status, ShouldEqual, evergreen.TaskUndispatched)
 				So(tasks[2].Activated, ShouldBeTrue)
 				So(tasks[2].ActivatedTime.Equal(utility.ZeroTime), ShouldBeFalse)
@@ -1358,7 +1490,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 				So(tasks[3].BuildId, ShouldEqual, build.Id)
 				So(tasks[3].DistroId, ShouldEqual, "arch")
 				So(tasks[3].BuildVariant, ShouldEqual, buildVar1.Name)
-				So(tasks[3].CreateTime.Equal(args.TaskCreateTime), ShouldBeTrue)
+				So(tasks[3].CreateTime.Equal(creationInfo.TaskCreateTime), ShouldBeTrue)
 				So(tasks[3].Status, ShouldEqual, evergreen.TaskUndispatched)
 				So(tasks[3].Activated, ShouldBeTrue)
 				So(tasks[3].ActivatedTime.Equal(utility.ZeroTime), ShouldBeFalse)
@@ -1374,7 +1506,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 				So(tasks[4].BuildId, ShouldEqual, build.Id)
 				So(tasks[4].DistroId, ShouldEqual, "arch")
 				So(tasks[4].BuildVariant, ShouldEqual, buildVar1.Name)
-				So(tasks[4].CreateTime.Equal(args.TaskCreateTime), ShouldBeTrue)
+				So(tasks[4].CreateTime.Equal(creationInfo.TaskCreateTime), ShouldBeTrue)
 				So(tasks[4].Status, ShouldEqual, evergreen.TaskUndispatched)
 				So(tasks[4].Activated, ShouldBeTrue)
 				So(tasks[4].ActivatedTime.Equal(utility.ZeroTime), ShouldBeFalse)
@@ -1390,7 +1522,7 @@ func TestCreateBuildFromVersion(t *testing.T) {
 				So(tasks[5].BuildId, ShouldEqual, build.Id)
 				So(tasks[5].DistroId, ShouldEqual, "arch")
 				So(tasks[5].BuildVariant, ShouldEqual, buildVar1.Name)
-				So(tasks[5].CreateTime.Equal(args.TaskCreateTime), ShouldBeTrue)
+				So(tasks[5].CreateTime.Equal(creationInfo.TaskCreateTime), ShouldBeTrue)
 				So(tasks[5].Status, ShouldEqual, evergreen.TaskUndispatched)
 				So(tasks[5].Activated, ShouldBeTrue)
 				So(tasks[5].ActivatedTime.Equal(utility.ZeroTime), ShouldBeFalse)
@@ -1402,20 +1534,74 @@ func TestCreateBuildFromVersion(t *testing.T) {
 			})
 
 		Convey("the 'must have test results' flag should be set", func() {
-			args := BuildCreateArgs{
-				Project:       *project,
-				ProjectRef:    *pref,
-				Version:       *v,
-				TaskIDs:       table,
-				BuildName:     buildVar1.Name,
-				ActivateBuild: true,
-				TaskNames:     []string{},
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar1.Name,
+				ActivateBuild:    true,
+				TaskNames:        []string{},
 			}
-			_, tasks, err := CreateBuildFromVersionNoInsert(args)
+			_, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 			So(err, ShouldBeNil)
 			for _, t := range tasks {
 				if t.DisplayName == "taskD" {
 					So(t.MustHaveResults, ShouldBeTrue)
+				}
+			}
+		})
+
+		Convey("single host task group tasks should be assigned child dependencies upon creation", func() {
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar5.Name,
+				TaskNames:        []string{},
+			}
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
+			So(err, ShouldBeNil)
+			So(build.Id, ShouldNotEqual, "")
+
+			So(len(tasks), ShouldEqual, 3)
+			for _, singleHostTgTask := range tasks {
+				switch singleHostTgTask.DisplayName {
+				case "singleHostTaskGroup1":
+					So(singleHostTgTask.DependsOn, ShouldHaveLength, 0)
+				case "singleHostTaskGroup2":
+					So(singleHostTgTask.DependsOn, ShouldHaveLength, 1)
+					So(singleHostTgTask.DependsOn[0].TaskId, ShouldEqual, table.ExecutionTasks.GetId("buildVar5", "singleHostTaskGroup1"))
+				case "singleHostTaskGroup3":
+					So(singleHostTgTask.DependsOn, ShouldHaveLength, 1)
+					So(singleHostTgTask.DependsOn[0].TaskId, ShouldEqual, table.ExecutionTasks.GetId("buildVar5", "singleHostTaskGroup2"))
+				}
+			}
+		})
+
+		Convey("single host task group dependencies should still work if some tasks are missing", func() {
+			// remove singleHostTaskGroup2 from the table
+			table.ExecutionTasks[TVPair{Variant: "buildVar5", TaskName: "singleHostTaskGroup2"}] = ""
+			creationInfo := TaskCreationInfo{
+				Project:          project,
+				ProjectRef:       pref,
+				Version:          v,
+				TaskIDs:          table,
+				BuildVariantName: buildVar5.Name,
+				TaskNames:        []string{"singleHostTaskGroup1", "singleHostTaskGroup3"},
+			}
+			build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
+			So(err, ShouldBeNil)
+			So(build.Id, ShouldNotEqual, "")
+			So(len(tasks), ShouldEqual, 2)
+			for _, singleHostTgTask := range tasks {
+				switch singleHostTgTask.DisplayName {
+				case "singleHostTaskGroup1":
+					So(singleHostTgTask.DependsOn, ShouldHaveLength, 0)
+				case "singleHostTaskGroup3":
+					So(singleHostTgTask.DependsOn, ShouldHaveLength, 1)
+					So(singleHostTgTask.DependsOn[0].TaskId, ShouldEqual, table.ExecutionTasks.GetId("buildVar5", "singleHostTaskGroup1"))
 				}
 			}
 		})
@@ -1484,7 +1670,6 @@ func TestCreateTaskGroup(t *testing.T) {
 				ActivationStatus: ActivationStatus{Activated: false},
 			},
 		},
-		Config: projYml,
 	}
 	pRef := ProjectRef{
 		Id:         "projectId",
@@ -1492,15 +1677,15 @@ func TestCreateTaskGroup(t *testing.T) {
 	}
 	table := NewTaskIdTable(proj, v, "", "")
 
-	args := BuildCreateArgs{
-		Project:       *proj,
-		ProjectRef:    pRef,
-		Version:       *v,
-		TaskIDs:       table,
-		BuildName:     "bv",
-		ActivateBuild: true,
+	creationInfo := TaskCreationInfo{
+		Project:          proj,
+		ProjectRef:       &pRef,
+		Version:          v,
+		TaskIDs:          table,
+		BuildVariantName: "bv",
+		ActivateBuild:    true,
 	}
-	build, tasks, err := CreateBuildFromVersionNoInsert(args)
+	build, tasks, err := CreateBuildFromVersionNoInsert(creationInfo)
 	assert.NoError(err)
 	assert.Len(build.Tasks, 3)
 	assert.Len(tasks, 3)
@@ -1533,14 +1718,20 @@ func TestGetTaskIdTable(t *testing.T) {
 				Name: "bv0",
 				Tasks: []BuildVariantTaskUnit{
 					{
-						Name: "t0",
+						Name:    "t0",
+						Variant: "bv0",
 					},
 					{
-						Name: "t1",
+						Name:    "t1",
+						Variant: "bv0",
 					},
 				},
 			},
 		},
+	}
+
+	pref := &ProjectRef{
+		Identifier: "p0",
 	}
 
 	newPairs := TaskVariantPairs{
@@ -1549,10 +1740,16 @@ func TestGetTaskIdTable(t *testing.T) {
 			{Variant: "bv0", TaskName: "t0"},
 		},
 	}
+	creationInfo := TaskCreationInfo{
+		Project:    p,
+		ProjectRef: pref,
+		Pairs:      newPairs,
+		Version:    v,
+	}
 	existingTask := task.Task{Id: "t2", DisplayName: "existing_task", BuildVariant: "bv0", Version: v.Id}
 	require.NoError(t, existingTask.Insert())
 
-	tables, err := getTaskIdTables(v, p, newPairs, "p0")
+	tables, err := getTaskIdTables(creationInfo)
 	assert.NoError(t, err)
 	assert.Len(t, tables.ExecutionTasks, 2)
 	assert.Equal(t, "p0_bv0_t0_abcde_09_11_10_23_00_00", tables.ExecutionTasks.GetId("bv0", "t0"))
@@ -1578,7 +1775,7 @@ func TestMakeDeps(t *testing.T) {
 			{Name: AllDependencies, Variant: AllVariants},
 		}
 
-		deps := makeDeps(tSpec, thisTask, table)
+		deps := makeDeps(tSpec.DependsOn, thisTask, table)
 		assert.Len(t, deps, 3)
 		expectedIDs := []string{"bv0_t0", "bv0_t1", "bv1_t0"}
 		for _, dep := range deps {
@@ -1592,7 +1789,7 @@ func TestMakeDeps(t *testing.T) {
 			{Name: AllDependencies, Variant: "bv0"},
 		}
 
-		deps := makeDeps(tSpec, thisTask, table)
+		deps := makeDeps(tSpec.DependsOn, thisTask, table)
 		assert.Len(t, deps, 2)
 		expectedIDs := []string{"bv0_t0", "bv0_t1"}
 		for _, dep := range deps {
@@ -1606,7 +1803,7 @@ func TestMakeDeps(t *testing.T) {
 			{Name: "t0", Variant: "bv0"},
 		}
 
-		deps := makeDeps(tSpec, thisTask, table)
+		deps := makeDeps(tSpec.DependsOn, thisTask, table)
 		assert.Len(t, deps, 1)
 		assert.Equal(t, "bv0_t0", deps[0].TaskId)
 		assert.Equal(t, evergreen.TaskSucceeded, deps[0].Status)
@@ -1618,7 +1815,7 @@ func TestMakeDeps(t *testing.T) {
 			{Name: "t0", Variant: "bv0"},
 		}
 
-		deps := makeDeps(tSpec, thisTask, table)
+		deps := makeDeps(tSpec.DependsOn, thisTask, table)
 		assert.Len(t, deps, 3)
 	})
 
@@ -1627,7 +1824,7 @@ func TestMakeDeps(t *testing.T) {
 			{Name: "t0", Variant: "bv0", Status: evergreen.TaskFailed},
 		}
 
-		deps := makeDeps(tSpec, thisTask, table)
+		deps := makeDeps(tSpec.DependsOn, thisTask, table)
 		assert.Len(t, deps, 1)
 		assert.Equal(t, "bv0_t0", deps[0].TaskId)
 		assert.Equal(t, evergreen.TaskFailed, deps[0].Status)
@@ -1638,7 +1835,7 @@ func TestMakeDeps(t *testing.T) {
 			{Name: AllDependencies},
 		}
 
-		deps := makeDeps(tSpec, thisTask, table)
+		deps := makeDeps(tSpec.DependsOn, thisTask, table)
 		assert.Len(t, deps, 1)
 		assert.Equal(t, "bv1_t0", deps[0].TaskId)
 		assert.Equal(t, evergreen.TaskSucceeded, deps[0].Status)
@@ -1649,7 +1846,7 @@ func TestMakeDeps(t *testing.T) {
 			{Variant: AllVariants},
 		}
 
-		deps := makeDeps(tSpec, thisTask, table)
+		deps := makeDeps(tSpec.DependsOn, thisTask, table)
 		assert.Len(t, deps, 1)
 		assert.Equal(t, "bv0_t1", deps[0].TaskId)
 		assert.Equal(t, evergreen.TaskSucceeded, deps[0].Status)
@@ -1939,7 +2136,8 @@ func TestVersionRestart(t *testing.T) {
 	assert.True(dbTask.ResetWhenFinished)
 	dbVersion, err = VersionFindOneId("version")
 	assert.NoError(err)
-	assert.Equal(evergreen.VersionStarted, dbVersion.Status)
+	// Version status should not update if only aborting tasks
+	assert.Equal("", dbVersion.Status)
 
 	// test that not aborting in-progress tasks does not reset them
 	assert.NoError(resetTaskData())
@@ -1952,7 +2150,8 @@ func TestVersionRestart(t *testing.T) {
 	assert.Equal(evergreen.TaskDispatched, dbTask.Status)
 	dbVersion, err = VersionFindOneId("version")
 	assert.NoError(err)
-	assert.Equal(evergreen.VersionStarted, dbVersion.Status)
+	// Version status should not update if no tasks are being reset.
+	assert.Equal("", dbVersion.Status)
 }
 
 func TestDisplayTaskRestart(t *testing.T) {
@@ -1973,7 +2172,7 @@ func TestDisplayTaskRestart(t *testing.T) {
 
 	// test restarting a build
 	assert.NoError(resetTaskData())
-	assert.NoError(RestartBuild("build3", displayTasks, false, "test"))
+	assert.NoError(RestartBuild(&build.Build{Id: "build3", Version: "version"}, displayTasks, false, "test"))
 	tasks, err = task.FindAll(db.Query(task.ByIds(allTasks)))
 	assert.NoError(err)
 	assert.Len(tasks, 3)
@@ -1984,7 +2183,7 @@ func TestDisplayTaskRestart(t *testing.T) {
 
 	// test that restarting a task correctly resets the task and archives it
 	assert.NoError(resetTaskData())
-	assert.NoError(resetTask("displayTask", "caller", false))
+	assert.NoError(resetTask("displayTask", "caller"))
 	archivedTasks, err := task.FindOldWithDisplayTasks(nil)
 	assert.NoError(err)
 	assert.Len(archivedTasks, 3)
@@ -2003,9 +2202,31 @@ func TestDisplayTaskRestart(t *testing.T) {
 		assert.True(dbTask.Activated, dbTask.Id)
 	}
 
+	// Test that restarting a display task with restartFailed correctly resets failed tasks.
+	assert.NoError(resetTaskData())
+	dt, err := task.FindOneId("displayTask")
+	assert.NoError(err)
+	assert.NoError(dt.SetResetFailedWhenFinished())
+	assert.NoError(resetTask(dt.Id, "caller"))
+	tasks, err = task.FindAll(db.Query(task.ByIds(allTasks)))
+	assert.NoError(err)
+	assert.Len(tasks, 3)
+	for _, dbTask := range tasks {
+		if dbTask.Activated {
+			assert.Equal(evergreen.TaskUndispatched, dbTask.Status, dbTask.Id)
+		} else {
+			assert.Equal(evergreen.TaskSucceeded, dbTask.Status, dbTask.Id)
+		}
+	}
+
 	// test that execution tasks cannot be restarted
 	assert.NoError(resetTaskData())
-	assert.Error(TryResetTask("task5", "", "", nil))
+	settings := &evergreen.Settings{
+		CommitQueue: evergreen.CommitQueueConfig{
+			MaxSystemFailedTaskRetries: 2,
+		},
+	}
+	assert.Error(TryResetTask(settings, "task5", "", "", nil))
 
 	// trying to restart execution tasks should restart the entire display task, if it's done
 	assert.NoError(resetTaskData())
@@ -2020,13 +2241,18 @@ func TestDisplayTaskRestart(t *testing.T) {
 }
 
 func TestResetTaskOrDisplayTask(t *testing.T) {
+	settings := &evergreen.Settings{
+		CommitQueue: evergreen.CommitQueueConfig{
+			MaxSystemFailedTaskRetries: 2,
+		},
+	}
 	assert.NoError(t, resetTaskData())
 	et, err := task.FindOneId("task5")
 	assert.NoError(t, err)
 	require.NotNil(t, et)
 
-	// restarting execution tasks should restart the whole display task if it's complete
-	assert.NoError(t, ResetTaskOrDisplayTask(et, "me", evergreen.StepbackTaskActivator, nil))
+	// restarting execution tasks should restart display task
+	assert.NoError(t, ResetTaskOrDisplayTask(settings, et, "me", evergreen.StepbackTaskActivator, false, nil))
 	dt, err := task.FindOneId("displayTask")
 	assert.NoError(t, err)
 	require.NotNil(t, dt)
@@ -2035,13 +2261,14 @@ func TestResetTaskOrDisplayTask(t *testing.T) {
 	assert.False(t, dt.ResetWhenFinished)
 
 	// restarting display task should mark the display task for restart if it's not complete
-	assert.NoError(t, ResetTaskOrDisplayTask(dt, "me", evergreen.StepbackTaskActivator, nil))
+	// ResetFailedWhenFinished should be set to true if failedOnly is passed in
+	assert.NoError(t, ResetTaskOrDisplayTask(settings, dt, "me", evergreen.StepbackTaskActivator, true, nil))
 	dt, err = task.FindOneId("displayTask")
 	assert.NoError(t, err)
 	require.NotNil(t, dt)
 	assert.Equal(t, dt.Status, evergreen.TaskUndispatched)
 	assert.Equal(t, dt.Execution, 1)
-	assert.True(t, dt.ResetWhenFinished)
+	assert.True(t, dt.ResetFailedWhenFinished)
 }
 
 func resetTaskData() error {
@@ -2170,16 +2397,24 @@ func resetTaskData() error {
 
 func TestCreateTasksFromGroup(t *testing.T) {
 	assert := assert.New(t)
+	const tgName = "name"
+	const bvName = "first_build_variant"
 	in := BuildVariantTaskUnit{
-		Name:            "name",
+		Name:            tgName,
 		IsGroup:         true,
-		GroupName:       "task_group",
+		Variant:         bvName,
 		Priority:        0,
 		DependsOn:       []TaskUnitDependency{{Name: "new_dependency"}},
 		RunOn:           []string{},
 		ExecTimeoutSecs: 0,
 	}
 	p := &Project{
+		BuildVariants: []BuildVariant{
+			{
+				Name:  "first_build_variant",
+				Tasks: []BuildVariantTaskUnit{in},
+			},
+		},
 		Tasks: []ProjectTask{
 			{
 				Name:      "first_task",
@@ -2195,13 +2430,13 @@ func TestCreateTasksFromGroup(t *testing.T) {
 		},
 		TaskGroups: []TaskGroup{
 			{
-				Name:  "name",
+				Name:  tgName,
 				Tasks: []string{"first_task", "second_task", "third_task"},
 			},
 		},
 	}
 	bvts := CreateTasksFromGroup(in, p, evergreen.PatchVersionRequester)
-	assert.Equal(2, len(bvts))
+	require.Equal(t, 2, len(bvts))
 	assert.Equal("new_dependency", bvts[0].DependsOn[0].Name)
 	assert.Equal("new_dependency", bvts[1].DependsOn[0].Name)
 }
@@ -2463,22 +2698,14 @@ func TestAddNewTasks(t *testing.T) {
 	b := build.Build{
 		Id:           "b0",
 		BuildVariant: "bv0",
+		Activated:    false,
 	}
-	assert.NoError(t, b.Insert())
 
 	v := &Version{
 		Id:       "v0",
 		BuildIds: []string{"b0"},
 	}
 	assert.NoError(t, v.Insert())
-
-	existingTask := task.Task{
-		Id:           "t0",
-		DisplayName:  "t0",
-		BuildId:      "b0",
-		BuildVariant: "bv0",
-		Version:      "v0",
-	}
 
 	tasksToAdd := TaskVariantPairs{
 		ExecTasks: []TVPair{
@@ -2497,6 +2724,7 @@ func TestAddNewTasks(t *testing.T) {
 					{Name: "t0"},
 					{
 						Name:      "t1",
+						Variant:   "bv0",
 						DependsOn: []TaskUnitDependency{{Name: "t0"}},
 						RunOn:     []string{"d0"},
 					},
@@ -2512,30 +2740,71 @@ func TestAddNewTasks(t *testing.T) {
 	for name, testCase := range map[string]struct {
 		activationInfo specificActivationInfo
 		activatedTasks []string
+		existingTask   task.Task
+		bvActive       bool
 	}{
 		"ActivatedNewTask": {
 			activationInfo: specificActivationInfo{},
 			activatedTasks: []string{"t0", "t1"},
+			existingTask: task.Task{
+				Id:           "t0",
+				DisplayName:  "t0",
+				BuildId:      "b0",
+				BuildVariant: "bv0",
+				Version:      "v0",
+				Activated:    true,
+			},
+			bvActive: true,
 		},
 		"DeactivatedNewTask": {
 			activationInfo: specificActivationInfo{activationTasks: map[string][]string{
 				b.BuildVariant: {"t1"},
 			}},
 			activatedTasks: []string{},
+			existingTask:   task.Task{},
+			bvActive:       false,
+		},
+		"OnlyDeactivatedTasks": {
+			activationInfo: specificActivationInfo{activationTasks: map[string][]string{
+				b.BuildVariant: {"t1"},
+			}},
+			activatedTasks: []string{},
+			existingTask: task.Task{
+				Id:           "t0",
+				DisplayName:  "t0",
+				BuildId:      "b0",
+				BuildVariant: "bv0",
+				Version:      "v0",
+				Activated:    false,
+			},
+			bvActive: false,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			require.NoError(t, db.ClearCollections(task.Collection))
-			assert.NoError(t, existingTask.Insert())
-
-			_, err := addNewTasks(context.Background(), testCase.activationInfo, v, &project, &ProjectRef{}, tasksToAdd, []build.Build{b}, patch.SyncAtEndOptions{}, "")
+			require.NoError(t, db.ClearCollections(task.Collection, build.Collection))
+			assert.NoError(t, testCase.existingTask.Insert())
+			assert.NoError(t, b.Insert())
+			creationInfo := TaskCreationInfo{
+				Project:        &project,
+				ProjectRef:     &ProjectRef{},
+				Version:        v,
+				Pairs:          tasksToAdd,
+				ActivationInfo: testCase.activationInfo,
+				SyncAtEndOpts:  patch.SyncAtEndOptions{},
+				GeneratedBy:    "",
+			}
+			_, err := addNewTasks(context.Background(), creationInfo, []build.Build{b})
 			assert.NoError(t, err)
 			activatedTasks, err := task.FindAll(db.Query(bson.M{task.ActivatedKey: true}))
 			assert.NoError(t, err)
+			build, err := build.FindOneId("b0")
+			assert.NoError(t, err)
+			assert.NotNil(t, build)
 			assert.Equal(t, len(testCase.activatedTasks), len(activatedTasks))
 			for _, task := range activatedTasks {
 				assert.Contains(t, testCase.activatedTasks, task.DisplayName)
 			}
+			assert.Equal(t, testCase.bvActive, build.Activated)
 		})
 	}
 }

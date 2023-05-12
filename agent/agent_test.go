@@ -3,8 +3,8 @@ package agent
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +19,7 @@ import (
 	"github.com/mongodb/jasper"
 	"github.com/mongodb/jasper/mock"
 	"github.com/stretchr/testify/suite"
+	"go.opentelemetry.io/otel"
 )
 
 const (
@@ -47,7 +48,8 @@ func (s *AgentSuite) SetupTest() {
 			StatusPort: 2286,
 			LogPrefix:  evergreen.LocalLoggingOverride,
 		},
-		comm: client.NewMock("url"),
+		comm:   client.NewMock("url"),
+		tracer: otel.GetTracerProvider().Tracer("noop_tracer"),
 	}
 	s.mockCommunicator = s.a.comm.(*client.Mock)
 	s.a.jasper, err = jasper.NewSynchronizedManager(true)
@@ -74,7 +76,7 @@ func (s *AgentSuite) SetupTest() {
 	factory, ok := command.GetCommandFactory("setup.initial")
 	s.True(ok)
 	s.tc.setCurrentCommand(factory())
-	s.tmpDirName, err = ioutil.TempDir("", "agent-command-suite-")
+	s.tmpDirName, err = os.MkdirTemp("", filepath.Base(s.T().Name()))
 	s.Require().NoError(err)
 	s.tc.taskDirectory = s.tmpDirName
 	sender, err := s.a.GetSender(ctx, evergreen.LocalLoggingOverride)
@@ -248,9 +250,9 @@ func (s *AgentSuite) TestCancelRunCommands() {
 		},
 	}
 	cmds := []model.PluginCommandConf{cmd}
-	err := s.a.runCommands(ctx, s.tc, cmds, runCommandsOptions{})
-	s.Error(err)
-	s.Equal("runCommands canceled", err.Error())
+	err := s.a.runCommands(ctx, s.tc, cmds, runCommandsOptions{}, "post")
+	s.Require().Error(err)
+	s.Contains(err.Error(), context.Canceled.Error())
 }
 
 func (s *AgentSuite) TestPre() {
@@ -281,8 +283,8 @@ pre:
 	_ = s.tc.logger.Close()
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
 	s.Equal("Running pre-task commands.", msgs[1].Message)
-	s.Equal("Running command 'shell.exec' (step 1 of 1)", msgs[3].Message)
-	s.Contains(msgs[len(msgs)-1].Message, "Finished running pre-task commands")
+	s.Equal("Running command 'shell.exec' (step 1 of 1).", msgs[3].Message)
+	s.Contains(msgs[len(msgs)-1].Message, "Finished running pre-task commands.")
 }
 
 func (s *AgentSuite) TestPreFailsTask() {
@@ -371,7 +373,7 @@ post:
 	_ = s.tc.logger.Close()
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
 	s.Equal("Running post-task commands.", msgs[1].Message)
-	s.Equal("Running command 'shell.exec' (step 1 of 1)", msgs[2].Message)
+	s.Equal("Running command 'shell.exec' (step 1 of 1).", msgs[2].Message)
 	s.Contains(msgs[len(msgs)-1].Message, "Finished running post-task commands")
 }
 
@@ -406,12 +408,12 @@ post:
 	_ = s.tc.logger.Close()
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
 	s.Equal("Running post-task commands.", msgs[1].Message)
-	s.Equal("Running command 'shell.exec' (step 1 of 2)", msgs[2].Message)
+	s.Equal("Running command 'shell.exec' (step 1 of 2).", msgs[2].Message)
 	s.Contains(msgs[len(msgs)-1].Message, "Finished running post-task commands")
 	found := map[string]bool{
-		"Running post-task commands.":                false,
-		"Running command 'shell.exec' (step 1 of 2)": false,
-		"Running command 'shell.exec' (step 2 of 2)": false,
+		"Running post-task commands.":                 false,
+		"Running command 'shell.exec' (step 1 of 2).": false,
+		"Running command 'shell.exec' (step 2 of 2).": false,
 	}
 	for _, msg := range msgs {
 		for f := range found {
@@ -464,9 +466,9 @@ func (s *AgentSuite) TestAbort() {
 	s.NoError(err)
 	s.Equal(evergreen.TaskFailed, s.mockCommunicator.EndTaskResult.Detail.Status)
 	shouldFind := map[string]bool{
-		"initial task setup":              false,
-		"Running post-task commands":      false,
-		"Sending final status as: failed": false,
+		"initial task setup":                  false,
+		"Running post-task commands.":         false,
+		"Sending final task status: 'failed'": false,
 	}
 	s.Require().NoError(s.tc.logger.Close())
 	for _, m := range s.mockCommunicator.GetMockMessages()["task_id"] {
@@ -706,7 +708,7 @@ task_groups:
 	_ = s.tc.logger.Close()
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
 	s.Equal("Running pre-task commands.", msgs[1].Message)
-	s.Equal("Running command 'shell.exec' (step 1 of 1)", msgs[3].Message)
+	s.Equal("Running command 'shell.exec' (step 1 of 1).", msgs[3].Message)
 	s.Equal("Finished running pre-task commands.", msgs[len(msgs)-1].Message)
 }
 
@@ -737,6 +739,11 @@ task_groups:
 		},
 		Project: p,
 		WorkDir: s.tc.taskDirectory,
+		ProjectRef: &model.ProjectRef{
+			Id:         "abcdef",
+			Identifier: "project_identifier",
+		},
+		Timeout: &internal.Timeout{},
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -778,7 +785,7 @@ task_groups:
 	s.Error(s.a.runPreTaskCommands(ctx, s.tc))
 	s.NoError(s.tc.logger.Close())
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
-	s.Contains(msgs[len(msgs)-1].Message, "error running task setup group")
+	s.Contains(msgs[len(msgs)-1].Message, "running task setup group")
 }
 
 func (s *AgentSuite) TestGroupPostGroupCommandsFail() {
@@ -813,7 +820,7 @@ task_groups:
 	s.Error(s.a.runPostTaskCommands(ctx, s.tc))
 	s.NoError(s.tc.logger.Close())
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
-	s.Contains(msgs[len(msgs)-1].Message, "Error running post-task command.")
+	s.Contains(msgs[len(msgs)-1].Message, "running post-task commands")
 }
 
 func (s *AgentSuite) TestGroupPreTaskCommands() {
@@ -848,7 +855,7 @@ task_groups:
 	_ = s.tc.logger.Close()
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
 	s.Equal("Running pre-task commands.", msgs[1].Message)
-	s.Equal("Running command 'shell.exec' (step 1 of 1)", msgs[3].Message)
+	s.Equal("Running command 'shell.exec' (step 1 of 1).", msgs[3].Message)
 	s.Equal("Finished running pre-task commands.", msgs[len(msgs)-1].Message)
 }
 
@@ -883,8 +890,8 @@ task_groups:
 	s.NoError(s.a.runPostTaskCommands(ctx, s.tc))
 	_ = s.tc.logger.Close()
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
-	s.Equal("Running command 'shell.exec' (step 1 of 1)", msgs[2].Message)
-	s.Contains(msgs[len(msgs)-2].Message, "Finished 'shell.exec'")
+	s.Equal("Running command 'shell.exec' (step 1 of 1).", msgs[2].Message)
+	s.Contains(msgs[len(msgs)-2].Message, "Finished command 'shell.exec'")
 	s.Contains(msgs[len(msgs)-1].Message, "Finished running post-task commands")
 }
 
@@ -920,8 +927,8 @@ task_groups:
 	s.a.runPostGroupCommands(ctx, s.tc)
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
 	s.Require().True(len(msgs) >= 2)
-	s.Equal("Running command 'shell.exec' (step 1 of 1)", msgs[1].Message)
-	s.Contains(msgs[len(msgs)-1].Message, "Finished 'shell.exec'")
+	s.Equal("Running command 'shell.exec' (step 1 of 1).", msgs[1].Message)
+	s.Contains(msgs[len(msgs)-1].Message, "Finished command 'shell.exec'")
 }
 
 func (s *AgentSuite) TestGroupTimeoutCommands() {
@@ -959,8 +966,8 @@ task_groups:
 	s.a.runTaskTimeoutCommands(ctx, s.tc)
 	_ = s.tc.logger.Close()
 	msgs := s.mockCommunicator.GetMockMessages()["task_id"]
-	s.Equal("Running command 'shell.exec' (step 1 of 1)", msgs[2].Message)
-	s.Contains(msgs[len(msgs)-2].Message, "Finished 'shell.exec'")
+	s.Equal("Running command 'shell.exec' (step 1 of 1).", msgs[2].Message)
+	s.Contains(msgs[len(msgs)-2].Message, "Finished command 'shell.exec'")
 }
 
 func (s *AgentSuite) TestTimeoutDoesNotWaitForChildProcs() {
@@ -1002,4 +1009,23 @@ timeout:
 	then := time.Now()
 	s.True(then.Sub(now) < 4*time.Second)
 	_ = s.tc.logger.Close()
+}
+
+func (s *AgentSuite) TestFetchProjectConfig() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	s.mockCommunicator.Project = &model.Project{
+		Identifier: "some_cool_project",
+	}
+
+	s.NoError(s.a.fetchProjectConfig(ctx, s.tc))
+
+	s.Require().NotZero(s.tc.project)
+	s.Equal(s.mockCommunicator.Project.Identifier, s.tc.project.Identifier)
+	s.Require().NotZero(s.tc.expansions)
+	s.Equal("bar", s.tc.expansions["foo"], "should include mock communicator expansions")
+	s.Equal("new-parameter-value", s.tc.expansions["overwrite-this-parameter"], "user-specified parameter should overwrite any other conflicting expansion")
+	s.Require().NotZero(s.tc.privateVars)
+	s.True(s.tc.privateVars["some_private_var"], "should include mock communicator private variables")
 }

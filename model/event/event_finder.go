@@ -29,9 +29,9 @@ func ResourceTypeKeyIs(key string) bson.M {
 
 // Find takes a collection storing events and a query, generated
 // by one of the query functions, and returns a slice of events.
-func Find(coll string, query db.Q) ([]EventLogEntry, error) {
+func Find(query db.Q) ([]EventLogEntry, error) {
 	events := []EventLogEntry{}
-	err := db.FindAllQ(coll, query, &events)
+	err := db.FindAllQ(EventCollection, query, &events)
 	if err != nil || adb.ResultsNotFound(err) {
 		return nil, errors.WithStack(err)
 	}
@@ -39,23 +39,28 @@ func Find(coll string, query db.Q) ([]EventLogEntry, error) {
 	return events, nil
 }
 
-func FindPaginated(hostID, hostTag, coll string, limit, page int) ([]EventLogEntry, error) {
-	query := MostRecentHostEvents(hostID, hostTag, limit)
+func FindPaginatedWithTotalCount(query db.Q, limit, page int) ([]EventLogEntry, int, error) {
 	events := []EventLogEntry{}
 	skip := page * limit
 	if skip > 0 {
 		query = query.Skip(skip)
 	}
 
-	err := db.FindAllQ(coll, query, &events)
+	err := db.FindAllQ(EventCollection, query, &events)
 	if err != nil || adb.ResultsNotFound(err) {
-		return nil, errors.WithStack(err)
+		return nil, 0, errors.WithStack(err)
 	}
 
-	return events, nil
+	// Count ignores skip and limit by default, so this will return the total number of events.
+	count, err := db.CountQ(EventCollection, query)
+	if err != nil {
+		return nil, 0, errors.Wrap(err, "fetching total count for events")
+	}
+
+	return events, count, nil
 }
 
-// FindUnprocessedEvents returns all unprocessed events in AllLogCollection.
+// FindUnprocessedEvents returns all unprocessed events in EventCollection.
 // Events are considered unprocessed if their "processed_at" time IsZero
 func FindUnprocessedEvents(limit int) ([]EventLogEntry, error) {
 	out := []EventLogEntry{}
@@ -63,7 +68,7 @@ func FindUnprocessedEvents(limit int) ([]EventLogEntry, error) {
 	if limit > 0 {
 		query = query.Limit(limit)
 	}
-	err := db.FindAllQ(AllLogCollection, query, &out)
+	err := db.FindAllQ(EventCollection, query, &out)
 	if err != nil {
 		return nil, errors.Wrap(err, "fetching unprocessed events")
 	}
@@ -78,7 +83,7 @@ func FindByID(eventID string) (*EventLogEntry, error) {
 	}
 
 	var e EventLogEntry
-	if err := db.FindOneQ(AllLogCollection, db.Query(query), &e); err != nil {
+	if err := db.FindOneQ(EventCollection, db.Query(query), &e); err != nil {
 		if adb.ResultsNotFound(err) {
 			return nil, nil
 		}
@@ -95,7 +100,7 @@ func FindLastProcessedEvent() (*EventLogEntry, error) {
 	}).Sort([]string{"-" + processedAtKey})
 
 	e := EventLogEntry{}
-	if err := db.FindOneQ(AllLogCollection, q, &e); err != nil {
+	if err := db.FindOneQ(EventCollection, q, &e); err != nil {
 		if adb.ResultsNotFound(err) {
 			return nil, nil
 		}
@@ -108,7 +113,7 @@ func FindLastProcessedEvent() (*EventLogEntry, error) {
 func CountUnprocessedEvents() (int, error) {
 	q := db.Query(unprocessedEvents())
 
-	n, err := db.CountQ(AllLogCollection, q)
+	n, err := db.CountQ(EventCollection, q)
 	if err != nil {
 		return 0, errors.Wrap(err, "fetching number of unprocessed events")
 	}
@@ -128,6 +133,13 @@ func MostRecentHostEvents(id string, tag string, n int) db.Q {
 	}
 
 	return db.Query(filter).Sort([]string{"-" + TimestampKey}).Limit(n)
+}
+
+// MostRecentPaginatedHostEvents returns a limited and paginated list of host events for the given
+// host ID and tag sorted in descending order by timestamp as well as the total number of events.
+func MostRecentPaginatedHostEvents(id string, tag string, limit, page int) ([]EventLogEntry, int, error) {
+	recentHostsQuery := MostRecentHostEvents(id, tag, limit)
+	return FindPaginatedWithTotalCount(recentHostsQuery, limit, page)
 }
 
 // Task Events
@@ -151,7 +163,7 @@ func TaskEventsInOrder(id string) db.Q {
 // FindLatestPrimaryDistroEvents return the most recent non-AMI events for the distro.
 func FindLatestPrimaryDistroEvents(id string, n int) ([]EventLogEntry, error) {
 	events := []EventLogEntry{}
-	err := db.Aggregate(AllLogCollection, latestDistroEventsPipeline(id, n, false), &events)
+	err := db.Aggregate(EventCollection, latestDistroEventsPipeline(id, n, false), &events)
 	if err != nil {
 		return nil, err
 	}
@@ -162,7 +174,7 @@ func FindLatestPrimaryDistroEvents(id string, n int) ([]EventLogEntry, error) {
 func FindLatestAMIModifiedDistroEvent(id string) (EventLogEntry, error) {
 	events := []EventLogEntry{}
 	res := EventLogEntry{}
-	err := db.Aggregate(AllLogCollection, latestDistroEventsPipeline(id, 1, true), &events)
+	err := db.Aggregate(EventCollection, latestDistroEventsPipeline(id, 1, true), &events)
 	if err != nil {
 		return res, err
 	}
@@ -199,10 +211,12 @@ func RecentAdminEvents(n int) db.Q {
 	return db.Query(filter).Sort([]string{"-" + TimestampKey}).Limit(n)
 }
 
-func ByGuid(guid string) db.Q {
-	return db.Query(bson.M{
-		bsonutil.GetDottedKeyName(DataKey, "guid"): guid,
-	})
+// ByAdminGuid returns a query for the admin events with the given guid.
+func ByAdminGuid(guid string) db.Q {
+	filter := ResourceTypeKeyIs(ResourceTypeAdmin)
+	filter[ResourceIdKey] = ""
+	filter[bsonutil.GetDottedKeyName(DataKey, "guid")] = guid
+	return db.Query(filter)
 }
 
 func AdminEventsBefore(before time.Time, n int) db.Q {
@@ -216,7 +230,7 @@ func AdminEventsBefore(before time.Time, n int) db.Q {
 }
 
 func FindAllByResourceID(resourceID string) ([]EventLogEntry, error) {
-	return Find(AllLogCollection, db.Query(bson.M{ResourceIdKey: resourceID}))
+	return Find(db.Query(bson.M{ResourceIdKey: resourceID}))
 }
 
 // Pod events
@@ -228,4 +242,11 @@ func MostRecentPodEvents(id string, n int) db.Q {
 	filter[ResourceIdKey] = id
 
 	return db.Query(filter).Sort([]string{"-" + TimestampKey}).Limit(n)
+}
+
+// MostRecentPaginatedPodEvents returns a limited and paginated list of pod events for the
+// given pod ID sorted in descending order by timestamp as well as the total number of events.
+func MostRecentPaginatedPodEvents(id string, limit, page int) ([]EventLogEntry, int, error) {
+	recentPodsQuery := MostRecentPodEvents(id, limit)
+	return FindPaginatedWithTotalCount(recentPodsQuery, limit, page)
 }

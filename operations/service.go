@@ -29,7 +29,7 @@ func Service() cli.Command {
 func deploy() cli.Command {
 	return cli.Command{
 		Name:  "deploy",
-		Usage: "deployment helpers for evergreen site administration",
+		Usage: "deployment helpers for Evergreen site administration",
 		Subcommands: []cli.Command{
 			deployMigration(),
 			deployDataTransforms(),
@@ -46,7 +46,7 @@ func parseDB(c *cli.Context) *evergreen.DBSettings {
 	}
 	url := c.String(dbUrlFlagName)
 	envUrl := os.Getenv(evergreen.MongodbUrl)
-	if url == evergreen.DefaultDatabaseUrl && envUrl != "" {
+	if url == evergreen.DefaultDatabaseURL && envUrl != "" {
 		url = envUrl
 	}
 	auth := c.String(dbCredsFileFlagName)
@@ -110,7 +110,7 @@ func startSystemCronJobs(ctx context.Context, env evergreen.Environment) error {
 	// Enqueue jobs to ensure each app server has the correct SSH key files.
 	ts := utility.RoundPartOfHour(30).Format(units.TSFormat)
 	grip.Error(message.WrapError(local.Put(ctx, units.NewLocalUpdateSSHKeysJob(ts)), message.Fields{
-		"message": "could not enqueue jobs to update app server's local SSH keys",
+		"message": "enqueueing jobs to update app server's local SSH keys",
 	}))
 
 	return nil

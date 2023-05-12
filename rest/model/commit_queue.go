@@ -2,12 +2,14 @@ package model
 
 import (
 	"regexp"
+	"strings"
 	"time"
 
 	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/utility"
-	"github.com/pkg/errors"
 )
+
+const commitMessageLineLength = 72
 
 type APICommitQueue struct {
 	ProjectID *string              `json:"queue_id"`
@@ -18,14 +20,15 @@ type APICommitQueue struct {
 }
 
 type APICommitQueueItem struct {
-	Issue           *string     `json:"issue"`
-	PatchId         *string     `json:"patch_id"`
-	Version         *string     `json:"version"`
-	EnqueueTime     *time.Time  `json:"enqueueTime"`
-	Modules         []APIModule `json:"modules"`
-	Patch           *APIPatch   `json:"patch"`
-	MessageOverride *string     `json:"message_override"`
-	Source          *string     `json:"source"`
+	Issue                *string     `json:"issue"`
+	PatchId              *string     `json:"patch_id"`
+	Version              *string     `json:"version"`
+	EnqueueTime          *time.Time  `json:"enqueueTime"`
+	Modules              []APIModule `json:"modules"`
+	Patch                *APIPatch   `json:"patch"`
+	MessageOverride      *string     `json:"message_override"`
+	Source               *string     `json:"source"`
+	QueueLengthAtEnqueue *int        `json:"queue_length_at_enqueue"`
 }
 
 type APICommitQueuePosition struct {
@@ -36,48 +39,30 @@ type APICommitQueueItemAuthor struct {
 	Author *string `json:"author"`
 }
 
-func (cq *APICommitQueue) BuildFromService(h interface{}) error {
-	cqService, ok := h.(commitqueue.CommitQueue)
-	if !ok {
-		return errors.Errorf("programmatic error: expected commit queue but got type %T", h)
-	}
-
+func (cq *APICommitQueue) BuildFromService(cqService commitqueue.CommitQueue) {
 	cq.ProjectID = utility.ToStringPtr(cqService.ProjectID)
 	for _, item := range cqService.Queue {
 		cqItem := APICommitQueueItem{}
-		if err := cqItem.BuildFromService(item); err != nil {
-			return errors.Wrapf(err, "converting commit queue item for issue '%s' to API model", item.Issue)
-		}
+		cqItem.BuildFromService(item)
 		cq.Queue = append(cq.Queue, cqItem)
 	}
-
-	return nil
 }
 
-func (cq *APICommitQueue) ToService() (interface{}, error) {
-	return nil, errors.New("not implemented for read-only route")
-}
-
-func (item *APICommitQueueItem) BuildFromService(h interface{}) error {
-	cqItemService, ok := h.(commitqueue.CommitQueueItem)
-	if !ok {
-		return errors.Errorf("programmatic error: expected commit queue item but got type %T", h)
-	}
+func (item *APICommitQueueItem) BuildFromService(cqItemService commitqueue.CommitQueueItem) {
 	item.Issue = utility.ToStringPtr(cqItemService.Issue)
 	item.Version = utility.ToStringPtr(cqItemService.Version)
 	item.EnqueueTime = ToTimePtr(cqItemService.EnqueueTime)
 	item.MessageOverride = utility.ToStringPtr(cqItemService.MessageOverride)
 	item.Source = utility.ToStringPtr(cqItemService.Source)
 	item.PatchId = utility.ToStringPtr(cqItemService.PatchId)
+	item.QueueLengthAtEnqueue = utility.ToIntPtr(cqItemService.QueueLengthAtEnqueue)
 
 	for _, module := range cqItemService.Modules {
 		item.Modules = append(item.Modules, *APIModuleBuildFromService(module))
 	}
-
-	return nil
 }
 
-func (item *APICommitQueueItem) ToService() (interface{}, error) {
+func (item *APICommitQueueItem) ToService() commitqueue.CommitQueueItem {
 	serviceItem := commitqueue.CommitQueueItem{
 		Issue:           utility.FromStringPtr(item.Issue),
 		Version:         utility.FromStringPtr(item.Version),
@@ -88,7 +73,7 @@ func (item *APICommitQueueItem) ToService() (interface{}, error) {
 	for _, module := range item.Modules {
 		serviceItem.Modules = append(serviceItem.Modules, *APIModuleToService(module))
 	}
-	return serviceItem, nil
+	return serviceItem
 }
 
 type GithubCommentCqData struct {
@@ -108,11 +93,44 @@ func ParseGitHubComment(comment string) GithubCommentCqData {
 		if index == 1 {
 			data = parseFirstLine(line)
 		} else if index == 2 {
-			data.MessageOverride = line
+			data.MessageOverride = wrapString(line, commitMessageLineLength)
 		}
 	}
 
 	return data
+}
+
+// wrapString manually splits a string into smaller chunks and appends them to a new string.
+func wrapString(str string, limit int) string {
+	var b strings.Builder
+	lines := strings.Split(str, "\n")
+	for i, line := range lines {
+		var currentLine string
+		words := strings.Fields(line)
+		for _, word := range words {
+			lineLength := len(currentLine + word)
+			// Only factor in spaces if the current line is not empty.
+			if len(currentLine) > 0 {
+				lineLength += 1
+			}
+			if lineLength > limit {
+				if len(currentLine) > 0 {
+					b.WriteString(currentLine + "\n")
+				}
+				currentLine = ""
+			}
+			if currentLine == "" {
+				currentLine += word
+			} else {
+				currentLine += " " + word
+			}
+		}
+		b.WriteString(currentLine)
+		if i < len(lines)-1 {
+			b.WriteString("\n")
+		}
+	}
+	return b.String()
 }
 
 func parseFirstLine(comment string) GithubCommentCqData {

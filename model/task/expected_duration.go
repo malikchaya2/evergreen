@@ -11,9 +11,14 @@ import (
 	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
-// this is about a month.
-const oneMonthIsh = 30 * 24 * time.Hour
-const durationIndex = "branch_1_build_variant_1_display_name_1_status_1_finish_time_1_start_time_1"
+var DurationIndex = bson.D{
+	{Key: ProjectKey, Value: 1},
+	{Key: BuildVariantKey, Value: 1},
+	{Key: DisplayNameKey, Value: 1},
+	{Key: StatusKey, Value: 1},
+	{Key: FinishTimeKey, Value: 1},
+	{Key: StartTimeKey, Value: 1},
+}
 
 type expectedDurationResults struct {
 	DisplayName      string  `bson:"_id"`
@@ -21,9 +26,9 @@ type expectedDurationResults struct {
 	StdDev           float64 `bson:"std_dev"`
 }
 
-func getExpectedDurationsForWindow(name, project, buildvariant string, start, end time.Time) ([]expectedDurationResults, error) {
+func getExpectedDurationsForWindow(name, project, buildVariant string, start, end time.Time) ([]expectedDurationResults, error) {
 	match := bson.M{
-		BuildVariantKey: buildvariant,
+		BuildVariantKey: buildVariant,
 		ProjectKey:      project,
 		StatusKey: bson.M{
 			"$in": []string{evergreen.TaskSucceeded, evergreen.TaskFailed},
@@ -73,7 +78,7 @@ func getExpectedDurationsForWindow(name, project, buildvariant string, start, en
 	coll := evergreen.GetEnvironment().DB().Collection(Collection)
 	ctx, cancel := evergreen.GetEnvironment().Context()
 	defer cancel()
-	cursor, err := coll.Aggregate(ctx, pipeline, &options.AggregateOptions{Hint: durationIndex})
+	cursor, err := coll.Aggregate(ctx, pipeline, &options.AggregateOptions{Hint: DurationIndex})
 	if err != nil {
 		return nil, errors.Wrap(err, "aggregating task average duration")
 	}
@@ -83,22 +88,4 @@ func getExpectedDurationsForWindow(name, project, buildvariant string, start, en
 	}
 
 	return results, nil
-}
-
-// ExpectedTaskDuration takes a given project and buildvariant and computes
-// the average duration - grouped by task display name - for tasks that have
-// completed within a given threshold as determined by the window
-func ExpectedTaskDuration(project, buildvariant string, window time.Duration) (map[string]time.Duration, error) {
-	results, err := getExpectedDurationsForWindow("", project, buildvariant, time.Now().Add(-window), time.Now())
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-
-	expDurations := make(map[string]time.Duration)
-	for _, result := range results {
-		expDuration := time.Duration(result.ExpectedDuration) * time.Nanosecond
-		expDurations[result.DisplayName] = expDuration
-	}
-
-	return expDurations, nil
 }

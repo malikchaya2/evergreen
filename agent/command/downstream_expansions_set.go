@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 
 	"github.com/evergreen-ci/evergreen"
@@ -11,7 +10,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
-	yaml "gopkg.in/yaml.v3"
+	"gopkg.in/yaml.v3"
 )
 
 // setExpansions takes a file of key value pairs and
@@ -34,7 +33,7 @@ func (c *setDownstream) Name() string { return "downstream_expansions.set" }
 func (c *setDownstream) ParseParams(params map[string]interface{}) error {
 	err := mapstructure.Decode(params, c)
 	if err != nil {
-		return errors.Wrapf(err, "error parsing '%v' params", c.Name())
+		return errors.Wrap(err, "decoding mapstructure params")
 	}
 
 	if c.YamlFile == "" {
@@ -68,7 +67,7 @@ func (c *setDownstream) Execute(ctx context.Context,
 	if err != nil {
 		return err
 	}
-	logger.Task().Infof("Saving downstream parameters to patch with keys from file: %s", c.YamlFile)
+	logger.Task().Infof("Saving downstream parameters to patch with keys from file '%s'.", c.YamlFile)
 
 	if len(c.downstreamParams) == 0 {
 		return nil
@@ -87,7 +86,7 @@ func (c *setDownstream) Execute(ctx context.Context,
 }
 
 func (c *setDownstream) ParseFromFile(filename string) error {
-	filedata, err := ioutil.ReadFile(filename)
+	filedata, err := os.ReadFile(filename)
 	if err != nil {
 		return err
 	}

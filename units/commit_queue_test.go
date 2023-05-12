@@ -2,7 +2,7 @@ package units
 
 import (
 	"context"
-	"io/ioutil"
+	"os"
 	"path/filepath"
 	"testing"
 	"time"
@@ -19,7 +19,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/utility"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 )
@@ -39,7 +39,7 @@ func TestCommitQueueJob(t *testing.T) {
 	s := &commitQueueSuite{}
 	env := testutil.NewEnvironment(context.Background(), t)
 	settings := env.Settings()
-	testutil.ConfigureIntegrationTest(t, settings, "TestGitGetProjectSuite")
+	testutil.ConfigureIntegrationTest(t, settings, t.Name())
 	s.settings = settings
 
 	suite.Run(t, s)
@@ -48,7 +48,7 @@ func TestCommitQueueJob(t *testing.T) {
 func (s *commitQueueSuite) SetupSuite() {
 	s.NoError(db.ClearCollections(model.ProjectRefCollection))
 	var err error
-	s.prBody, err = ioutil.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "pull_request.json"))
+	s.prBody, err = os.ReadFile(filepath.Join(testutil.GetDirectoryOfFile(), "testdata", "pull_request.json"))
 	s.NoError(err)
 	s.Require().Len(s.prBody, 24745)
 
@@ -97,7 +97,7 @@ func (s *commitQueueSuite) SetupTest() {
 	s.Require().NoError(commitqueue.InsertQueue(cq))
 }
 
-func (s *commitQueueSuite) TestTryUnstick() {
+func (s *commitQueueSuite) TestTryUnstickDequeuesAlreadyFinishedCommitQueueItem() {
 	job := commitQueueJob{}
 	s.NoError(db.Clear(patch.Collection))
 
@@ -109,7 +109,7 @@ func (s *commitQueueSuite) TestTryUnstick() {
 	}
 	s.NoError(patchDoc.Insert())
 
-	var cq *commitqueue.CommitQueue = &commitqueue.CommitQueue{
+	cq := &commitqueue.CommitQueue{
 		ProjectID: "mci",
 		Queue: []commitqueue.CommitQueueItem{
 			{
@@ -119,8 +119,100 @@ func (s *commitQueueSuite) TestTryUnstick() {
 			},
 		},
 	}
-	job.TryUnstick(context.Background(), cq, s.projectRef, "")
+	job.TryUnstick(s.ctx, cq, s.projectRef, "")
 	s.Len(cq.Queue, 0)
+}
+
+func (s *commitQueueSuite) TestTryUnstickFixesBlockedMergeTask() {
+	j := commitQueueJob{}
+	s.Require().NoError(db.ClearCollections(task.Collection, patch.Collection))
+
+	p := &patch.Patch{
+		Id:     mgobson.NewObjectId(),
+		Status: evergreen.PatchStarted,
+	}
+	s.Require().NoError(p.Insert())
+
+	mergeTask := task.Task{
+		Id:               "merge_task",
+		Activated:        true,
+		CommitQueueMerge: true,
+		Version:          p.Id.Hex(),
+		DependsOn: []task.Dependency{
+			{
+				TaskId:       "some_dependency",
+				Unattainable: true,
+			},
+		},
+	}
+	s.Require().NoError(mergeTask.Insert())
+	s.True(mergeTask.Blocked())
+
+	cq := &commitqueue.CommitQueue{
+		ProjectID: s.projectRef.Id,
+		Queue: []commitqueue.CommitQueueItem{
+			{
+				Issue:   p.Id.Hex(),
+				Source:  commitqueue.SourceDiff,
+				Version: p.Id.Hex(),
+			},
+		},
+	}
+
+	j.TryUnstick(s.ctx, cq, s.projectRef, "")
+	s.NoError(j.Error())
+
+	s.Len(cq.Queue, 0, "commit queue item should be dequeued due to blocked merge task")
+}
+
+func (s *commitQueueSuite) TestTryUnstickDoesNotUnstickMergeTaskBlockedByResettingDependencies() {
+	j := commitQueueJob{}
+	s.Require().NoError(db.ClearCollections(task.Collection, patch.Collection))
+
+	p := &patch.Patch{
+		Id:     mgobson.NewObjectId(),
+		Status: evergreen.PatchStarted,
+	}
+	s.Require().NoError(p.Insert())
+
+	resettingTask := task.Task{
+		Id:                "resetting_task",
+		Status:            evergreen.TaskFailed,
+		Activated:         true,
+		Aborted:           true,
+		ResetWhenFinished: true,
+	}
+	s.Require().NoError(resettingTask.Insert())
+	mergeTask := task.Task{
+		Id:               "merge_task",
+		Activated:        true,
+		CommitQueueMerge: true,
+		Version:          p.Id.Hex(),
+		DependsOn: []task.Dependency{
+			{
+				TaskId:       resettingTask.Id,
+				Unattainable: true,
+			},
+		},
+	}
+	s.Require().NoError(mergeTask.Insert())
+	s.True(mergeTask.Blocked())
+
+	cq := &commitqueue.CommitQueue{
+		ProjectID: s.projectRef.Id,
+		Queue: []commitqueue.CommitQueueItem{
+			{
+				Issue:   p.Id.Hex(),
+				Source:  commitqueue.SourceDiff,
+				Version: p.Id.Hex(),
+			},
+		},
+	}
+
+	j.TryUnstick(s.ctx, cq, s.projectRef, "")
+	s.NoError(j.Error())
+
+	s.Len(cq.Queue, 1, "commit queue item should remain enqueued even when merge task is blocked if waiting to reset dependencies")
 }
 
 func (s *commitQueueSuite) TestNewCommitQueueJob() {
@@ -158,20 +250,24 @@ func (s *commitQueueSuite) TestAddMergeTaskAndVariant() {
 	patchDoc := &patch.Patch{}
 	ref := &model.ProjectRef{}
 
-	s.NoError(AddMergeTaskAndVariant(patchDoc, project, ref, commitqueue.SourceDiff))
+	pp, err := AddMergeTaskAndVariant(s.ctx, patchDoc, project, ref, commitqueue.SourceDiff)
+	s.NoError(err)
+	s.NotZero(pp)
 
 	s.Require().Len(patchDoc.BuildVariants, 1)
 	s.Equal(evergreen.MergeTaskVariant, patchDoc.BuildVariants[0])
 	s.Require().Len(patchDoc.Tasks, 1)
 	s.Equal(evergreen.MergeTaskName, patchDoc.Tasks[0])
 
-	s.Require().Len(project.BuildVariants, 1)
-	s.Equal(evergreen.MergeTaskVariant, project.BuildVariants[0].Name)
-	s.Require().Len(project.BuildVariants[0].Tasks, 1)
+	s.Require().Len(pp.BuildVariants, 1)
+	s.Equal(evergreen.MergeTaskVariant, pp.BuildVariants[0].Name)
+	s.Require().Len(pp.BuildVariants[0].Tasks, 1)
 	s.True(project.BuildVariants[0].Tasks[0].CommitQueueMerge)
-	s.Require().Len(project.Tasks, 1)
+	s.Equal(evergreen.MergeTaskGroup, project.BuildVariants[0].Tasks[0].Name)
+	s.Equal(evergreen.MergeTaskVariant, project.BuildVariants[0].Tasks[0].Variant)
+	s.Require().Len(pp.Tasks, 1)
 	s.Equal(evergreen.MergeTaskName, project.Tasks[0].Name)
-	s.Require().Len(project.TaskGroups, 1)
+	s.Require().Len(pp.TaskGroups, 1)
 	s.Equal(evergreen.MergeTaskGroup, project.TaskGroups[0].Name)
 }
 
@@ -238,7 +334,7 @@ func (s *commitQueueSuite) TestUpdatePatch() {
 		},
 	}
 
-	projectConfig, err := updatePatch(context.Background(), githubToken, projectRef, patchDoc)
+	projectConfig, pp, err := updatePatch(s.ctx, s.settings, githubToken, projectRef, patchDoc)
 	s.NoError(err)
 	s.NotEqual("abcdef", patchDoc.Patches[0].Githash)
 	s.NotEqual(model.Project{}, projectConfig)
@@ -247,6 +343,10 @@ func (s *commitQueueSuite) TestUpdatePatch() {
 	s.Empty(patchDoc.Tasks)
 	s.Empty(patchDoc.VariantsTasks)
 	s.Empty(patchDoc.BuildVariants)
+
+	s.Require().NotZero(pp)
+	s.NotEmpty(pp.BuildVariants)
+	s.NotEmpty(pp.Tasks)
 }
 
 func TestAddMergeTaskDependencies(t *testing.T) {

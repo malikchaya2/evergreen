@@ -12,60 +12,75 @@
               "restricted": true,
               "commitQueue": {
                 "enabled": true,
-                "requireSigned": false,
                 "mergeMethod": "squash"
               },
               "periodicBuilds": null,
               "githubChecksEnabled": null,
               "patchingDisabled": false,
               "prTestingEnabled": true,
+              "stepbackDisabled": false,
               "batchTime": 2,
-              "gitTagAuthorizedUsers": [
-                "ablack12"
-              ],
+              "gitTagAuthorizedUsers": ["ablack12"],
               "gitTagAuthorizedTeams": null,
-              "triggers": [],
-              "patchTriggerAliases" : [
+              "triggers": [
                 {
-                  "alias" : "my_alias_sandbox",
-                  "childProjectIdentifier" : "varsTest",
+                  "project": "spruce",
+                  "level": "task",
+                  "configFile": ".evergreen.yml",
+                  "dateCutoff": null
+                }
+              ],
+              "patchTriggerAliases": [
+                {
+                  "alias": "my_alias_sandbox",
+                  "childProjectIdentifier": "varsTest",
                   "taskSpecifiers": [
                     {
-                      "taskRegex" : "test-util",
-                      "variantRegex" : "^ubuntu1604$"
+                      "taskRegex": "test-util",
+                      "variantRegex": "^ubuntu1604$"
                     }
                   ]
                 }
               ],
-              "taskSync" : {
-                "configEnabled" : false,
-                "patchEnabled" : true
+              "taskSync": {
+                "configEnabled": false,
+                "patchEnabled": true
               },
-              "perfEnabled" : true,
-              "buildBaronSettings" : {
-                "ticketCreateProject" : "EVG",
-                "ticketSearchProjects" : ["EVG"],
-                "bfSuggestionFeaturesURL" : "",
-                "bfSuggestionPassword" : "",
-                "bfSuggestionServer" : "",
-                "bfSuggestionTimeoutSecs" : 0,
-                "bfSuggestionUsername" : ""
+              "perfEnabled": true,
+              "buildBaronSettings": {
+                "ticketCreateProject": "EVG",
+                "ticketSearchProjects": ["EVG"],
+                "bfSuggestionFeaturesURL": "",
+                "bfSuggestionPassword": "",
+                "bfSuggestionServer": "",
+                "bfSuggestionTimeoutSecs": 0,
+                "bfSuggestionUsername": ""
               },
 
-              "taskAnnotationSettings" : {
-                "jiraCustomFields" : [{
-                  "displayText" : "description",
-                  "field" : "sample_field"
-                }],
-                "fileTicketWebhook" : {
-                  "endpoint" : "endpoint",
-                  "secret" : "shh"
+              "taskAnnotationSettings": {
+                "jiraCustomFields": [
+                  {
+                    "displayText": "description",
+                    "field": "sample_field"
+                  }
+                ],
+                "fileTicketWebhook": {
+                  "endpoint": "endpoint",
+                  "secret": "shh"
                 }
               },
 
-              "validDefaultLoggers": [
-                "evergreen",
-                "buildlogger"
+              "containerSizeDefinitions": [
+                {
+                  "name": "size1",
+                  "cpu": 1,
+                  "memoryMb": 1024
+                },
+                {
+                  "name": "size2",
+                  "cpu": 2,
+                  "memoryMb": 2048
+                }
               ]
             }
           }
@@ -79,34 +94,34 @@
           "projectSettings": {
             "aliases": [
               {
-                "id" : "5ffe393097b1d3759dd3c1aa",
-                "alias" : "__commit_queue",
-                "gitTag" : "",
-                "remotePath" : "",
-                "task" : "unit_tests",
-                "variant" : "ubuntu1604",
-                "variantTags" : [],
-                "taskTags": []
-              },
-              {
-                "id" : "5ffe393097b1d3759dd3c1ac",
-                "alias" : "__git_tag",
-                "gitTag" : ".*",
-                "variant": "",
-                "task": "",
-                "remotePath" : "release.yml",
+                "id": "5ffe393097b1d3759dd3c1aa",
+                "alias": "__commit_queue",
+                "gitTag": "",
+                "remotePath": "",
+                "task": "unit_tests",
+                "variant": "ubuntu1604",
                 "variantTags": [],
                 "taskTags": []
               },
               {
-                "id" : "5ffe393097b1d3759dd3c1ab",
-                "alias" : "test_alias",
-                "gitTag" : "",
+                "id": "5ffe393097b1d3759dd3c1ac",
+                "alias": "__git_tag",
+                "gitTag": ".*",
                 "variant": "",
-                "task":"",
-                "remotePath" : "",
-                "taskTags" : ["git"],
-                "variantTags" : ["tag"]
+                "task": "",
+                "remotePath": "release.yml",
+                "variantTags": [],
+                "taskTags": []
+              },
+              {
+                "id": "5ffe393097b1d3759dd3c1ab",
+                "alias": "test_alias",
+                "gitTag": "",
+                "variant": "",
+                "task": "",
+                "remotePath": "",
+                "taskTags": ["git"],
+                "variantTags": ["tag"]
               }
             ]
           }
@@ -119,7 +134,7 @@
         "data": {
           "projectSettings": {
             "vars": {
-              "vars": {"admintest": "woo", "hello": "", "foo":  "bar"},
+              "vars": { "admintest": "woo", "hello": "", "foo": "bar" },
               "privateVars": ["hello"],
               "adminOnlyVars": ["admintest"]
             }
@@ -133,7 +148,7 @@
         "data": {
           "projectSettings": {
             "vars": {
-              "vars": {"both": ""},
+              "vars": { "both": "" },
               "privateVars": ["both"],
               "adminOnlyVars": ["both"]
             }
@@ -146,11 +161,22 @@
       "result": {
         "data": {
           "projectSettings": {
+            "projectSubscriptions": [
+              {
+                "id": "61326406a620e4737f57003e"
+              },
+              {
+                "id": "61326406a620e4737f57003f"
+              },
+              {
+                "id": "1234"
+              }
+            ],
             "subscriptions": [
               {
                 "id": "61326406a620e4737f57003e",
                 "resourceType": "VERSION",
-                "trigger": "outcome",
+                "trigger": "family-outcome",
                 "selectors": [
                   {
                     "type": "project",
@@ -248,7 +274,10 @@
                           "key": "key",
                           "value": "val"
                         }
-                      ]
+                      ],
+                      "retries": 2,
+                      "minDelayMs": 500,
+                      "timeoutMs": 15000
                     },
                     "githubPRSubscriber": null,
                     "githubCheckSubscriber": null,
@@ -271,10 +300,7 @@
         "errors": [
           {
             "message": "Could not find project with identifier: evergreen",
-            "path": [
-              "projectSettings",
-              "identifier"
-            ],
+            "path": ["projectSettings", "identifier"],
             "extensions": {
               "code": "RESOURCE_NOT_FOUND"
             }

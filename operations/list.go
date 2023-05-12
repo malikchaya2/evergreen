@@ -3,7 +3,6 @@ package operations
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"os"
 	"sort"
 	"strings"
@@ -32,7 +31,7 @@ func List() cli.Command {
 
 	return cli.Command{
 		Name:  "list",
-		Usage: "displays requested information about evergreen",
+		Usage: "displays requested information about Evergreen",
 		Flags: addPathFlag(addProjectFlag(
 			cli.BoolFlag{
 				Name:  projectsFlagName,
@@ -100,14 +99,17 @@ func List() cli.Command {
 func listProjects(ctx context.Context, confPath string) error {
 	conf, err := NewClientSettings(confPath)
 	if err != nil {
-		return errors.Wrap(err, "problem loading configuration")
+		return errors.Wrap(err, "loading configuration")
 	}
-	client := conf.setupRestCommunicator(ctx)
+	client, err := conf.setupRestCommunicator(ctx, false)
+	if err != nil {
+		return errors.Wrap(err, "setting up REST communicator")
+	}
 	defer client.Close()
 
 	ac, _, err := conf.getLegacyClients()
 	if err != nil {
-		return errors.Wrap(err, "problem accessing evergreen service")
+		return errors.Wrap(err, "setting up legacy Evergreen client")
 	}
 
 	projs, err := ac.ListProjects()
@@ -116,7 +118,7 @@ func listProjects(ctx context.Context, confPath string) error {
 	}
 	matching := []model.ProjectRef{}
 	for _, proj := range projs {
-		if utility.FromBoolPtr(proj.Enabled) {
+		if proj.Enabled {
 			matching = append(matching, proj)
 		}
 	}
@@ -140,16 +142,19 @@ func listProjects(ctx context.Context, confPath string) error {
 func listVariants(ctx context.Context, confPath, project, filename string) error {
 	conf, err := NewClientSettings(confPath)
 	if err != nil {
-		return errors.Wrap(err, "problem loading configuration")
+		return errors.Wrap(err, "loading configuration")
 	}
-	client := conf.setupRestCommunicator(ctx)
+	client, err := conf.setupRestCommunicator(ctx, false)
+	if err != nil {
+		return errors.Wrap(err, "setting up REST communicator")
+	}
 	defer client.Close()
 
 	var variants []model.BuildVariant
 	if project != "" {
 		ac, _, err := conf.getLegacyClients()
 		if err != nil {
-			return errors.Wrap(err, "problem accessing evergreen service")
+			return errors.Wrap(err, "setting up legacy Evergreen client")
 		}
 
 		variants, err = ac.ListVariants(project)
@@ -191,16 +196,19 @@ func listVariants(ctx context.Context, confPath, project, filename string) error
 func listTasks(ctx context.Context, confPath, project, filename string) error {
 	conf, err := NewClientSettings(confPath)
 	if err != nil {
-		return errors.Wrap(err, "problem loading configuration")
+		return errors.Wrap(err, "loading configuration")
 	}
-	client := conf.setupRestCommunicator(ctx)
+	client, err := conf.setupRestCommunicator(ctx, false)
+	if err != nil {
+		return errors.Wrap(err, "setting up REST communicator")
+	}
 	defer client.Close()
 
 	var tasks []model.ProjectTask
 	if project != "" {
 		ac, _, err := conf.getLegacyClients()
 		if err != nil {
-			return errors.Wrap(err, "problem accessing evergreen service")
+			return errors.Wrap(err, "setting up legacy Evergreen client")
 		}
 
 		tasks, err = ac.ListTasks(project)
@@ -229,16 +237,19 @@ func listTasks(ctx context.Context, confPath, project, filename string) error {
 func listParameters(ctx context.Context, confPath, project, filename string) error {
 	conf, err := NewClientSettings(confPath)
 	if err != nil {
-		return errors.Wrap(err, "problem loading configuration")
+		return errors.Wrap(err, "loading configuration")
 	}
-	comm := conf.setupRestCommunicator(ctx)
+	comm, err := conf.setupRestCommunicator(ctx, false)
+	if err != nil {
+		return errors.Wrap(err, "setting up REST communicator")
+	}
 	defer comm.Close()
 
 	var params []model.ParameterInfo
 	if project != "" {
 		params, err = comm.GetParameters(ctx, project)
 		if err != nil {
-			return errors.Wrapf(err, "error getting parameters")
+			return errors.Wrapf(err, "getting parameters")
 		}
 	} else if filename != "" {
 		project, err := loadLocalConfig(filename)
@@ -267,9 +278,12 @@ func listParameters(ctx context.Context, confPath, project, filename string) err
 func listTriggerAliases(ctx context.Context, confPath, project string) error {
 	conf, err := NewClientSettings(confPath)
 	if err != nil {
-		return errors.Wrap(err, "problem loading configuration")
+		return errors.Wrap(err, "loading configuration")
 	}
-	comm := conf.setupRestCommunicator(ctx)
+	comm, err := conf.setupRestCommunicator(ctx, false)
+	if err != nil {
+		return errors.Wrap(err, "setting up REST communicator")
+	}
 	defer comm.Close()
 
 	if project == "" {
@@ -291,9 +305,12 @@ func listTriggerAliases(ctx context.Context, confPath, project string) error {
 func listPatchAliases(ctx context.Context, confPath, project string) error {
 	conf, err := NewClientSettings(confPath)
 	if err != nil {
-		return errors.Wrap(err, "problem loading configuration")
+		return errors.Wrap(err, "loading configuration")
 	}
-	comm := conf.setupRestCommunicator(ctx)
+	comm, err := conf.setupRestCommunicator(ctx, false)
+	if err != nil {
+		return errors.Wrap(err, "setting up REST communicator")
+	}
 	defer comm.Close()
 
 	if project == "" {
@@ -318,9 +335,12 @@ func listPatchAliases(ctx context.Context, confPath, project string) error {
 func listDistros(ctx context.Context, confPath string, onlyUserSpawnable bool) error {
 	conf, err := NewClientSettings(confPath)
 	if err != nil {
-		return errors.Wrap(err, "problem loading configuration")
+		return errors.Wrap(err, "loading configuration")
 	}
-	client := conf.setupRestCommunicator(ctx)
+	client, err := conf.setupRestCommunicator(ctx, false)
+	if err != nil {
+		return errors.Wrap(err, "setting up REST communicator")
+	}
 	defer client.Close()
 
 	distros, err := client.GetDistrosList(ctx)
@@ -367,15 +387,15 @@ func listDistros(ctx context.Context, confPath string, onlyUserSpawnable bool) e
 
 // LoadLocalConfig loads the local project config into a project
 func loadLocalConfig(filepath string) (*model.Project, error) {
-	configBytes, err := ioutil.ReadFile(filepath)
+	configBytes, err := os.ReadFile(filepath)
 	if err != nil {
-		return nil, errors.Wrap(err, "error reading project config")
+		return nil, errors.Wrapf(err, "reading project config from file '%s'", filepath)
 	}
 
 	project := &model.Project{}
 	ctx := context.Background()
 	if _, err = model.LoadProjectInto(ctx, configBytes, nil, "", project); err != nil {
-		return nil, errors.Wrap(err, "error loading project")
+		return nil, errors.Wrapf(err, "loading project from file '%s'", filepath)
 	}
 
 	return project, nil

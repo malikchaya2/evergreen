@@ -1,6 +1,7 @@
 package event
 
 import (
+	"strconv"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
@@ -9,7 +10,7 @@ import (
 )
 
 func init() {
-	registry.AddType(ResourceTypeTask, taskEventDataFactory)
+	registry.AddType(ResourceTypeTask, func() interface{} { return &TaskEventData{} })
 	registry.AllowSubscription(ResourceTypeTask, TaskStarted)
 	registry.AllowSubscription(ResourceTypeTask, TaskFinished)
 	registry.AllowSubscription(ResourceTypeTask, TaskBlocked)
@@ -35,9 +36,6 @@ const (
 	TaskJiraAlertCreated       = "TASK_JIRA_ALERT_CREATED"
 	TaskDependenciesOverridden = "TASK_DEPENDENCIES_OVERRIDDEN"
 	MergeTaskUnscheduled       = "MERGE_TASK_UNSCHEDULED"
-
-	// TODO (EVG-16969) remove once TaskScheduled events TTL
-	TaskScheduled = "TASK_SCHEDULED"
 )
 
 // implements Data
@@ -54,21 +52,21 @@ type TaskEventData struct {
 }
 
 func logTaskEvent(taskId string, eventType string, eventData TaskEventData) {
-	event := EventLogEntry{
+	event := getTaskEvent(taskId, eventType, eventData)
+	grip.Error(message.WrapError(event.Log(), message.Fields{
+		"resource_type": ResourceTypeTask,
+		"message":       "error logging event",
+		"source":        "event-log-fail",
+	}))
+}
+
+func getTaskEvent(taskId string, eventType string, eventData TaskEventData) EventLogEntry {
+	return EventLogEntry{
 		Timestamp:    time.Now(),
 		ResourceId:   taskId,
 		EventType:    eventType,
 		Data:         eventData,
 		ResourceType: ResourceTypeTask,
-	}
-
-	logger := NewDBEventLogger(AllLogCollection)
-	if err := logger.LogEvent(&event); err != nil {
-		grip.Error(message.WrapError(err, message.Fields{
-			"resource_type": ResourceTypeTask,
-			"message":       "error logging event",
-			"source":        "event-log-fail",
-		}))
 	}
 }
 
@@ -94,8 +92,7 @@ func logManyTaskEvents(taskIds []string, eventType string, eventData TaskEventDa
 		}
 		events = append(events, event)
 	}
-	logger := NewDBEventLogger(AllLogCollection)
-	if err := logger.LogManyEvents(events); err != nil {
+	if err := LogManyEvents(events); err != nil {
 		grip.Error(message.WrapError(err, message.Fields{
 			"resource_type": ResourceTypeTask,
 			"message":       "error logging event",
@@ -142,10 +139,28 @@ func LogTaskStarted(taskId string, execution int) {
 	logTaskEvent(taskId, TaskStarted, TaskEventData{Execution: execution, Status: evergreen.TaskStarted})
 }
 
-func LogTaskFinished(taskId string, execution int, hostId, status string) {
+// LogTaskFinished logs an event indicating that the task has finished.
+func LogTaskFinished(taskId string, execution int, status string) {
 	logTaskEvent(taskId, TaskFinished, TaskEventData{Execution: execution, Status: status})
+}
+
+// LogHostTaskFinished logs an event for a host task being marked finished. If
+// it was assigned to run on a host, it logs an additional host event indicating
+// that its assigned task has finished.
+func LogHostTaskFinished(taskId string, execution int, hostId, status string) {
+	LogTaskFinished(taskId, execution, status)
 	if hostId != "" {
-		LogHostEvent(hostId, EventTaskFinished, HostEventData{TaskExecution: execution, TaskStatus: status, TaskId: taskId})
+		LogHostEvent(hostId, EventHostTaskFinished, HostEventData{Execution: strconv.Itoa(execution), TaskStatus: status, TaskId: taskId})
+	}
+}
+
+// LogContainerTaskFinished logs an event for a container task being marked
+// finished. If it was assigned to run on a pod, it logs an additional pod event
+// indicating that its assigned task has finished.
+func LogContainerTaskFinished(taskID string, execution int, podID, status string) {
+	LogTaskFinished(taskID, execution, status)
+	if podID != "" {
+		LogPodEvent(podID, EventPodFinishedTask, PodData{TaskExecution: execution, TaskStatus: status, TaskID: taskID})
 	}
 }
 
@@ -161,8 +176,16 @@ func LogTaskActivated(taskId string, execution int, userId string) {
 	logTaskEvent(taskId, TaskActivated, TaskEventData{Execution: execution, UserId: userId})
 }
 
+func GetTaskActivatedEvent(taskId string, execution int, userId string) EventLogEntry {
+	return getTaskEvent(taskId, TaskActivated, TaskEventData{Execution: execution, UserId: userId})
+}
+
 func LogTaskDeactivated(taskId string, execution int, userId string) {
 	logTaskEvent(taskId, TaskDeactivated, TaskEventData{Execution: execution, UserId: userId})
+}
+
+func GetTaskDeactivatedEvent(taskId string, execution int, userId string) EventLogEntry {
+	return getTaskEvent(taskId, TaskDeactivated, TaskEventData{Execution: execution, UserId: userId})
 }
 
 func LogTaskAbortRequest(taskId string, execution int, userId string) {

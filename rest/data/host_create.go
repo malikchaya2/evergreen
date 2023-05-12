@@ -81,7 +81,9 @@ func ListHostsForTask(ctx context.Context, taskID string) ([]host.Host, error) {
 	return hosts, nil
 }
 
-func CreateHostsFromTask(t *task.Task, user user.DBUser, keyNameOrVal string) error {
+// CreateHostsFromTask creates intent hosts for those requested by the
+// host.create command in a task.
+func CreateHostsFromTask(ctx context.Context, settings *evergreen.Settings, t *task.Task, user user.DBUser, keyNameOrVal string) error {
 	if t == nil {
 		return errors.New("no task to create hosts from")
 	}
@@ -90,7 +92,7 @@ func CreateHostsFromTask(t *task.Task, user user.DBUser, keyNameOrVal string) er
 		keyVal = keyNameOrVal
 	}
 
-	proj, expansions, err := makeProjectAndExpansionsFromTask(t)
+	proj, expansions, err := makeProjectAndExpansionsFromTask(ctx, settings, t)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -160,7 +162,7 @@ func CreateHostsFromTask(t *task.Task, user user.DBUser, keyNameOrVal string) er
 	return catcher.Resolve()
 }
 
-func makeProjectAndExpansionsFromTask(t *task.Task) (*model.Project, *util.Expansions, error) {
+func makeProjectAndExpansionsFromTask(ctx context.Context, settings *evergreen.Settings, t *task.Task) (*model.Project, *util.Expansions, error) {
 	v, err := model.VersionFindOne(model.VersionById(t.Version))
 	if err != nil {
 		return nil, nil, errors.Wrapf(err, "finding version '%s'", t.Version)
@@ -168,7 +170,7 @@ func makeProjectAndExpansionsFromTask(t *task.Task) (*model.Project, *util.Expan
 	if v == nil {
 		return nil, nil, errors.Errorf("version '%s' not found", t.Version)
 	}
-	projectInfo, err := model.LoadProjectForVersion(v, v.Identifier, true)
+	project, _, err := model.FindAndTranslateProjectForVersion(ctx, settings, v)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "loading project")
 	}
@@ -176,27 +178,33 @@ func makeProjectAndExpansionsFromTask(t *task.Task) (*model.Project, *util.Expan
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "finding host running task")
 	}
-	settings, err := evergreen.GetConfig()
-	if err != nil {
-		return nil, nil, errors.Wrap(err, "getting admin settings")
-	}
 	oauthToken, err := settings.GetGithubOauthToken()
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "getting GitHub OAuth token from admin settings")
 	}
+
 	expansions, err := model.PopulateExpansions(t, h, oauthToken)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "populating expansions")
 	}
-	if projectInfo.Project == nil {
-		projectInfo.Project = &model.Project{}
+
+	// PopulateExpansions doesn't include build variant expansions, so include
+	// them here.
+	for _, bv := range project.BuildVariants {
+		if bv.Name == t.BuildVariant {
+			expansions.Update(bv.Expansions)
+		}
 	}
-	params := append(projectInfo.Project.GetParameters(), v.Parameters...)
+
+	if project == nil {
+		project = &model.Project{}
+	}
+	params := append(project.GetParameters(), v.Parameters...)
 	if err = updateExpansions(&expansions, t.Project, params); err != nil {
 		return nil, nil, errors.Wrap(err, "updating expansions")
 	}
 
-	return projectInfo.Project, &expansions, nil
+	return project, &expansions, nil
 }
 
 // updateExpansions updates expansions with project variables and patch
@@ -228,17 +236,17 @@ func createHostFromCommand(cmd model.PluginCommandConf) (*apimodels.CreateHost, 
 		Result:           createHost,
 	})
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, "constructing mapstructure decoder")
 	}
 	err = decoder.Decode(cmd.Params)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, errors.Wrap(err, "parsing params")
 	}
 	return createHost, nil
 }
 
 func MakeIntentHost(taskID, userID, publicKey string, createHost apimodels.CreateHost) (*host.Host, error) {
-	if cloud.IsDockerProvider(createHost.CloudProvider) {
+	if evergreen.IsDockerProvider(createHost.CloudProvider) {
 		return makeDockerIntentHost(taskID, userID, createHost)
 	}
 	return makeEC2IntentHost(taskID, userID, publicKey, createHost)
@@ -255,7 +263,7 @@ func makeDockerIntentHost(taskID, userID string, createHost apimodels.CreateHost
 	if d == nil {
 		return nil, errors.Errorf("distro '%s' not found", createHost.Distro)
 	}
-	if !cloud.IsDockerProvider(d.Provider) {
+	if !evergreen.IsDockerProvider(d.Provider) {
 		return nil, errors.Errorf("distro '%s' provider must support Docker but actual provider is '%s'", d.Id, d.Provider)
 	}
 

@@ -7,9 +7,6 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
-	"github.com/evergreen-ci/evergreen/model/build"
-	"github.com/evergreen-ci/evergreen/model/event"
-	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/testutil"
 	_ "github.com/evergreen-ci/evergreen/testutil"
 	"github.com/stretchr/testify/suite"
@@ -109,7 +106,7 @@ func (s *CommitQueueSuite) TestEnqueueAtFront() {
 
 	// check that it's enqueued at the end of the processing items
 	item.Version = "critical1"
-	s.NoError(dbq.UpdateVersion(item))
+	s.NoError(dbq.UpdateVersion(&item))
 	item = sampleCommitQueueItem
 	item.Issue = "critical2"
 	pos, err = dbq.EnqueueAtFront(item)
@@ -145,7 +142,7 @@ func (s *CommitQueueSuite) TestUpdateVersion() {
 	item := s.q.Queue[0]
 	item.Version = "my_version"
 	now := time.Now()
-	s.NoError(s.q.UpdateVersion(item))
+	s.NoError(s.q.UpdateVersion(&item))
 
 	dbq, err := FindOneId("mci")
 	s.NoError(err)
@@ -263,18 +260,6 @@ func (s *CommitQueueSuite) TestClearAll() {
 	s.Equal(2, clearedCount)
 }
 
-func (s *CommitQueueSuite) TestCommentTrigger() {
-	comment := "no dice"
-	action := "created"
-	s.False(TriggersCommitQueue(action, comment))
-
-	comment = triggerComment
-	s.True(TriggersCommitQueue(action, comment))
-
-	action = "deleted"
-	s.False(TriggersCommitQueue(action, comment))
-}
-
 func (s *CommitQueueSuite) TestFindOneId() {
 	s.NoError(db.ClearCollections(Collection))
 	cq := &CommitQueue{ProjectID: "mci"}
@@ -287,33 +272,6 @@ func (s *CommitQueueSuite) TestFindOneId() {
 	cq, err = FindOneId("not_here")
 	s.NoError(err)
 	s.Nil(cq)
-}
-
-func (s *CommitQueueSuite) TestPreventMergeForItem() {
-	s.NoError(db.ClearCollections(event.SubscriptionsCollection, task.Collection, build.Collection))
-
-	patchID := "abcdef012345"
-
-	item := CommitQueueItem{
-		Issue:   patchID,
-		Source:  SourceDiff,
-		Version: patchID,
-	}
-
-	mergeBuild := &build.Build{Id: "b1"}
-	s.NoError(mergeBuild.Insert())
-	mergeTask := &task.Task{Id: "t1", CommitQueueMerge: true, Version: patchID, BuildId: "b1"}
-	s.NoError(mergeTask.Insert())
-
-	// With a corresponding version
-	s.NoError(preventMergeForItem(item, "user"))
-	subscriptions, err := event.FindSubscriptionsByAttributes(event.ResourceTypePatch, event.Attributes{ID: []string{patchID}})
-	s.NoError(err)
-	s.Empty(subscriptions)
-
-	mergeTask, err = task.FindOneId("t1")
-	s.NoError(err)
-	s.Equal(int64(-1), mergeTask.Priority)
 }
 
 func (s *CommitQueueSuite) TestNextUnprocessed() {

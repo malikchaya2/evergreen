@@ -3,6 +3,7 @@ package util
 import (
 	"bytes"
 	"context"
+	"io"
 	"net/http"
 	"net/url"
 	"time"
@@ -15,7 +16,8 @@ import (
 )
 
 const (
-	evergreenWebhookTimeout       = 10 * time.Second
+	defaultWebhookTimeout         = 10 * time.Second
+	defaultMinDelay               = 500 * time.Millisecond
 	evergreenNotificationIDHeader = "X-Evergreen-Notification-ID"
 	evergreenHMACHeader           = "X-Evergreen-Signature"
 )
@@ -26,6 +28,9 @@ type EvergreenWebhook struct {
 	Secret         []byte      `bson:"secret"`
 	Body           []byte      `bson:"body"`
 	Headers        http.Header `bson:"headers"`
+	Retries        int         `bson:"retries"`
+	MinDelayMS     int         `bson:"min_delay_ms"`
+	TimeoutMS      int         `bson:"timeout_ms"`
 }
 
 type evergreenWebhookMessage struct {
@@ -34,21 +39,9 @@ type evergreenWebhookMessage struct {
 	message.Base
 }
 
-func NewWebhookMessageWithStruct(raw EvergreenWebhook) message.Composer {
+func NewWebhookMessage(raw EvergreenWebhook) message.Composer {
 	return &evergreenWebhookMessage{
 		raw: raw,
-	}
-}
-
-func NewWebhookMessage(id string, url string, secret []byte, body []byte, headers map[string][]string) message.Composer {
-	return &evergreenWebhookMessage{
-		raw: EvergreenWebhook{
-			NotificationID: id,
-			URL:            url,
-			Secret:         secret,
-			Body:           body,
-			Headers:        headers,
-		},
 	}
 }
 
@@ -88,6 +81,33 @@ func (w *evergreenWebhookMessage) String() string {
 	return string(w.raw.Body)
 }
 
+func (w *EvergreenWebhook) request() (*http.Request, error) {
+	req, err := http.NewRequest(http.MethodPost, w.URL, bytes.NewReader(w.Body))
+	if err != nil {
+		return nil, errors.Wrap(err, "creating webhook HTTP request")
+	}
+
+	hash, err := CalculateHMACHash(w.Secret, w.Body)
+	if err != nil {
+		return nil, errors.Wrap(err, "calculating HMAC hash")
+	}
+
+	for k := range w.Headers {
+		for i := range w.Headers[k] {
+			req.Header.Add(k, w.Headers[k][i])
+		}
+	}
+
+	// Deduplicate the evergreen headers.
+	req.Header.Del(evergreenHMACHeader)
+	req.Header.Del(evergreenNotificationIDHeader)
+
+	req.Header.Add(evergreenHMACHeader, hash)
+	req.Header.Add(evergreenNotificationIDHeader, w.NotificationID)
+
+	return req, nil
+}
+
 type evergreenWebhookLogger struct {
 	client *http.Client
 	*send.Base
@@ -112,54 +132,62 @@ func (w *evergreenWebhookLogger) Send(m message.Composer) {
 func (w *evergreenWebhookLogger) send(m message.Composer) error {
 	raw, ok := m.Raw().(*EvergreenWebhook)
 	if !ok {
-		return errors.New("evergreen-webhook sender received unexpected composer")
+		return errors.Errorf("received unexpected composer %T", m.Raw())
+	}
+	timeout := defaultWebhookTimeout
+	if raw.TimeoutMS > 0 {
+		timeout = time.Duration(raw.TimeoutMS) * time.Millisecond
+	}
+	minDelay := defaultMinDelay
+	if raw.MinDelayMS > 0 {
+		minDelay = time.Duration(raw.MinDelayMS) * time.Millisecond
 	}
 
-	reader := bytes.NewReader(raw.Body)
-	req, err := http.NewRequest(http.MethodPost, raw.URL, reader)
-	if err != nil {
-		return errors.Wrap(err, "evergreen-webhook failed to create http request")
-	}
-
-	hash, err := CalculateHMACHash(raw.Secret, raw.Body)
-	if err != nil {
-		return errors.Wrap(err, "evergreen-webhook failed to calculate hash")
-	}
-
-	for k := range raw.Headers {
-		for i := range raw.Headers[k] {
-			req.Header.Add(k, raw.Headers[k][i])
+	client := w.client
+	return utility.Retry(context.Background(), func() (bool, error) {
+		req, err := raw.request()
+		if err != nil {
+			return false, errors.Wrap(err, "making webhook request")
 		}
-	}
 
-	req.Header.Del(evergreenHMACHeader)
-	req.Header.Add(evergreenHMACHeader, hash)
-	req.Header.Del(evergreenNotificationIDHeader)
-	req.Header.Add(evergreenNotificationIDHeader, raw.NotificationID)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		req = req.WithContext(ctx)
 
-	ctx, cancel := context.WithTimeout(req.Context(), evergreenWebhookTimeout)
-	defer cancel()
+		if client == nil {
+			client = utility.GetHTTPClient()
+			defer utility.PutHTTPClient(client)
+		}
 
-	req = req.WithContext(ctx)
+		resp, err := client.Do(req)
+		if resp != nil {
+			defer resp.Body.Close()
+		}
+		if err != nil {
+			return true, errors.Wrap(err, "sending webhook data")
+		}
+		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+			return true, errors.Errorf("response was %d (%s)", resp.StatusCode, http.StatusText(resp.StatusCode))
+		}
 
-	var client *http.Client = w.client
-	if client == nil {
-		client = utility.GetHTTPClient()
-		defer utility.PutHTTPClient(client)
-	}
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			return true, errors.Wrap(err, "reading webhook response")
+		}
 
-	resp, err := client.Do(req)
-	if resp != nil {
-		defer resp.Body.Close()
-	}
-	if err != nil {
-		return errors.Wrap(err, "evergreen-webhook failed to send webhook data")
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return errors.Errorf("evergreen-webhook response status was %d %s", resp.StatusCode, http.StatusText(resp.StatusCode))
-	}
+		grip.Info(message.Fields{
+			"message":         "send webhook notification",
+			"notification_id": raw.NotificationID,
+			"url":             raw.URL,
+			"response_code":   resp.StatusCode,
+			"response_body":   body,
+		})
 
-	return nil
+		return false, nil
+	}, utility.RetryOptions{
+		MaxAttempts: raw.Retries + 1,
+		MinDelay:    minDelay,
+	})
 }
 
 func (w *evergreenWebhookLogger) Flush(_ context.Context) error { return nil }

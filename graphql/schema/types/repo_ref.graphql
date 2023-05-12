@@ -1,0 +1,111 @@
+###### INPUTS ######
+input RepoRefInput {
+  id: String! @requireProjectAccess(access: EDIT)
+  admins: [String!]
+  batchTime: Int
+  branch: String
+  buildBaronSettings: BuildBaronSettingsInput
+  commitQueue: CommitQueueParamsInput
+  deactivatePrevious: Boolean
+  disabledStatsCache: Boolean
+  dispatchingDisabled: Boolean
+  displayName: String
+  enabled: Boolean
+  externalLinks: [ExternalLinkInput!]
+  githubChecksEnabled: Boolean
+  githubTriggerAliases: [String!]
+  gitTagAuthorizedTeams: [String!]
+  gitTagAuthorizedUsers: [String!]
+  gitTagVersionsEnabled: Boolean
+  manualPrTestingEnabled: Boolean
+  notifyOnBuildFailure: Boolean
+  owner: String
+  patchingDisabled: Boolean
+  patchTriggerAliases: [PatchTriggerAliasInput!]
+  perfEnabled: Boolean
+  periodicBuilds: [PeriodicBuildInput!]
+  private: Boolean
+  prTestingEnabled: Boolean
+  remotePath: String
+  repo: String
+  repotrackerDisabled: Boolean
+  restricted: Boolean
+  spawnHostScriptPath: String
+  stepbackDisabled: Boolean
+  taskAnnotationSettings: TaskAnnotationSettingsInput
+  taskSync: TaskSyncOptionsInput
+  tracksPushEvents: Boolean
+  triggers: [TriggerAliasInput!]
+  versionControlEnabled: Boolean
+  workstationConfig: WorkstationConfigInput
+  containerSizeDefinitions: [ContainerResourcesInput!]
+}
+
+###### TYPES ######
+"""
+RepoRef is technically a special kind of Project.
+Repo types have booleans defaulted, which is why it is necessary to redeclare the types despite them matching nearly
+exactly.
+"""
+type RepoRef {
+  id: String!
+  admins: [String!]! @requireProjectFieldAccess
+  batchTime: Int! @requireProjectFieldAccess
+  branch: String!
+  buildBaronSettings: BuildBaronSettings! @requireProjectFieldAccess
+  commitQueue: RepoCommitQueueParams! @requireProjectFieldAccess
+  containerSizeDefinitions: [ContainerResources!] @requireProjectFieldAccess
+  deactivatePrevious: Boolean! @requireProjectFieldAccess
+  disabledStatsCache: Boolean! @requireProjectFieldAccess
+  dispatchingDisabled: Boolean! @requireProjectFieldAccess
+  displayName: String!
+  enabled: Boolean!
+  githubChecksEnabled: Boolean! @requireProjectFieldAccess
+  githubTriggerAliases: [String!] @requireProjectFieldAccess
+  gitTagAuthorizedTeams: [String!] @requireProjectFieldAccess
+  gitTagAuthorizedUsers: [String!] @requireProjectFieldAccess
+  gitTagVersionsEnabled: Boolean! @requireProjectFieldAccess
+  manualPrTestingEnabled: Boolean! @requireProjectFieldAccess
+  notifyOnBuildFailure: Boolean! @requireProjectFieldAccess
+  owner: String!
+  patchingDisabled: Boolean! @requireProjectFieldAccess
+  patchTriggerAliases: [PatchTriggerAlias!] @requireProjectFieldAccess
+  perfEnabled: Boolean! @requireProjectFieldAccess
+  periodicBuilds: [PeriodicBuild!] @requireProjectFieldAccess
+  private: Boolean!
+  prTestingEnabled: Boolean! @requireProjectFieldAccess
+  remotePath: String! @requireProjectFieldAccess
+  repo: String!
+  repotrackerDisabled: Boolean! @requireProjectFieldAccess
+  restricted: Boolean!
+  spawnHostScriptPath: String!
+  stepbackDisabled: Boolean! @requireProjectFieldAccess
+  taskAnnotationSettings: TaskAnnotationSettings! @requireProjectFieldAccess
+  taskSync: RepoTaskSyncOptions! @requireProjectFieldAccess
+  tracksPushEvents: Boolean! @requireProjectFieldAccess
+  triggers: [TriggerAlias!]! @requireProjectFieldAccess
+  versionControlEnabled: Boolean! @requireProjectFieldAccess
+  workstationConfig: RepoWorkstationConfig! @requireProjectFieldAccess
+  externalLinks: [ExternalLink!] @requireProjectFieldAccess
+}
+
+type RepoCommitQueueParams {
+  enabled: Boolean!
+  mergeMethod: String!
+  message: String!
+}
+
+type RepoTaskSyncOptions {
+  configEnabled: Boolean!
+  patchEnabled: Boolean!
+}
+
+type RepoWorkstationConfig {
+  gitClone: Boolean!
+  setupCommands: [WorkstationSetupCommand!]
+}
+
+type WorkstationSetupCommand {
+  command: String!
+  directory: String!
+}

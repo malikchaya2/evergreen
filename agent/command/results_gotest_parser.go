@@ -8,7 +8,7 @@ import (
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
-	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/pkg/errors"
 )
 
@@ -50,25 +50,22 @@ type goTestResult struct {
 	StartLine int
 	// Number representing the last line of the test in log output
 	EndLine int
-
-	// Can be set to mark the id of the server-side log that this
-	// results corresponds to
-	LogId string
 }
 
 // ToModelTestResults converts the implementation of LocalTestResults native
-// to the goTest plugin to the implementation used by MCI tasks
-func ToModelTestResults(results []*goTestResult, suiteName string) task.LocalTestResults {
-	var modelResults []task.TestResult
+// to the goTest plugin to the implementation used by MCI tasks.
+func ToModelTestResults(results []*goTestResult, suiteName string) []testresult.TestResult {
+	var modelResults []testresult.TestResult
 	for _, res := range results {
-		// start and end are times that we don't know,
-		// represented as a 64bit floating point (epoch time fraction)
-		var start float64 = float64(time.Now().Unix())
-		var end float64 = start + res.RunTime.Seconds()
+		// Start and end are times that we don't know, we must
+		// calculate them here based on the result runtime.
+		start := time.Now()
+		end := start.Add(res.RunTime)
+
 		var status string
 		switch res.Status {
-		// as long as we use a regex, it should be impossible to
-		// get an incorrect status code
+		// As long as we use a regex, it should be impossible to get an
+		// incorrect status code.
 		case PASS:
 			status = evergreen.TestSucceededStatus
 		case SKIP:
@@ -76,18 +73,18 @@ func ToModelTestResults(results []*goTestResult, suiteName string) task.LocalTes
 		case FAIL:
 			status = evergreen.TestFailedStatus
 		}
-		convertedResult := task.TestResult{
-			TestFile:    res.Name,
-			Status:      status,
-			StartTime:   start,
-			EndTime:     end,
-			LogTestName: suiteName,
-			LineNum:     res.StartLine - 1,
-			LogId:       res.LogId,
+		convertedResult := testresult.TestResult{
+			TestName:      res.Name,
+			Status:        status,
+			TestStartTime: start,
+			TestEndTime:   end,
+			LogTestName:   suiteName,
+			LineNum:       res.StartLine - 1,
 		}
 		modelResults = append(modelResults, convertedResult)
 	}
-	return task.LocalTestResults{Results: modelResults}
+
+	return modelResults
 }
 
 // goTestParser parses tests following go test output format.
@@ -116,9 +113,6 @@ func (vp *goTestParser) Parse(testOutput io.Reader) error {
 	testScanner := bufio.NewScanner(testOutput)
 	vp.tests = map[string][]*goTestResult{}
 	for testScanner.Scan() {
-		if err := testScanner.Err(); err != nil {
-			return errors.Wrap(err, "error reading test output")
-		}
 		// logs are appended at the start of the loop, allowing
 		// len(vp.logs) to represent the current line number [1...]
 		logLine := testScanner.Text()
@@ -127,7 +121,7 @@ func (vp *goTestParser) Parse(testOutput io.Reader) error {
 			return errors.WithStack(err)
 		}
 	}
-	return nil
+	return errors.Wrap(testScanner.Err(), "reading test output")
 }
 
 // handleLine attempts to parse and store any test updates from the given line.
@@ -153,7 +147,7 @@ func (vp *goTestParser) handleLine(line string) error {
 func (vp *goTestParser) handleEnd(line string, rgx *regexp.Regexp) error {
 	name, status, duration, err := endInfoFromLogLine(line, rgx)
 	if err != nil {
-		return errors.Wrapf(err, "error parsing end line '%s'", line)
+		return errors.Wrapf(err, "parsing end line '%s'", line)
 	}
 	tAry, ok := vp.tests[name]
 	if !ok || tAry == nil {
@@ -174,7 +168,7 @@ func (vp *goTestParser) handleEnd(line string, rgx *regexp.Regexp) error {
 func (vp *goTestParser) handleStart(line string, rgx *regexp.Regexp, defaultFail bool) error {
 	name, err := startInfoFromLogLine(line, rgx)
 	if err != nil {
-		return errors.Wrapf(err, "error parsing start line '%s'", line)
+		return errors.Wrapf(err, "parsing start line '%s'", line)
 	}
 	t := vp.newTestResult(name)
 
@@ -201,7 +195,7 @@ func (vp *goTestParser) handleStart(line string, rgx *regexp.Regexp, defaultFail
 func (vp *goTestParser) handleFailedBuild(line string) error {
 	path, err := pathNameFromLogLine(line)
 	if err != nil {
-		return errors.Wrapf(err, "error parsing start line '%s'", line)
+		return errors.Wrapf(err, "parsing start line '%s'", line)
 	}
 	return errors.Errorf("go test failed for path '%s'", path)
 }
@@ -223,8 +217,7 @@ func startInfoFromLogLine(line string, rgx *regexp.Regexp) (string, error) {
 	if len(matches) < 2 {
 		// futureproofing -- this can't happen as long as we
 		// check Match() before calling startInfoFromLogLine
-		return "", errors.Errorf(
-			"unable to match start line regular expression on line: %s", line)
+		return "", errors.Errorf("unable to match start line regular expression on line '%s'", line)
 	}
 	return matches[1], nil
 }
@@ -237,8 +230,7 @@ func endInfoFromLogLine(line string, rgx *regexp.Regexp) (string, string, time.D
 	if len(matches) < 4 {
 		// this block should never be reached if we call endRegex.Match()
 		// before entering this function
-		return "", "", 0, errors.Errorf(
-			"unable to match end line regular expression on line: %s", line)
+		return "", "", 0, errors.Errorf("unable to match end line regular expression on line '%s'", line)
 	}
 	status := matches[1]
 	name := matches[2]
@@ -247,7 +239,7 @@ func endInfoFromLogLine(line string, rgx *regexp.Regexp) (string, string, time.D
 		var err error
 		duration, err = time.ParseDuration(strings.Replace(matches[3], " ", "", -1))
 		if err != nil {
-			return "", "", 0, errors.Wrap(err, "error parsing test runtime")
+			return "", "", 0, errors.Wrap(err, "parsing test runtime duration")
 		}
 	}
 	return name, status, duration, nil
@@ -257,7 +249,7 @@ func endInfoFromLogLine(line string, rgx *regexp.Regexp) (string, string, time.D
 func pathNameFromLogLine(line string) (string, error) {
 	matches := goTestFailedStatusRegex.FindStringSubmatch(line)
 	if len(matches) < 2 {
-		return "", errors.Errorf("unable to match build line to regular expression on line: %s", line)
+		return "", errors.Errorf("unable to match build line to regular expression on line '%s'", line)
 	}
 	return matches[1], nil
 }

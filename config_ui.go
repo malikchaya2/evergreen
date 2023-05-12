@@ -15,6 +15,7 @@ type UIConfig struct {
 	Url            string   `bson:"url" json:"url" yaml:"url"`
 	HelpUrl        string   `bson:"help_url" json:"help_url" yaml:"helpurl"`
 	UIv2Url        string   `bson:"uiv2_url" json:"uiv2_url" yaml:"uiv2_url"`
+	ParsleyUrl     string   `bson:"parsley_url" json:"parsley_url" yaml:"parsley_url"`
 	HttpListenAddr string   `bson:"http_listen_addr" json:"http_listen_addr" yaml:"httplistenaddr"`
 	Secret         string   `bson:"secret" json:"secret" yaml:"secret"`                           // Secret to encrypt session storage
 	DefaultProject string   `bson:"default_project" json:"default_project" yaml:"defaultproject"` // Default project to assume when none specified
@@ -38,11 +39,11 @@ func (c *UIConfig) Get(env Environment) error {
 			*c = UIConfig{}
 			return nil
 		}
-		return errors.Wrapf(err, "error retrieving section %s", c.SectionId())
+		return errors.Wrapf(err, "getting config section '%s'", c.SectionId())
 	}
 
 	if err := res.Decode(c); err != nil {
-		return errors.Wrap(err, "problem decoding result")
+		return errors.Wrapf(err, "decoding config section '%s'", c.SectionId())
 	}
 	return nil
 }
@@ -58,6 +59,7 @@ func (c *UIConfig) Set() error {
 			"url":              c.Url,
 			"help_url":         c.HelpUrl,
 			"uiv2_url":         c.UIv2Url,
+			"parsley_url":      c.ParsleyUrl,
 			"http_listen_addr": c.HttpListenAddr,
 			"secret":           c.Secret,
 			"default_project":  c.DefaultProject,
@@ -69,19 +71,19 @@ func (c *UIConfig) Set() error {
 		},
 	}, options.Update().SetUpsert(true))
 
-	return errors.Wrapf(err, "error updating section %s", c.SectionId())
+	return errors.Wrapf(err, "updating config section '%s'", c.SectionId())
 }
 
 func (c *UIConfig) ValidateAndDefault() error {
 	catcher := grip.NewSimpleCatcher()
 	if c.Secret == "" {
-		catcher.Add(errors.New("UI Secret must not be empty"))
+		catcher.Add(errors.New("UI secret must not be empty"))
 	}
 	if c.DefaultProject == "" {
-		catcher.Add(errors.New("You must specify a default project in UI"))
+		catcher.Add(errors.New("must specify a default project in UI"))
 	}
 	if c.Url == "" {
-		catcher.Add(errors.New("You must specify a default UI url"))
+		catcher.Add(errors.New("must specify a default UI url"))
 	}
 	if c.CsrfKey != "" && len(c.CsrfKey) != 32 {
 		catcher.Add(errors.New("CSRF key must be 32 characters long"))

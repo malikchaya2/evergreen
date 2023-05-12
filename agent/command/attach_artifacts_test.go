@@ -2,7 +2,6 @@ package command
 
 import (
 	"context"
-	"io/ioutil"
 	"os"
 	"path/filepath"
 	"testing"
@@ -34,9 +33,7 @@ func TestArtifactsSuite(t *testing.T) {
 }
 
 func (s *ArtifactsSuite) SetupSuite() {
-	var err error
-	s.tmpdir, err = ioutil.TempDir("", "evergreen.command.attach_artifacts.test")
-	s.Require().NoError(err)
+	s.tmpdir = s.T().TempDir()
 
 	path := filepath.Join(s.tmpdir, "example.json")
 	s.NoError(utility.WriteJSONFile(path,
@@ -47,12 +44,8 @@ func (s *ArtifactsSuite) SetupSuite() {
 			},
 		}))
 
-	_, err = os.Stat(path)
+	_, err := os.Stat(path)
 	s.Require().False(os.IsNotExist(err))
-}
-
-func (s *ArtifactsSuite) TearDownSuite() {
-	s.Require().NoError(os.RemoveAll(s.tmpdir))
 }
 
 func (s *ArtifactsSuite) SetupTest() {
@@ -143,13 +136,11 @@ func (s *ArtifactsSuite) TestCommandParsesFile() {
 }
 
 func (s *ArtifactsSuite) TestPrefixectoryEmptySubDir() {
-	dir, err := ioutil.TempDir("", "artifact_test")
-	defer os.RemoveAll(dir)
-	s.Require().NoError(err)
-	err = ioutil.WriteFile(filepath.Join(dir, "foo"), []byte("[{}]"), 0644)
+	dir := s.T().TempDir()
+	err := os.WriteFile(filepath.Join(dir, "foo"), []byte("[{}]"), 0644)
 	s.Require().NoError(err)
 	s.Require().NoError(os.Mkdir(filepath.Join(dir, "subDir"), 0755))
-	err = ioutil.WriteFile(filepath.Join(dir, "subDir", "bar"), []byte("[{}]"), 0644)
+	err = os.WriteFile(filepath.Join(dir, "subDir", "bar"), []byte("[{}]"), 0644)
 	s.Require().NoError(err)
 	s.conf.WorkDir = dir
 	s.cmd.Files = []string{"*"}
@@ -158,13 +149,11 @@ func (s *ArtifactsSuite) TestPrefixectoryEmptySubDir() {
 }
 
 func (s *ArtifactsSuite) TestPrefixectoryWithSubDir() {
-	dir, err := ioutil.TempDir("", "artifact_test")
-	defer os.RemoveAll(dir)
-	s.Require().NoError(err)
-	err = ioutil.WriteFile(filepath.Join(dir, "foo"), []byte("[{}]"), 0644)
+	dir := s.T().TempDir()
+	err := os.WriteFile(filepath.Join(dir, "foo"), []byte("[{}]"), 0644)
 	s.Require().NoError(err)
 	s.Require().NoError(os.Mkdir(filepath.Join(dir, "subDir"), 0755))
-	err = ioutil.WriteFile(filepath.Join(dir, "subDir", "bar"), []byte("[{}]"), 0644)
+	err = os.WriteFile(filepath.Join(dir, "subDir", "bar"), []byte("[{}]"), 0644)
 	s.Require().NoError(err)
 	s.conf.WorkDir = dir
 	s.cmd.Files = []string{"*"}

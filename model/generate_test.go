@@ -8,8 +8,10 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
+	"github.com/evergreen-ci/evergreen/mock"
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -22,18 +24,18 @@ var (
 	taskBatchTime          = 30
 	sampleGeneratedProject = GeneratedProject{
 		Tasks: []parserTask{
-			parserTask{
+			{
 				Name: "new_task",
 				Commands: []PluginCommandConf{
-					PluginCommandConf{
+					{
 						Command: "shell.exec",
 					},
 				},
 			},
-			parserTask{
+			{
 				Name: "another_task",
 				Commands: []PluginCommandConf{
-					PluginCommandConf{
+					{
 						Command: "shell.exec",
 					},
 				},
@@ -46,11 +48,11 @@ var (
 			},
 		},
 		BuildVariants: []parserBV{
-			parserBV{
+			{
 				Name:  "new_buildvariant",
 				RunOn: []string{"arch"},
 			},
-			parserBV{
+			{
 				Name: "a_variant",
 				Tasks: parserBVTaskUnits{
 					parserBVTaskUnit{
@@ -59,13 +61,13 @@ var (
 					},
 				},
 				DisplayTasks: []displayTask{
-					displayTask{
+					{
 						Name:           "my_display_task_old_variant",
 						ExecutionTasks: []string{"say-bye"},
 					},
 				},
 			},
-			parserBV{
+			{
 				Name:      "another_variant",
 				BatchTime: &bvBatchTime,
 				Tasks: parserBVTaskUnits{
@@ -79,7 +81,7 @@ var (
 				},
 				RunOn: []string{"arch"},
 				DisplayTasks: []displayTask{
-					displayTask{
+					{
 						Name:           "my_display_task_new_variant",
 						ExecutionTasks: []string{"another_task"},
 					},
@@ -87,12 +89,12 @@ var (
 			},
 		},
 		Functions: map[string]*YAMLCommandSet{
-			"new_function": &YAMLCommandSet{
+			"new_function": {
 				MultiCommand: []PluginCommandConf{},
 			},
 		},
 		TaskGroups: []parserTaskGroup{
-			parserTaskGroup{
+			{
 				Name:     "example_task_group",
 				MaxHosts: 1,
 				Tasks: []string{
@@ -102,12 +104,70 @@ var (
 		},
 	}
 
+	sampleGeneratedProjectWithAllMultiFields = GeneratedProject{
+		BuildVariants: []parserBV{
+			{
+				Name: "honeydew",
+				Tasks: []parserBVTaskUnit{
+					{Name: "cat"},
+					{Name: "doge"},
+					{Name: "pika"},
+				},
+				DisplayTasks: []displayTask{},
+			},
+			{
+				Name: "cantaloupe",
+				Tasks: []parserBVTaskUnit{
+					{Name: "quokka"},
+				},
+				DisplayTasks: []displayTask{
+					{Name: "grouse"},
+					{Name: "albatross"},
+				},
+			},
+		},
+		Tasks: []parserTask{
+			{
+				Name: "quokka",
+				Commands: []PluginCommandConf{
+					{Command: "shell.exec"},
+					{Command: "shell.exec"},
+				},
+			},
+			{
+				Name: "pika",
+				Commands: []PluginCommandConf{
+					{Command: "shell.exec"},
+				},
+			},
+		},
+		TaskGroups: []parserTaskGroup{
+			{
+				Name:  "sea-bunny",
+				Tasks: []string{"quokka", "pika"},
+			},
+			{
+				Name:  "mola-mola",
+				Tasks: []string{"quokka"},
+			},
+		},
+		Functions: map[string]*YAMLCommandSet{
+			"brownie": {MultiCommand: []PluginCommandConf{
+				{Command: "shell.exec"},
+				{Command: "shell.exec"},
+			}},
+			"cookie": {MultiCommand: []PluginCommandConf{
+				{Command: "shell.exec"},
+			}},
+		},
+	}
+
 	smallGeneratedProject = GeneratedProject{
 		BuildVariants: []parserBV{
-			parserBV{
+			{
 				Name: "my_build_variant",
 				DisplayTasks: []displayTask{
-					displayTask{
+					{
 						Name:           "my_display_task",
 						ExecutionTasks: []string{"my_display_task_gen"},
 					},
@@ -118,7 +178,7 @@ var (
 
 	sampleGeneratedProjectAddToBVOnly = GeneratedProject{
 		BuildVariants: []parserBV{
-			parserBV{
+			{
 				Name: "a_variant",
 				Tasks: parserBVTaskUnits{
 					parserBVTaskUnit{
@@ -272,6 +332,47 @@ buildvariants:
     - name: say-hi
     - name: a-depended-on-task
 `
+
+	sampleProjYAMLWithMultiFields = `
+tasks:
+- name: blueberry
+  commands:
+    - command: shell.exec
+- name: strawberry
+  commands:
+    - command: shell.exec
+- name: banana-is-a-berry
+  commands:
+    - command: shell.exec
+
+buildvariants:
+- name: rutabaga
+  tasks:
+    - name: blueberry
+    - name: strawberry
+- name: sweet-potato
+  tasks:
+    - name: strawberry
+    - name: lotta-fruits
+
+functions:
+  purple:
+    - command: shell.exec
+    - command: shell.exec
+  orange:
+    - command: shell.exec
+
+task_groups:
+- name: i-am-a-fruitarian
+  tasks:
+    - blueberry
+    - strawberry
+- name: lotta-fruits
+  tasks:
+    - blueberry
+    - banana-is-a-berry
+`
+
 	sampleGenerateTasksYml = `
 {
     "functions": {
@@ -361,6 +462,9 @@ buildvariants:
 
 type GenerateSuite struct {
 	suite.Suite
+	ctx    context.Context
+	cancel context.CancelFunc
+	env    evergreen.Environment
 }
 
 func TestGenerateSuite(t *testing.T) {
@@ -377,6 +481,14 @@ func (s *GenerateSuite) SetupTest() {
 		Id: "",
 	}
 	s.Require().NoError(ref2.Insert())
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	env := &mock.Environment{}
+	s.Require().NoError(env.Configure(s.ctx))
+	s.env = env
+}
+
+func (s *GenerateSuite) TearDownTest() {
+	s.cancel()
 }
 
 func (s *GenerateSuite) TestParseProjectFromJSON() {
@@ -439,28 +551,28 @@ func (s *GenerateSuite) TestValidateNoRedefine() {
 	g := GeneratedProject{}
 	s.NoError(g.validateNoRedefine(projectMaps{}))
 
-	g.BuildVariants = []parserBV{parserBV{Name: "buildvariant_name", DisplayName: "I am a buildvariant"}}
-	g.Tasks = []parserTask{parserTask{Name: "task_name"}}
+	g.BuildVariants = []parserBV{{Name: "buildvariant_name", DisplayName: "I am a buildvariant"}}
+	g.Tasks = []parserTask{{Name: "task_name"}}
 	g.Functions = map[string]*YAMLCommandSet{"function_name": nil}
 	s.NoError(g.validateNoRedefine(projectMaps{}))
 
 	cachedProject := projectMaps{
 		buildVariants: map[string]struct{}{
-			"buildvariant_name": struct{}{},
+			"buildvariant_name": {},
 		},
 	}
 	s.Error(g.validateNoRedefine(cachedProject))
 
 	cachedProject = projectMaps{
 		tasks: map[string]*ProjectTask{
-			"task_name": &ProjectTask{},
+			"task_name": {},
 		},
 	}
 	s.Error(g.validateNoRedefine(cachedProject))
 
 	cachedProject = projectMaps{
 		functions: map[string]*YAMLCommandSet{
-			"function_name": &YAMLCommandSet{},
+			"function_name": {},
 		},
 	}
 	s.Error(g.validateNoRedefine(cachedProject))
@@ -474,9 +586,9 @@ func (s *GenerateSuite) TestValidateNoRecursiveGenerateTasks() {
 	cachedProject = projectMaps{}
 	g = GeneratedProject{
 		Tasks: []parserTask{
-			parserTask{
+			{
 				Commands: []PluginCommandConf{
-					PluginCommandConf{
+					{
 						Command: "generate.tasks",
 					},
 				},
@@ -488,9 +600,9 @@ func (s *GenerateSuite) TestValidateNoRecursiveGenerateTasks() {
 	cachedProject = projectMaps{}
 	g = GeneratedProject{
 		Functions: map[string]*YAMLCommandSet{
-			"a_function": &YAMLCommandSet{
+			"a_function": {
 				MultiCommand: []PluginCommandConf{
-					PluginCommandConf{
+					{
 						Command: "generate.tasks",
 					},
 				},
@@ -501,9 +613,9 @@ func (s *GenerateSuite) TestValidateNoRecursiveGenerateTasks() {
 
 	cachedProject = projectMaps{
 		tasks: map[string]*ProjectTask{
-			"task_name": &ProjectTask{
+			"task_name": {
 				Commands: []PluginCommandConf{
-					PluginCommandConf{
+					{
 						Command: "generate.tasks",
 					},
 				},
@@ -512,9 +624,9 @@ func (s *GenerateSuite) TestValidateNoRecursiveGenerateTasks() {
 	}
 	g = GeneratedProject{
 		BuildVariants: []parserBV{
-			parserBV{
+			{
 				Tasks: []parserBVTaskUnit{
-					parserBVTaskUnit{
+					{
 						Name: "task_name",
 					},
 				},
@@ -525,18 +637,18 @@ func (s *GenerateSuite) TestValidateNoRecursiveGenerateTasks() {
 
 	cachedProject = projectMaps{
 		tasks: map[string]*ProjectTask{
-			"task_name": &ProjectTask{
+			"task_name": {
 				Commands: []PluginCommandConf{
-					PluginCommandConf{
+					{
 						Function: "generate_function",
 					},
 				},
 			},
 		},
 		functions: map[string]*YAMLCommandSet{
-			"generate_function": &YAMLCommandSet{
+			"generate_function": {
 				MultiCommand: []PluginCommandConf{
-					PluginCommandConf{
+					{
 						Command: "generate.tasks",
 					},
 				},
@@ -545,9 +657,9 @@ func (s *GenerateSuite) TestValidateNoRecursiveGenerateTasks() {
 	}
 	g = GeneratedProject{
 		BuildVariants: []parserBV{
-			parserBV{
+			{
 				Tasks: []parserBVTaskUnit{
-					parserBVTaskUnit{
+					{
 						Name: "task_name",
 					},
 				},
@@ -557,14 +669,66 @@ func (s *GenerateSuite) TestValidateNoRecursiveGenerateTasks() {
 	s.Error(g.validateNoRecursiveGenerateTasks(cachedProject))
 }
 
+func (s *GenerateSuite) TestCacheProjectData() {
+	var p Project
+	_, err := LoadProjectInto(s.ctx, []byte(sampleProjYAMLWithMultiFields), nil, "", &p)
+	s.Require().NoError(err)
+	cached := cacheProjectData(&p)
+	expectedBVs := map[string]bool{
+		"rutabaga":     false,
+		"sweet-potato": false,
+	}
+	for bvName := range cached.buildVariants {
+		_, ok := expectedBVs[bvName]
+		s.True(ok, "unexpected build variant '%s'", bvName)
+		expectedBVs[bvName] = true
+	}
+	for bvName, found := range expectedBVs {
+		s.True(found, "did not find expected build variant '%s'", bvName)
+	}
+
+	expectedTasks := map[string]bool{
+		"blueberry":         false,
+		"strawberry":        false,
+		"banana-is-a-berry": false,
+	}
+	for taskName, tsk := range cached.tasks {
+		_, ok := expectedTasks[taskName]
+		s.True(ok, "unexpected build variant '%s'", taskName)
+		s.Equal(taskName, tsk.Name, "task name key does not match the task it maps to")
+		expectedTasks[taskName] = true
+	}
+	for taskName, found := range expectedTasks {
+		s.True(found, "did not find expected task '%s'", taskName)
+	}
+
+	expectedFuncs := map[string]struct {
+		numCmds int
+		found   bool
+	}{
+		"purple": {numCmds: 2},
+		"orange": {numCmds: 1},
+	}
+	for funcName, funcCmds := range cached.functions {
+		expected, ok := expectedFuncs[funcName]
+		s.True(ok, "unexpected function '%s'", funcName)
+		s.Len(funcCmds.List(), expected.numCmds)
+
+		expected.found = true
+		expectedFuncs[funcName] = expected
+	}
+	for funcName, expected := range expectedFuncs {
+		s.True(expected.found, "did not find expected function '%s'", funcName)
+	}
+}
+
 func (s *GenerateSuite) TestAddGeneratedProjectToConfig() {
 	p := &Project{}
-	ctx := context.Background()
-	pp, err := LoadProjectInto(ctx, []byte(sampleProjYml), nil, "", p)
+	pp, err := LoadProjectInto(s.ctx, []byte(sampleProjYml), nil, "", p)
 	s.NoError(err)
 	cachedProject := cacheProjectData(p)
 	g := sampleGeneratedProject
-	newPP, err := g.addGeneratedProjectToConfig(pp, "", cachedProject)
+	newPP, err := g.addGeneratedProjectToConfig(pp, cachedProject)
 	s.NoError(err)
 	s.NotEmpty(newPP)
 	s.Require().Len(newPP.Tasks, 6)
@@ -577,7 +741,7 @@ func (s *GenerateSuite) TestAddGeneratedProjectToConfig() {
 	s.Equal(newPP.Tasks[4].Name, "new_task")
 	s.Equal(newPP.Tasks[5].Name, "another_task")
 
-	newPP2, err := g.addGeneratedProjectToConfig(nil, sampleProjYml, cachedProject)
+	newPP2, err := g.addGeneratedProjectToConfig(&ParserProject{Functions: map[string]*YAMLCommandSet{}}, cachedProject)
 	s.NoError(err)
 	s.NotEmpty(newPP2)
 
@@ -597,9 +761,9 @@ func (s *GenerateSuite) TestAddGeneratedProjectToConfig() {
 	_, ok = newPP.Functions["new_function"]
 	s.True(ok)
 
-	pp, err = LoadProjectInto(ctx, []byte(sampleProjYmlNoFunctions), nil, "", p)
+	pp, err = LoadProjectInto(s.ctx, []byte(sampleProjYmlNoFunctions), nil, "", p)
 	s.NoError(err)
-	newPP, err = g.addGeneratedProjectToConfig(pp, "", cachedProject)
+	newPP, err = g.addGeneratedProjectToConfig(pp, cachedProject)
 	s.NoError(err)
 	s.NotNil(newPP)
 	s.Require().Len(newPP.Tasks, 5)
@@ -609,17 +773,26 @@ func (s *GenerateSuite) TestAddGeneratedProjectToConfig() {
 	s.Equal(newPP.Tasks[1].Name, "say-bye")
 	s.Equal(newPP.Tasks[3].Name, "new_task")
 
-	newPP2, err = g.addGeneratedProjectToConfig(nil, sampleProjYmlNoFunctions, cachedProject)
+	newPP2, err = g.addGeneratedProjectToConfig(&ParserProject{Functions: map[string]*YAMLCommandSet{}}, cachedProject)
 	s.NoError(err)
 	s.NotEmpty(newPP2)
 }
 
 func (s *GenerateSuite) TestSaveNewBuildsAndTasks() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	env := &mock.Environment{}
+	s.Require().NoError(env.Configure(ctx))
+
 	genTask := &task.Task{
-		Id:       "task_that_called_generate_task",
-		Project:  "proj",
-		Version:  "version_that_called_generate_task",
-		Priority: 10,
+		Id:          "task_that_called_generate_task",
+		Project:     "proj",
+		Version:     "version_that_called_generate_task",
+		Priority:    10,
+		BuildId:     "sample_build",
+		Activated:   true,
+		DisplayName: "task_that_called_generate_task",
 	}
 	s.NoError(genTask.Insert())
 	prevBatchTimeVersion := Version{
@@ -657,11 +830,9 @@ func (s *GenerateSuite) TestSaveNewBuildsAndTasks() {
 	}
 	s.NoError(sampleBuild.Insert())
 	v := &Version{
-		Id:                 "version_that_called_generate_task",
-		Identifier:         "proj",
-		BuildIds:           []string{"sample_build"},
-		Config:             sampleProjYml,
-		ConfigUpdateNumber: 4,
+		Id:         "version_that_called_generate_task",
+		Identifier: "proj",
+		BuildIds:   []string{"sample_build"},
 		BuildVariants: []VersionBuildStatus{
 			{
 				BuildId:      "sample_build",
@@ -670,21 +841,25 @@ func (s *GenerateSuite) TestSaveNewBuildsAndTasks() {
 		},
 	}
 	s.NoError(v.Insert())
+	pp := &ParserProject{}
+	err := util.UnmarshalYAMLWithFallback([]byte(sampleProjYml), &pp)
+	s.NoError(err)
+	pp.Id = "version_that_called_generate_task"
+	s.NoError(pp.Insert())
 
 	g := sampleGeneratedProject
 	g.Task = genTask
 
-	projectInfo, err := LoadProjectForVersion(v, "proj", false)
+	p, pp, err := FindAndTranslateProjectForVersion(ctx, env.Settings(), v)
 	s.Require().NoError(err)
-	p, pp, v, err := g.NewVersion(projectInfo.Project, projectInfo.IntermediateProject, v)
+	p, pp, v, err = g.NewVersion(p, pp, v)
 	s.Require().NoError(err)
-	s.NoError(g.Save(context.Background(), p, pp, v))
+	s.NoError(g.Save(s.ctx, s.env.Settings(), p, pp, v))
 
 	// verify we stopped saving versions
 	v, err = VersionFindOneId(v.Id)
 	s.NoError(err)
 	s.Require().NotNil(v)
-	s.Equal(4, v.ConfigUpdateNumber)
 	s.Require().Len(v.BuildVariants, 2)
 
 	// batchtime task added to existing variant, despite no previous batchtime task
@@ -697,10 +872,14 @@ func (s *GenerateSuite) TestSaveNewBuildsAndTasks() {
 	s.Require().Len(v.BuildVariants[1].BatchTimeTasks, 1)
 	s.InDelta(time.Now().Add(15*time.Minute).Unix(), v.BuildVariants[1].BatchTimeTasks[0].ActivateAt.Unix(), 1)
 
-	pp, err = ParserProjectFindOneById(v.Id)
+	ppStorage, err := GetParserProjectStorage(s.env.Settings(), v.ProjectStorageMethod)
+	s.Require().NoError(err)
+	defer ppStorage.Close(s.ctx)
+	pp, err = ParserProjectFindOneByID(s.ctx, s.env.Settings(), v.ProjectStorageMethod, v.Id)
 	s.NoError(err)
 	s.Require().NotNil(pp)
-	s.Equal(5, pp.ConfigUpdateNumber)
+	s.Len(pp.BuildVariants, 3)
+	s.Len(pp.Tasks, 6)
 	builds, err := build.FindBuildsByVersions([]string{v.Id})
 	s.NoError(err)
 	tasks, err := task.FindAll(db.Query(bson.M{task.VersionKey: v.Id})) // with display
@@ -709,7 +888,7 @@ func (s *GenerateSuite) TestSaveNewBuildsAndTasks() {
 	s.Len(tasks, 7)
 	existingVariantTasks, err := task.Find(task.ByBuildId(sampleBuild.Id)) // without display
 	s.NoError(err)
-	s.Len(existingVariantTasks, 2)
+	s.Len(existingVariantTasks, 3)
 	for _, existingTask := range existingVariantTasks {
 		if existingTask.DisplayName == "say-bye" {
 			s.False(existingTask.Activated)
@@ -729,6 +908,9 @@ func (s *GenerateSuite) TestSaveNewBuildsAndTasks() {
 }
 
 func (s *GenerateSuite) TestSaveWithAlreadyGeneratedTasksAndVariants() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	generatorTask := &task.Task{
 		Id:      "generator",
 		BuildId: "generate_build",
@@ -755,26 +937,30 @@ func (s *GenerateSuite) TestSaveWithAlreadyGeneratedTasksAndVariants() {
 	v := &Version{
 		Id:       "version_that_called_generate_task",
 		BuildIds: []string{"new_variant"},
-		Config:   sampleProjYmlTaskGroups,
 	}
 	s.NoError(v.Insert())
+	pp := &ParserProject{}
+	err := util.UnmarshalYAMLWithFallback([]byte(sampleProjYmlTaskGroups), &pp)
+	s.NoError(err)
+	pp.Id = "version_that_called_generate_task"
+	s.NoError(pp.Insert())
 	// Setup parser project to be partially generated.
-	projectInfo, err := LoadProjectForVersion(v, "", false)
+	p, pp, err := FindAndTranslateProjectForVersion(s.ctx, s.env.Settings(), v)
 	s.NoError(err)
 
 	g := partiallyGeneratedProject
 	g.Task = generatorTask
-	p, pp, v, err := g.NewVersion(projectInfo.Project, projectInfo.IntermediateProject, v)
+	p, pp, v, err = g.NewVersion(p, pp, v)
 	s.NoError(err)
 	pp.UpdatedByGenerators = []string{generatorTask.Id}
-	s.NoError(pp.Insert())
+	s.NoError(ParserProjectUpsertOne(ctx, s.env.Settings(), v.ProjectStorageMethod, pp))
 
 	// Shouldn't error trying to add the same generated project.
 	p, pp, v, err = g.NewVersion(p, pp, v)
 	s.NoError(err)
 	s.Len(pp.UpdatedByGenerators, 1) // Not modified again.
 
-	s.NoError(g.Save(context.Background(), p, pp, v))
+	s.NoError(g.Save(s.ctx, s.env.Settings(), p, pp, v))
 
 	tasks := []task.Task{}
 	taskQuery := db.Query(bson.M{task.GeneratedByKey: "generator"}).Sort([]string{task.CreateTimeKey})
@@ -833,33 +1019,45 @@ func (s *GenerateSuite) TestSaveNewTasksWithDependencies() {
 	v := &Version{
 		Id:       "version_that_called_generate_task",
 		BuildIds: []string{"sample_build"},
-		Config:   sampleProjYmlTaskGroups,
 	}
+	pp := &ParserProject{}
+	err := util.UnmarshalYAMLWithFallback([]byte(sampleProjYmlTaskGroups), &pp)
+	s.NoError(err)
+	pp.Id = "version_that_called_generate_task"
+	s.NoError(pp.Insert())
 	s.NoError(sampleBuild.Insert())
 	s.NoError(v.Insert())
 
 	g := sampleGeneratedProjectAddToBVOnly
 	g.Task = &tasksThatExist[0]
-	projectInfo, err := LoadProjectForVersion(v, "", false)
+	p, pp, err := FindAndTranslateProjectForVersion(s.ctx, s.env.Settings(), v)
 	s.Require().NoError(err)
-	p, pp, v, err := g.NewVersion(projectInfo.Project, projectInfo.IntermediateProject, v)
+	p, pp, v, err = g.NewVersion(p, pp, v)
 	s.NoError(err)
-	s.NoError(g.Save(context.Background(), p, pp, v))
+	s.NoError(g.Save(s.ctx, s.env.Settings(), p, pp, v))
 
 	v, err = VersionFindOneId(v.Id)
 	s.NoError(err)
 	s.Require().NotNil(v)
-	s.Equal(0, v.ConfigUpdateNumber)
 
-	pp, err = ParserProjectFindOneById(v.Id)
+	pp, err = ParserProjectFindOneByID(s.ctx, s.env.Settings(), v.ProjectStorageMethod, v.Id)
 	s.NoError(err)
 	s.Require().NotNil(pp)
-	s.Equal(1, pp.ConfigUpdateNumber)
+	s.Require().Len(pp.BuildVariants, 1, "parser project should have same build variant")
+	var taskWithDepsFound bool
+	const expectedTask = "task_that_has_dependencies"
+	for _, t := range pp.BuildVariants[0].Tasks {
+		if t.Name == expectedTask {
+			taskWithDepsFound = true
+			break
+		}
+	}
+	s.True(taskWithDepsFound, "task '%s' should have been added to build variant", expectedTask)
 
 	tasks := []task.Task{}
 	err = db.FindAllQ(task.Collection, db.Query(bson.M{}), &tasks)
 	s.NoError(err)
-	err = db.FindAllQ(task.Collection, db.Query(bson.M{"display_name": "task_that_has_dependencies"}), &tasks)
+	err = db.FindAllQ(task.Collection, db.Query(bson.M{task.DisplayNameKey: expectedTask}), &tasks)
 	s.NoError(err)
 	s.Require().Len(tasks, 1)
 	s.Require().Len(tasks[0].DependsOn, 3)
@@ -888,7 +1086,9 @@ func (s *GenerateSuite) TestSaveNewTasksWithCrossVariantDependencies() {
 	v := &Version{
 		Id:       "v1",
 		BuildIds: []string{"b1"},
-		Config: `tasks:
+	}
+	parserProj := ParserProject{}
+	config := `tasks:
 - name: say_something
 - name: generator
 
@@ -899,8 +1099,11 @@ buildvariants:
   tasks:
   - name: say_something
   - name: generator
-`,
-	}
+`
+	err := util.UnmarshalYAMLWithFallback([]byte(config), &parserProj)
+	s.NoError(err)
+	parserProj.Id = "v1"
+	s.NoError(parserProj.Insert())
 	s.NoError(existingBuild.Insert())
 	s.NoError(v.Insert())
 
@@ -922,7 +1125,7 @@ buildvariants:
 			},
 		},
 		BuildVariants: []parserBV{
-			parserBV{
+			{
 				Name: "a_new_variant",
 				Tasks: parserBVTaskUnits{
 					parserBVTaskUnit{
@@ -934,20 +1137,20 @@ buildvariants:
 		},
 	}
 
-	projectInfo, err := LoadProjectForVersion(v, "", false)
+	p, pp, err := FindAndTranslateProjectForVersion(s.ctx, s.env.Settings(), v)
 	s.Require().NoError(err)
-	p, pp, v, err := g.NewVersion(projectInfo.Project, projectInfo.IntermediateProject, v)
+	p, pp, v, err = g.NewVersion(p, pp, v)
 	s.NoError(err)
-	s.NoError(g.Save(context.Background(), p, pp, v))
+	s.NoError(g.Save(s.ctx, s.env.Settings(), p, pp, v))
 
 	// the depended-on task is created in the existing variant
 	saySomething := task.Task{}
-	err = db.FindOneQ(task.Collection, db.Query(bson.M{"display_name": "say_something"}), &saySomething)
+	err = db.FindOneQ(task.Collection, db.Query(bson.M{task.DisplayNameKey: "say_something"}), &saySomething)
 	s.NoError(err)
 
 	// the dependent task depends on the depended-on task
 	taskWithDeps := task.Task{}
-	err = db.FindOneQ(task.Collection, db.Query(bson.M{"display_name": "task_that_has_dependencies"}), &taskWithDeps)
+	err = db.FindOneQ(task.Collection, db.Query(bson.M{task.DisplayNameKey: "task_that_has_dependencies"}), &taskWithDeps)
 	s.NoError(err)
 	s.Require().Len(taskWithDeps.DependsOn, 1)
 	s.Equal(taskWithDeps.DependsOn[0].TaskId, saySomething.Id)
@@ -973,8 +1176,12 @@ func (s *GenerateSuite) TestSaveNewTaskWithExistingExecutionTask() {
 	v := &Version{
 		Id:       "version_that_called_generate_task",
 		BuildIds: []string{"sample_build"},
-		Config:   smallYml,
 	}
+	pp := &ParserProject{}
+	err := util.UnmarshalYAMLWithFallback([]byte(smallYml), &pp)
+	s.NoError(err)
+	pp.Id = "version_that_called_generate_task"
+	s.NoError(pp.Insert())
 	s.NoError(taskThatExists.Insert())
 	s.NoError(taskDisplayGen.Insert())
 	s.NoError(sampleBuild.Insert())
@@ -982,29 +1189,133 @@ func (s *GenerateSuite) TestSaveNewTaskWithExistingExecutionTask() {
 
 	g := smallGeneratedProject
 	g.Task = &taskThatExists
-	projectInfo, err := LoadProjectForVersion(v, "", false)
+	p, pp, err := FindAndTranslateProjectForVersion(s.ctx, s.env.Settings(), v)
 	s.Require().NoError(err)
-	p, pp, v, err := g.NewVersion(projectInfo.Project, projectInfo.IntermediateProject, v)
+	p, pp, v, err = g.NewVersion(p, pp, v)
 	s.Require().NoError(err)
-	s.NoError(g.Save(context.Background(), p, pp, v))
+	s.NoError(g.Save(s.ctx, s.env.Settings(), p, pp, v))
 
 	v, err = VersionFindOneId(v.Id)
 	s.NoError(err)
 	s.Require().NotNil(v)
-	s.Equal(0, v.ConfigUpdateNumber)
 
-	pp, err = ParserProjectFindOneById(v.Id)
+	pp, err = ParserProjectFindOneByID(s.ctx, s.env.Settings(), v.ProjectStorageMethod, v.Id)
 	s.NoError(err)
 	s.Require().NotNil(pp)
-	s.Equal(1, pp.ConfigUpdateNumber)
+	s.Require().Len(pp.BuildVariants, 1, "parser project should have same build variant")
+	const expectedDisplayTask = "my_display_task"
+	var dtFound bool
+	for _, dt := range pp.BuildVariants[0].DisplayTasks {
+		if dt.Name == expectedDisplayTask {
+			dtFound = true
+			break
+		}
+	}
+	s.True(dtFound, "display task '%s' should have been added", expectedDisplayTask)
 
 	tasks := []task.Task{}
 	s.NoError(db.FindAllQ(task.Collection, db.Query(bson.M{}), &tasks))
-	s.NoError(db.FindAllQ(task.Collection, db.Query(bson.M{"display_name": "my_display_task_gen"}), &tasks))
+	s.NoError(db.FindAllQ(task.Collection, db.Query(bson.M{task.DisplayNameKey: "my_display_task_gen"}), &tasks))
 	s.Len(tasks, 1)
-	s.NoError(db.FindAllQ(task.Collection, db.Query(bson.M{"display_name": "my_display_task"}), &tasks))
+	s.NoError(db.FindAllQ(task.Collection, db.Query(bson.M{task.DisplayNameKey: "my_display_task"}), &tasks))
 	s.Len(tasks, 1)
 	s.Len(tasks[0].ExecutionTasks, 1)
+}
+
+func (s *GenerateSuite) TestMergeGeneratedProjects() {
+	projects := []GeneratedProject{sampleGeneratedProjectWithAllMultiFields}
+	merged, err := MergeGeneratedProjects(projects)
+	s.Require().NoError(err)
+
+	expectedBVs := map[string]struct {
+		numTasks        int
+		numDisplayTasks int
+		found           bool
+	}{
+		"honeydew": {numTasks: 3},
+		"cantaloupe": {
+			numTasks:        1,
+			numDisplayTasks: 2,
+		},
+	}
+	for _, bv := range merged.BuildVariants {
+		expected, ok := expectedBVs[bv.Name]
+		s.True(ok, "unexpected build variant '%s'", bv.Name)
+		s.Len(bv.Tasks, expected.numTasks, "unexpected number of tasks for build variant '%s'", bv.Name)
+		s.Len(bv.DisplayTasks, expected.numDisplayTasks, "unexpected number of display tasks for build variant '%s'", bv.DisplayName)
+
+		expected.found = true
+		expectedBVs[bv.Name] = expected
+	}
+	for bvName, expected := range expectedBVs {
+		s.True(expected.found, "did not find expected build variant '%s'", bvName)
+	}
+
+	expectedTasks := map[string]struct {
+		numCmds int
+		found   bool
+	}{
+		"quokka": {numCmds: 2},
+		"pika":   {numCmds: 1},
+	}
+	for _, tsk := range merged.Tasks {
+		expected, ok := expectedTasks[tsk.Name]
+		s.True(ok, "unexpected task '%s'", tsk.Name)
+		s.Len(tsk.Commands, expected.numCmds, "unexpected number of commands for task '%s'", tsk.Name)
+
+		expected.found = true
+		expectedTasks[tsk.Name] = expected
+	}
+	for taskName, expected := range expectedTasks {
+		s.True(expected.found, "did not find expected task '%s'", taskName)
+	}
+
+	expectedFuncs := map[string]struct {
+		numCmds int
+		found   bool
+	}{
+		"brownie": {numCmds: 2},
+		"cookie":  {numCmds: 1},
+	}
+	for funcName, funcCmds := range merged.Functions {
+		expected, ok := expectedFuncs[funcName]
+		s.True(ok, "unexpected function '%s'", funcName)
+		s.Len(funcCmds.List(), expected.numCmds, "unexpected number of commands for function '%s'", funcName)
+
+		expected.found = true
+		expectedFuncs[funcName] = expected
+	}
+	for funcName, expected := range expectedFuncs {
+		s.True(expected.found, "did not find expected function '%s'", funcName)
+	}
+
+	expectedTaskGroups := map[string]struct {
+		numTasks int
+		found    bool
+	}{
+		"sea-bunny": {numTasks: 2},
+		"mola-mola": {numTasks: 1},
+	}
+	for _, tg := range merged.TaskGroups {
+		expected, ok := expectedTaskGroups[tg.Name]
+		s.True(ok, "unexpected task group '%s'", tg.Name)
+		s.Len(tg.Tasks, expected.numTasks, "unexpected number of tasks for task group '%s'", tg.Name)
+
+		expected.found = true
+		expectedTaskGroups[tg.Name] = expected
+	}
+	for tgName, expected := range expectedTaskGroups {
+		s.True(expected.found, "did not find expected task group '%s'", tgName)
+	}
+}
+
+func (s *GenerateSuite) TestMergeGeneratedProjectsWithNoTasks() {
+	projects := []GeneratedProject{smallGeneratedProject}
+	merged, err := MergeGeneratedProjects(projects)
+	s.Require().NoError(err)
+	s.Require().NotNil(merged)
+	s.Require().Len(merged.BuildVariants, 1)
+	s.Len(merged.BuildVariants[0].DisplayTasks, 1)
 }
 
 func TestSimulateNewDependencyGraph(t *testing.T) {
@@ -1021,9 +1332,9 @@ func TestSimulateNewDependencyGraph(t *testing.T) {
 		project := &Project{
 			BuildVariants: []BuildVariant{
 				{Name: "bv0", Tasks: []BuildVariantTaskUnit{
-					{Name: "generated", DependsOn: []TaskUnitDependency{{Name: "dependedOn", Variant: "bv0"}}},
-					{Name: "dependedOn", DependsOn: []TaskUnitDependency{{Name: "generator", Variant: "bv0"}}},
-					{Name: "generator"},
+					{Name: "generated", Variant: "bv0", DependsOn: []TaskUnitDependency{{Name: "dependedOn", Variant: "bv0"}}},
+					{Name: "dependedOn", Variant: "bv0", DependsOn: []TaskUnitDependency{{Name: "generator", Variant: "bv0"}}},
+					{Name: "generator", Variant: "bv0"},
 				}},
 			},
 			Tasks: []ProjectTask{
@@ -1051,8 +1362,8 @@ func TestSimulateNewDependencyGraph(t *testing.T) {
 		project := &Project{
 			BuildVariants: []BuildVariant{
 				{Name: "bv0", Tasks: []BuildVariantTaskUnit{
-					{Name: "generated", DependsOn: []TaskUnitDependency{{Name: "generator", Variant: "bv0"}}},
-					{Name: "generator"},
+					{Name: "generated", Variant: "bv0", DependsOn: []TaskUnitDependency{{Name: "generator", Variant: "bv0"}}},
+					{Name: "generator", Variant: "bv0"},
 				}},
 			},
 			Tasks: []ProjectTask{
@@ -1082,9 +1393,9 @@ func TestSimulateNewDependencyGraph(t *testing.T) {
 				{
 					Name: "bv0",
 					Tasks: []BuildVariantTaskUnit{
-						{Name: "generated"},
-						{Name: "dependedOn", DependsOn: []TaskUnitDependency{{Name: "generator", Variant: "bv0"}}},
-						{Name: "generator"},
+						{Name: "generated", Variant: "bv0"},
+						{Name: "dependedOn", Variant: "bv0", DependsOn: []TaskUnitDependency{{Name: "generator", Variant: "bv0"}}},
+						{Name: "generator", Variant: "bv0"},
 					},
 				},
 			},
@@ -1115,8 +1426,8 @@ func TestSimulateNewDependencyGraph(t *testing.T) {
 				{
 					Name: "bv0",
 					Tasks: []BuildVariantTaskUnit{
-						{Name: "generated", DependsOn: []TaskUnitDependency{{Name: "dependedOn", Variant: "bv0"}}},
-						{Name: "dependedOn", DependsOn: []TaskUnitDependency{{Name: "generator", Variant: "bv0"}}},
+						{Name: "generated", Variant: "bv0", DependsOn: []TaskUnitDependency{{Name: "dependedOn", Variant: "bv0"}}},
+						{Name: "dependedOn", Variant: "bv0", DependsOn: []TaskUnitDependency{{Name: "generator", Variant: "bv0"}}},
 						{Name: "generator"},
 					},
 				},
@@ -1268,77 +1579,6 @@ func TestFilterInactiveTasks(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Empty(t, tasks)
 	})
-}
-
-func (s *GenerateSuite) TestMergeGeneratedProjectsWithNoTasks() {
-	projects := []GeneratedProject{smallGeneratedProject}
-	merged, err := MergeGeneratedProjects(projects)
-	s.Require().NoError(err)
-	s.Require().NotNil(merged)
-	s.Require().Len(merged.BuildVariants, 1)
-	s.Len(merged.BuildVariants[0].DisplayTasks, 1)
-}
-
-func TestUpdateParserProject(t *testing.T) {
-	alreadyUpdatedTestName := "TaskAlreadyUpdatedParserProject"
-	withZeroTestName := "WithZero"
-	taskId := "tId"
-	for testName, setupTest := range map[string]func(t *testing.T, v *Version, pp *ParserProject){
-		"noParserProject": func(t *testing.T, v *Version, pp *ParserProject) {
-			v.ConfigUpdateNumber = 5
-			assert.NoError(t, v.Insert())
-		},
-		"ParserProjectMoreRecent": func(t *testing.T, v *Version, pp *ParserProject) {
-			v.ConfigUpdateNumber = 1
-			pp.ConfigUpdateNumber = 5
-			assert.NoError(t, v.Insert())
-			assert.NoError(t, pp.Insert())
-		},
-		"ConfigMostRecent": func(t *testing.T, v *Version, pp *ParserProject) {
-			v.ConfigUpdateNumber = 5
-			pp.ConfigUpdateNumber = 1
-			assert.NoError(t, v.Insert())
-			assert.NoError(t, pp.Insert())
-		},
-		withZeroTestName: func(t *testing.T, v *Version, pp *ParserProject) {
-			v.ConfigUpdateNumber = 0
-			assert.NoError(t, v.Insert())
-			assert.NoError(t, pp.Insert())
-		},
-		alreadyUpdatedTestName: func(t *testing.T, v *Version, pp *ParserProject) {
-			pp.UpdatedByGenerators = []string{taskId}
-			pp.ConfigUpdateNumber = 1
-			assert.NoError(t, v.Insert())
-			assert.NoError(t, pp.Insert())
-		},
-	} {
-		t.Run(testName, func(t *testing.T) {
-			require.NoError(t, db.ClearCollections(VersionCollection, ParserProjectCollection))
-			v := &Version{Id: "my-version"}
-			pp := &ParserProject{Id: "my-version"}
-			setupTest(t, v, pp)
-			assert.NoError(t, updateParserProject(v, pp, taskId))
-			v, err := VersionFindOneId(v.Id)
-			assert.NoError(t, err)
-			require.NotNil(t, v)
-			pp, err = ParserProjectFindOneById(v.Id)
-			assert.NoError(t, err)
-			require.NotNil(t, pp)
-			assert.Len(t, pp.UpdatedByGenerators, 1)
-			assert.Contains(t, pp.UpdatedByGenerators, taskId)
-			if testName == withZeroTestName {
-				assert.Equal(t, 0, v.ConfigUpdateNumber)
-				assert.Equal(t, 1, pp.ConfigUpdateNumber)
-				return
-			} else if testName == alreadyUpdatedTestName {
-				// Not changed because we've already updated.
-				assert.Equal(t, 1, pp.ConfigUpdateNumber)
-				return
-			}
-			assert.NotEqual(t, 6, v.ConfigUpdateNumber)
-			assert.Equal(t, 6, pp.ConfigUpdateNumber)
-		})
-	}
 }
 
 func TestAddDependencies(t *testing.T) {

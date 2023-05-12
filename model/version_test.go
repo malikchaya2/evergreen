@@ -1,6 +1,7 @@
 package model
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"sort"
@@ -50,21 +51,17 @@ func TestLastKnownGoodConfig(t *testing.T) {
 				Identifier:          identifier,
 				Requester:           evergreen.RepotrackerVersionRequester,
 				RevisionOrderNumber: 1,
-				Config:              "1",
 			}
 			require.NoError(t, v.Insert(), "Error inserting test version: %s", v.Id)
 			v.Id = "5"
 			v.RevisionOrderNumber = 5
-			v.Config = "5"
 			require.NoError(t, v.Insert(), "Error inserting test version: %s", v.Id)
 			v.Id = "2"
 			v.RevisionOrderNumber = 2
-			v.Config = "2"
 			require.NoError(t, v.Insert(), "Error inserting test version: %s", v.Id)
 			lastGood, err := FindVersionByLastKnownGoodConfig(identifier, -1)
 			require.NoError(t, err, "error finding last known good: %s", v.Id)
 			So(lastGood, ShouldNotBeNil)
-			So(lastGood.Config, ShouldEqual, "5")
 		})
 		Reset(func() {
 			So(db.Clear(VersionCollection), ShouldBeNil)
@@ -449,7 +446,8 @@ func TestGetMainlineCommitVersionsWithOptions(t *testing.T) {
 		Limit:      4,
 		Requesters: evergreen.SystemVersionRequesterTypes,
 	}
-	versions, err := GetMainlineCommitVersionsWithOptions(p.Id, opts)
+	ctx := context.TODO()
+	versions, err := GetMainlineCommitVersionsWithOptions(ctx, p.Id, opts)
 	assert.NoError(t, err)
 	assert.Len(t, versions, 4)
 	assert.EqualValues(t, "my_version", versions[0].Id)
@@ -462,7 +460,7 @@ func TestGetMainlineCommitVersionsWithOptions(t *testing.T) {
 		SkipOrderNumber: 10,
 		Requesters:      evergreen.SystemVersionRequesterTypes,
 	}
-	versions, err = GetMainlineCommitVersionsWithOptions(p.Id, opts)
+	versions, err = GetMainlineCommitVersionsWithOptions(ctx, p.Id, opts)
 	assert.NoError(t, err)
 	assert.Len(t, versions, 3)
 	assert.EqualValues(t, "your_version", versions[0].Id)
@@ -474,7 +472,7 @@ func TestGetMainlineCommitVersionsWithOptions(t *testing.T) {
 		SkipOrderNumber: 8,
 		Requesters:      evergreen.SystemVersionRequesterTypes,
 	}
-	versions, err = GetMainlineCommitVersionsWithOptions(p.Id, opts)
+	versions, err = GetMainlineCommitVersionsWithOptions(ctx, p.Id, opts)
 	assert.NoError(t, err)
 	assert.Len(t, versions, 1)
 	assert.EqualValues(t, "yet_another_version", versions[0].Id)
@@ -483,7 +481,7 @@ func TestGetMainlineCommitVersionsWithOptions(t *testing.T) {
 		Limit:      4,
 		Requesters: []string{"Not a real requester"},
 	}
-	versions, err = GetMainlineCommitVersionsWithOptions(p.Id, opts)
+	versions, err = GetMainlineCommitVersionsWithOptions(ctx, p.Id, opts)
 	assert.Nil(t, versions)
 	assert.Error(t, err)
 	assert.Contains(t, err.Error(), fmt.Sprintf("invalid requesters %s", opts.Requesters))
@@ -533,63 +531,60 @@ func TestGetPreviousPageCommit(t *testing.T) {
 		CreateTime:          start.Add(-2 * time.Minute),
 	}
 	assert.NoError(t, v.Insert())
+	ctx := context.TODO()
 	// If you are viewing the latest commit it should return nil to indicate that there is no previous page.
-	orderNumber, err := GetPreviousPageCommitOrderNumber(p.Id, 10, 2, evergreen.SystemVersionRequesterTypes)
+	orderNumber, err := GetPreviousPageCommitOrderNumber(ctx, p.Id, 10, 2, evergreen.SystemVersionRequesterTypes)
 	assert.NoError(t, err)
 	assert.Nil(t, orderNumber)
 	// If you are viewing a commit it should return the previous activated version that is LIMIT versions ago.
-	orderNumber, err = GetPreviousPageCommitOrderNumber(p.Id, 7, 2, evergreen.SystemVersionRequesterTypes)
+	orderNumber, err = GetPreviousPageCommitOrderNumber(ctx, p.Id, 7, 2, evergreen.SystemVersionRequesterTypes)
 	assert.NoError(t, err)
 	assert.NotNil(t, orderNumber)
 	assert.Equal(t, 10, utility.FromIntPtr(orderNumber))
 	// If the previous pages activated version is the latest it should return 0.
-	orderNumber, err = GetPreviousPageCommitOrderNumber(p.Id, 9, 2, evergreen.SystemVersionRequesterTypes)
+	orderNumber, err = GetPreviousPageCommitOrderNumber(ctx, p.Id, 9, 2, evergreen.SystemVersionRequesterTypes)
 	assert.NoError(t, err)
 	assert.NotNil(t, orderNumber)
 	assert.Equal(t, 0, utility.FromIntPtr(orderNumber))
 }
 
-func TestVersionSetNotActivated(t *testing.T) {
+func TestUpdateProjectStorageMethod(t *testing.T) {
 	defer func() {
 		assert.NoError(t, db.ClearCollections(VersionCollection))
 	}()
-	checkInactive := func(t *testing.T, versionID string) {
-		dbVersion, err := VersionFindOneId(versionID)
-		require.NoError(t, err)
-		require.NotZero(t, dbVersion)
-		assert.False(t, utility.FromBoolPtr(dbVersion.Activated))
-	}
-	for tName, tCase := range map[string]func(t *testing.T, v Version){
-		"DoesNotModifyDefaultInactiveVersion": func(t *testing.T, v Version) {
-			require.NoError(t, v.Insert())
 
-			require.NoError(t, v.SetNotActivated())
+	for tName, tCase := range map[string]func(t *testing.T, v *Version){
+		"ChangesProjectStorageMethod": func(t *testing.T, v *Version) {
+			assert.NoError(t, v.UpdateProjectStorageMethod(evergreen.ProjectStorageMethodS3))
 
-			checkInactive(t, v.Id)
+			assert.Equal(t, evergreen.ProjectStorageMethodS3, v.ProjectStorageMethod)
+
+			dbVersion, err := VersionFindOneId(v.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbVersion)
+			assert.Equal(t, evergreen.ProjectStorageMethodS3, dbVersion.ProjectStorageMethod)
 		},
-		"DeactivatesActiveVersion": func(t *testing.T, v Version) {
-			v.Activated = utility.TruePtr()
-			require.NoError(t, v.Insert())
+		"NoopsWhenVersionStorageMethodIsIdentical": func(t *testing.T, v *Version) {
+			v.ProjectStorageMethod = evergreen.ProjectStorageMethodS3
+			assert.NoError(t, v.UpdateProjectStorageMethod(evergreen.ProjectStorageMethodS3))
 
-			require.NoError(t, v.SetNotActivated())
+			assert.Equal(t, evergreen.ProjectStorageMethodS3, v.ProjectStorageMethod)
 
-			checkInactive(t, v.Id)
-		},
-		"PreservesAlreadyInactiveVersion": func(t *testing.T, v Version) {
-			v.Activated = utility.FalsePtr()
-			require.NoError(t, v.Insert())
-
-			require.NoError(t, v.SetNotActivated())
-
-			checkInactive(t, v.Id)
+			dbVersion, err := VersionFindOneId(v.Id)
+			require.NoError(t, err)
+			require.NotZero(t, dbVersion)
+			assert.Equal(t, evergreen.ProjectStorageMethodDB, dbVersion.ProjectStorageMethod)
 		},
 	} {
 		t.Run(tName, func(t *testing.T) {
-			require.NoError(t, db.ClearCollections(VersionCollection))
+			assert.NoError(t, db.ClearCollections(VersionCollection))
 			v := Version{
-				Id: "versionID",
+				Id:                   "id",
+				ProjectStorageMethod: evergreen.ProjectStorageMethodDB,
 			}
-			tCase(t, v)
+			require.NoError(t, v.Insert())
+
+			tCase(t, &v)
 		})
 	}
 

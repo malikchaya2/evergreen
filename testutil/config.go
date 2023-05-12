@@ -16,7 +16,9 @@ import (
 var ExecutionEnvironmentType = "production"
 
 const (
-	TestDir                    = "config_test"
+	TestDir = "config_test"
+	// TestSettings contains the default admin settings suitable for testing
+	// that depends on the global environment.
 	TestSettings               = "evg_settings.yml"
 	testSettingsWithAuthTokens = "evg_settings_with_3rd_party_defaults.yml"
 )
@@ -41,6 +43,7 @@ func Setup() {
 
 		path := filepath.Join(evergreen.FindEvergreenHome(), TestDir, TestSettings)
 		env, err := evergreen.NewEnvironment(ctx, path, nil)
+
 		grip.EmergencyPanic(message.WrapError(err, message.Fields{
 			"message": "could not initialize test environment",
 			"path":    filepath.Join(evergreen.FindEvergreenHome(), TestDir, TestSettings),
@@ -94,9 +97,14 @@ func MockConfig() *evergreen.Settings {
 			},
 		},
 		Amboy: evergreen.AmboyConfig{
-			Name:                                  "amboy",
-			SingleName:                            "single",
-			DB:                                    "db",
+			Name:       "amboy",
+			SingleName: "single",
+			DBConnection: evergreen.AmboyDBConfig{
+				Database: "db",
+				URL:      "mongodb://localhost:27017",
+				Username: "user",
+				Password: "password",
+			},
 			PoolSizeLocal:                         10,
 			PoolSizeRemote:                        20,
 			LocalStorage:                          30,
@@ -124,6 +132,10 @@ func MockConfig() *evergreen.Settings {
 				{
 					Name:       "queue1",
 					SampleSize: 500,
+				},
+				{
+					Regexp:             "^queue2",
+					LockTimeoutSeconds: 50,
 				},
 			},
 		},
@@ -165,8 +177,15 @@ func MockConfig() *evergreen.Settings {
 			PreferredType:           evergreen.AuthLDAPKey,
 			BackgroundReauthMinutes: 60,
 		},
-		Banner:            "banner",
-		BannerTheme:       "important",
+		AWSInstanceRole: "role",
+		Banner:          "banner",
+		BannerTheme:     "important",
+		Cedar: evergreen.CedarConfig{
+			BaseURL: "url.com",
+			RPCPort: "7070",
+			User:    "cedar-user",
+			APIKey:  "cedar-key",
+		},
 		ClientBinariesDir: "bin_dir",
 		CommitQueue: evergreen.CommitQueueConfig{
 			MergeTaskDistro: "distro",
@@ -184,7 +203,14 @@ func MockConfig() *evergreen.Settings {
 				},
 			},
 		},
-		Credentials:        map[string]string{"k1": "v1"},
+		Credentials: map[string]string{"k1": "v1"},
+		DataPipes: evergreen.DataPipesConfig{
+			Host:         "url",
+			Region:       "us-east-1",
+			AWSAccessKey: "access",
+			AWSSecretKey: "secret",
+			AWSToken:     "token",
+		},
 		DomainName:         "example.com",
 		Expansions:         map[string]string{"k2": "v2"},
 		GithubPRCreatorOrg: "org",
@@ -238,11 +264,24 @@ func MockConfig() *evergreen.Settings {
 			},
 		},
 		Plugins: map[string]map[string]interface{}{"k4": {"k5": "v5"}},
-		PodInit: evergreen.PodInitConfig{
-			S3BaseURL:              "s3_base_url",
-			MaxParallelPodRequests: 2000,
+		PodLifecycle: evergreen.PodLifecycleConfig{
+			S3BaseURL:                   "s3_base_url",
+			MaxParallelPodRequests:      2000,
+			MaxPodDefinitionCleanupRate: 100,
+			MaxSecretCleanupRate:        200,
 		},
 		PprofPort: "port",
+		ProjectCreation: evergreen.ProjectCreationConfig{
+			TotalProjectLimit: 400,
+			RepoProjectLimit:  10,
+			JiraProject:       "EVG",
+			RepoExceptions: []evergreen.OwnerRepo{
+				{
+					Owner: "owner",
+					Repo:  "repo",
+				},
+			},
+		},
 		Providers: evergreen.CloudProviders{
 			AWS: evergreen.AWSConfig{
 				EC2Keys: []evergreen.EC2Key{
@@ -254,6 +293,14 @@ func MockConfig() *evergreen.Settings {
 				},
 				DefaultSecurityGroup: "test_security_group",
 				MaxVolumeSizePerUser: 200,
+				ParserProject: evergreen.ParserProjectS3Config{
+					S3Credentials: evergreen.S3Credentials{
+						Key:    "parser_project_key",
+						Secret: "parser_project_secret",
+						Bucket: "parser_project_bucket",
+					},
+					Prefix: "parser_project_prefix",
+				},
 				S3: evergreen.S3Credentials{
 					Key:    "s3_key",
 					Secret: "s3_secret",
@@ -273,24 +320,39 @@ func MockConfig() *evergreen.Settings {
 					Role:   "role",
 					Region: "region",
 					ECS: evergreen.ECSConfig{
+						MaxCPU:               2048,
+						MaxMemoryMB:          4096,
 						TaskDefinitionPrefix: "ecs_prefix",
 						TaskRole:             "task_role",
 						ExecutionRole:        "execution_role",
+						LogRegion:            "log_region",
+						LogStreamPrefix:      "log_stream_prefix",
+						LogGroup:             "log_group",
 						AWSVPC: evergreen.AWSVPCConfig{
 							Subnets:        []string{"subnet-12345"},
 							SecurityGroups: []string{"sg-12345"},
 						},
 						Clusters: []evergreen.ECSClusterConfig{
 							{
-								Name: "cluster_name",
+								Name: "linux_cluster_name",
+								OS:   evergreen.ECSOSLinux,
+							},
+							{
+								Name: "windows_cluster_name",
 								OS:   evergreen.ECSOSLinux,
 							},
 						},
 						CapacityProviders: []evergreen.ECSCapacityProvider{
 							{
-								Name: "capacity_provider_name",
+								Name: "linux_capacity_provider_name",
 								OS:   evergreen.ECSOSLinux,
 								Arch: evergreen.ECSArchAMD64,
+							},
+							{
+								Name:           "windows_capacity_provider_name",
+								OS:             evergreen.ECSOSWindows,
+								Arch:           evergreen.ECSArchAMD64,
+								WindowsVersion: evergreen.ECSWindowsServer2022,
 							},
 						},
 					},
@@ -355,6 +417,7 @@ func MockConfig() *evergreen.Settings {
 			UnrecognizedPodCleanupDisabled:  true,
 			CloudCleanupDisabled:            true,
 			ContainerConfigurationsDisabled: true,
+			LegacyUIPublicAccessDisabled:    true,
 		},
 		SSHKeyDirectory: "/ssh_key_directory",
 		SSHKeyPairs: []evergreen.SSHKeyPair{
@@ -372,11 +435,14 @@ func MockConfig() *evergreen.Settings {
 			},
 			Token: "token",
 			Level: "info",
+			Name:  "name",
 		},
-		Splunk: send.SplunkConnectionInfo{
-			ServerURL: "server",
-			Token:     "token",
-			Channel:   "channel",
+		Splunk: evergreen.SplunkConfig{
+			SplunkConnectionInfo: send.SplunkConnectionInfo{
+				ServerURL: "server",
+				Token:     "token",
+				Channel:   "channel",
+			},
 		},
 		Triggers: evergreen.TriggerConfig{
 			GenerateTaskDistro: "distro",
@@ -394,6 +460,10 @@ func MockConfig() *evergreen.Settings {
 			SpawnHostsPerUser:         5,
 			UnexpirableHostsPerUser:   2,
 			UnexpirableVolumesPerUser: 2,
+		},
+		Tracer: evergreen.TracerConfig{
+			Enabled:           true,
+			CollectorEndpoint: "localhost:4317",
 		},
 		ShutdownWaitSeconds: 15,
 	}

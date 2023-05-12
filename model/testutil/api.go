@@ -2,7 +2,7 @@ package testutil
 
 import (
 	"context"
-	"io/ioutil"
+	"os"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
@@ -13,6 +13,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/manifest"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/util"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -47,7 +48,7 @@ func SetupAPITestData(testConfig *evergreen.Settings, taskDisplayName string, va
 
 	modelData := &TestModelData{}
 
-	projectConfig, err := ioutil.ReadFile(projectFile)
+	projectConfig, err := os.ReadFile(projectFile)
 	if err != nil {
 		return nil, errors.Wrap(err, "reading project config")
 	}
@@ -69,7 +70,8 @@ func SetupAPITestData(testConfig *evergreen.Settings, taskDisplayName string, va
 	bv := model.BuildVariant{
 		Name: variant,
 		Tasks: []model.BuildVariantTaskUnit{{
-			Name: taskDisplayName,
+			Name:    taskDisplayName,
+			Variant: variant,
 		}},
 	}
 	project.BuildVariants = append(project.BuildVariants, bv)
@@ -83,7 +85,7 @@ func SetupAPITestData(testConfig *evergreen.Settings, taskDisplayName string, va
 		Owner:     project.Owner,
 		Repo:      project.Repo,
 		Branch:    project.Branch,
-		Enabled:   &project.Enabled,
+		Enabled:   project.Enabled,
 		BatchTime: project.BatchTime,
 	}
 	if err = projectRef.Insert(); err != nil {
@@ -95,10 +97,18 @@ func SetupAPITestData(testConfig *evergreen.Settings, taskDisplayName string, va
 		Id:         "sample_version",
 		Identifier: project.DisplayName,
 		Requester:  evergreen.RepotrackerVersionRequester,
-		Config:     string(projectConfig),
 	}
 	if err = version.Insert(); err != nil {
 		return nil, errors.Wrap(err, "inserting version")
+	}
+
+	versionParserProject := &model.ParserProject{}
+	if err = util.UnmarshalYAMLWithFallback(projectConfig, &versionParserProject); err != nil {
+		return nil, errors.Wrap(err, "unmarshalling project config from YAML")
+	}
+	versionParserProject.Id = "sample_version"
+	if err = versionParserProject.Insert(); err != nil {
+		return nil, errors.Wrap(err, "inserting parser project")
 	}
 
 	// Save the project variables
@@ -197,7 +207,7 @@ func SetupAPITestData(testConfig *evergreen.Settings, taskDisplayName string, va
 	}
 	modelData.Build = build
 
-	workDir, err := ioutil.TempDir("", "agent_test_")
+	workDir, err := os.MkdirTemp("", "agent_test_")
 	if err != nil {
 		return nil, errors.Wrap(err, "creating working directory")
 	}

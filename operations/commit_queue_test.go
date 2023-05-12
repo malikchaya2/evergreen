@@ -3,7 +3,7 @@ package operations
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"os"
 	"testing"
 	"time"
@@ -42,7 +42,7 @@ func TestCommitQueueSuite(t *testing.T) {
 	defer func() {
 		evergreen.SetEnvironment(originalEnv)
 	}()
-	testutil.ConfigureIntegrationTest(t, testConfig, "TestCommitQueueSuite")
+	testutil.ConfigureIntegrationTest(t, testConfig, t.Name())
 	require.NoError(t, testConfig.Set())
 	suite.Run(t, new(CommitQueueSuite))
 }
@@ -61,7 +61,7 @@ func (s *CommitQueueSuite) SetupSuite() {
 		APIKey:        "testapikey",
 		User:          "testuser",
 	}
-	settingsFile, err := ioutil.TempFile("", "settings")
+	settingsFile, err := os.CreateTemp("", "settings")
 	s.Require().NoError(err)
 	settingsBytes, err := yaml.Marshal(settings)
 	s.Require().NoError(err)
@@ -70,7 +70,8 @@ func (s *CommitQueueSuite) SetupSuite() {
 	s.Require().NoError(settingsFile.Close())
 	s.conf, err = NewClientSettings(settingsFile.Name())
 	s.Require().NoError(err)
-	s.client = s.conf.setupRestCommunicator(s.ctx)
+	s.client, err = s.conf.setupRestCommunicator(s.ctx, true)
+	s.Require().NoError(err)
 }
 
 func (s *CommitQueueSuite) TearDownSuite() {
@@ -135,7 +136,7 @@ func (s *CommitQueueSuite) TestListContentsForCLI() {
 	s.NoError(listCommitQueue(s.ctx, s.client, ac, "mci", s.conf.UIServerHost))
 	s.NoError(w.Close())
 	os.Stdout = origStdout
-	out, _ := ioutil.ReadAll(r)
+	out, _ := io.ReadAll(r)
 	stringOut := string(out[:])
 
 	s.Contains(stringOut, "Project: mci")
@@ -188,12 +189,12 @@ func (s *CommitQueueSuite) TestListContentsMissingPatch() {
 	s.NoError(listCommitQueue(s.ctx, s.client, ac, "mci", s.conf.UIServerHost))
 	s.NoError(w.Close())
 	os.Stdout = origStdout
-	out, _ := ioutil.ReadAll(r)
+	out, _ := io.ReadAll(r)
 	stringOut := string(out[:])
 
 	s.Contains(stringOut, "Project: mci")
 	s.Contains(stringOut, "0:")
-	s.Contains(stringOut, fmt.Sprintf("Error getting patch for issue '%s'", fakeIssue))
+	s.Contains(stringOut, fmt.Sprintf("getting patch for issue '%s'", fakeIssue))
 	s.Contains(stringOut, fmt.Sprintf("ID : %s", p1.Id.Hex()))
 }
 
@@ -218,7 +219,7 @@ func (s *CommitQueueSuite) TestListContentsForPRs() {
 	}
 	s.Require().NoError(commitqueue.InsertQueue(cq))
 	cq.Queue[0].Version = "my_version"
-	s.NoError(cq.UpdateVersion(cq.Queue[0]))
+	s.NoError(cq.UpdateVersion(&cq.Queue[0]))
 	pRef := &model.ProjectRef{
 		Id:    "mci",
 		Owner: "evergreen-ci",
@@ -236,7 +237,7 @@ func (s *CommitQueueSuite) TestListContentsForPRs() {
 	s.NoError(listCommitQueue(s.ctx, s.client, ac, "mci", s.conf.UIServerHost))
 	s.NoError(w.Close())
 	os.Stdout = origStdout
-	out, _ := ioutil.ReadAll(r)
+	out, _ := io.ReadAll(r)
 	stringOut := string(out[:])
 
 	s.Contains(stringOut, "Project: mci")
@@ -294,7 +295,7 @@ func (s *CommitQueueSuite) TestListContentsWithModule() {
 	s.NoError(listCommitQueue(s.ctx, s.client, ac, "mci", s.conf.UIServerHost))
 	s.NoError(w.Close())
 	os.Stdout = origStdout
-	out, _ := ioutil.ReadAll(r)
+	out, _ := io.ReadAll(r)
 	stringOut := string(out[:])
 
 	s.Contains(stringOut, "Project: mci")
@@ -313,16 +314,18 @@ func (s *CommitQueueSuite) TestDeleteCommitQueueItem() {
 		Queue: []commitqueue.CommitQueueItem{
 			{
 				Issue:   validId,
+				PatchId: validId,
 				Source:  commitqueue.SourceDiff,
-				Version: validId,
 			},
 			{
-				Issue:  bson.NewObjectId().Hex(),
-				Source: commitqueue.SourceDiff,
+				Issue:   bson.NewObjectId().Hex(),
+				PatchId: bson.NewObjectId().Hex(),
+				Source:  commitqueue.SourceDiff,
 			},
 			{
-				Issue:  bson.NewObjectId().Hex(),
-				Source: commitqueue.SourceDiff,
+				Issue:   bson.NewObjectId().Hex(),
+				PatchId: bson.NewObjectId().Hex(),
+				Source:  commitqueue.SourceDiff,
 			},
 		},
 	}
@@ -352,7 +355,7 @@ func (s *CommitQueueSuite) TestDeleteCommitQueueItem() {
 	s.NoError(deleteCommitQueueItem(s.ctx, s.client, validId))
 	s.NoError(w.Close())
 	os.Stdout = origStdout
-	out, _ := ioutil.ReadAll(r)
+	out, _ := io.ReadAll(r)
 	stringOut := string(out[:])
 
 	s.Contains(stringOut, fmt.Sprintf("Item '%s' deleted", validId))

@@ -2,13 +2,13 @@ package repotracker
 
 import (
 	"context"
-	"fmt"
 	"testing"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/db/mgo/bson"
+	"github.com/evergreen-ci/evergreen/mock"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/build"
 	"github.com/evergreen-ci/evergreen/model/distro"
@@ -25,11 +25,13 @@ import (
 	"github.com/stretchr/testify/suite"
 )
 
+func init() { testutil.Setup() }
+
 func TestFetchRevisions(t *testing.T) {
 	dropTestDB(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	testutil.ConfigureIntegrationTest(t, testConfig, "TestFetchRevisions")
+	testutil.ConfigureIntegrationTest(t, testConfig, t.Name())
 	defer cancel()
 	Convey("With a GithubRepositoryPoller with a valid OAuth token...", t, func() {
 		err := modelutil.CreateTestLocalConfig(testConfig, "mci-test", "")
@@ -280,6 +282,7 @@ buildvariants:
   - name: t1
     batchtime: 30
   - name: t2
+  - name: t3
 - name: bv2
   display_name: bv2_display
   run_on: d2
@@ -287,7 +290,10 @@ buildvariants:
   - name: t1
 tasks:
 - name: t1
+  priority: 3
 - name: t2
+  priority: -1
+- name: t3
 `
 
 	previouslyActivatedVersion := &model.Version{
@@ -344,7 +350,7 @@ tasks:
 		},
 		NewMockRepoPoller(pp, revisions),
 	}
-	assert.NoError(t, repoTracker.StoreRevisions(context.TODO(), revisions))
+	assert.NoError(t, repoTracker.StoreRevisions(ctx, revisions))
 	v, err := model.VersionFindOne(model.VersionByMostRecentSystemRequester("testproject"))
 	assert.NoError(t, err)
 	assert.NotNil(t, v)
@@ -355,7 +361,7 @@ tasks:
 	assert.Len(t, bv.BatchTimeTasks, 1)
 	assert.False(t, bv.BatchTimeTasks[0].Activated)
 
-	// should activate build variants and tasks except for the batchtime task
+	// should activate build variants and tasks except for the batchtime task and the task with a negative priority
 	ok, err := model.ActivateElapsedBuildsAndTasks(v)
 	assert.NoError(t, err)
 	assert.True(t, ok)
@@ -369,10 +375,28 @@ tasks:
 	build1, err := build.FindOneId(bv.BuildId)
 	assert.NoError(t, err)
 
+	// neither batchtime task nor disabled task should be activated
+	tasks, err := task.Find(task.ByBuildId(build1.Id))
+	assert.NoError(t, err)
+	assert.Len(t, tasks, 3)
+	for _, tsk := range tasks {
+		if tsk.DisplayName == "t1" {
+			assert.False(t, tsk.Activated)
+		}
+		if tsk.DisplayName == "t2" {
+			assert.False(t, tsk.Activated)
+		}
+		if tsk.DisplayName == "t3" {
+			assert.True(t, tsk.Activated)
+		}
+	}
+
 	// now we should update just the task even though the build is activated already
 	for i, bv := range v.BuildVariants {
 		if bv.BuildVariant == "bv1" {
-			v.BuildVariants[i].BatchTimeTasks[0].ActivateAt = time.Now()
+			// Set the activation time before the current timestamp to ensure
+			// that it is already elapsed.
+			v.BuildVariants[i].BatchTimeTasks[0].ActivateAt = time.Now().Add(-time.Millisecond)
 		}
 	}
 	ok, err = model.ActivateElapsedBuildsAndTasks(v)
@@ -652,7 +676,7 @@ func createTestProject(override1, override2 *int) *model.ParserProject {
 	pp.AddBuildVariant("bv2", "bv2", "", override2, []string{"t1"})
 	pp.BuildVariants[1].Tasks[0].RunOn = []string{"test-distro-one"}
 
-	pp.AddTask("t1", []model.PluginCommandConf{model.PluginCommandConf{
+	pp.AddTask("t1", []model.PluginCommandConf{{
 		Command: "shell.exec",
 		Params: map[string]interface{}{
 			"script": "echo hi",
@@ -700,14 +724,15 @@ func TestBuildBreakSubscriptions(t *testing.T) {
 	proj2 := model.ProjectRef{
 		Id:                   "proj2",
 		NotifyOnBuildFailure: utility.TruePtr(),
-		Admins:               []string{"u2", "u3"},
+		Admins:               []string{"u2", "u3", "u4"},
 	}
 	u2 := user.DBUser{
 		Id:           "u2",
 		EmailAddress: "shaw@blizzard.com",
 		Settings: user.UserSettings{
+			SlackUsername: "hello.itsme",
 			Notifications: user.NotificationPreferences{
-				BuildBreak: user.PreferenceEmail,
+				BuildBreak: user.PreferenceSlack,
 			},
 		},
 	}
@@ -722,13 +747,6 @@ func TestBuildBreakSubscriptions(t *testing.T) {
 		},
 	}
 	assert.NoError(u3.Insert())
-	assert.NoError(AddBuildBreakSubscriptions(&v1, &proj2))
-	assert.NoError(db.FindAllQ(event.SubscriptionsCollection, db.Q{}, &subs))
-	assert.Len(subs, 2)
-
-	// project has it enabled, but user doesn't want notifications
-	subs = []event.Subscription{}
-	assert.NoError(db.Clear(event.SubscriptionsCollection))
 	u4 := user.DBUser{
 		Id:           "u4",
 		EmailAddress: "rehgar@blizzard.com",
@@ -737,15 +755,25 @@ func TestBuildBreakSubscriptions(t *testing.T) {
 		},
 	}
 	assert.NoError(u4.Insert())
+	assert.NoError(AddBuildBreakSubscriptions(&v1, &proj2))
+	assert.NoError(db.FindAllQ(event.SubscriptionsCollection, db.Q{}, &subs))
+	assert.Len(subs, 2)
+
+	// project has it enabled, but user doesn't want notifications
+	subs = []event.Subscription{}
+	assert.NoError(db.Clear(event.SubscriptionsCollection))
 	v3 := model.Version{
 		Id:         "v3",
-		Identifier: proj1.Id,
+		Identifier: proj2.Id,
 		Requester:  evergreen.RepotrackerVersionRequester,
 		Branch:     "branch",
 		AuthorID:   u4.Id,
 	}
 	assert.NoError(AddBuildBreakSubscriptions(&v3, &proj2))
 	assert.NoError(db.FindAllQ(event.SubscriptionsCollection, db.Q{}, &subs))
+	targetString, ok := subs[0].Subscriber.Target.(*string)
+	assert.True(ok)
+	assert.EqualValues("@hello.itsme", utility.FromStringPtr(targetString))
 	assert.Len(subs, 2)
 }
 
@@ -754,6 +782,9 @@ type CreateVersionFromConfigSuite struct {
 	rev           *model.Revision
 	d             *distro.Distro
 	sourceVersion *model.Version
+	ctx           context.Context
+	cancel        context.CancelFunc
+	env           evergreen.Environment
 	suite.Suite
 }
 
@@ -769,7 +800,7 @@ func (s *CreateVersionFromConfigSuite) SetupTest() {
 		Id:         "mci",
 		Branch:     "main",
 		RemotePath: "self-tests.yml",
-		Enabled:    utility.TruePtr(),
+		Enabled:    true,
 	}
 	s.rev = &model.Revision{
 		Author:          "me",
@@ -786,6 +817,14 @@ func (s *CreateVersionFromConfigSuite) SetupTest() {
 		Revision: "abc",
 	}
 	s.NoError(s.d.Insert())
+	s.ctx, s.cancel = context.WithCancel(context.Background())
+	env := &mock.Environment{}
+	s.Require().NoError(env.Configure(s.ctx))
+	s.env = env
+}
+
+func (s *CreateVersionFromConfigSuite) TearDownTest() {
+	s.cancel()
 }
 
 func (s *CreateVersionFromConfigSuite) TestCreateBasicVersion() {
@@ -802,23 +841,29 @@ tasks:
 - name: task2
 `
 	p := &model.Project{}
-	ctx := context.Background()
-	pp, err := model.LoadProjectInto(ctx, []byte(configYml), nil, s.ref.Id, p)
+	pp, err := model.LoadProjectInto(s.ctx, []byte(configYml), nil, s.ref.Id, p)
 	s.NoError(err)
 	projectInfo := &model.ProjectInfo{
 		Ref:                 s.ref,
 		IntermediateProject: pp,
 		Project:             p,
 	}
-	v, err := CreateVersionFromConfig(context.Background(), projectInfo, model.VersionMetadata{Revision: *s.rev, SourceVersion: s.sourceVersion}, false, nil)
+	v, err := CreateVersionFromConfig(s.ctx, projectInfo, model.VersionMetadata{Revision: *s.rev, SourceVersion: s.sourceVersion}, false, nil)
 	s.NoError(err)
 	s.Require().NotNil(v)
 
 	dbVersion, err := model.VersionFindOneId(v.Id)
 	s.NoError(err)
-	s.Equal(v.Config, dbVersion.Config)
 	s.Equal(evergreen.VersionCreated, dbVersion.Status)
 	s.Equal(s.rev.RevisionMessage, dbVersion.Message)
+	s.Equal(evergreen.ProjectStorageMethodDB, dbVersion.ProjectStorageMethod, "storage method should initially be DB for new versions")
+
+	s.Equal(evergreen.ProjectStorageMethodDB, dbVersion.ProjectStorageMethod)
+	dbParserProject, err := model.ParserProjectFindOneByID(s.ctx, s.env.Settings(), dbVersion.ProjectStorageMethod, dbVersion.Id)
+	s.Require().NoError(err)
+	s.Require().NotZero(dbParserProject)
+	s.Len(dbParserProject.BuildVariants, 1)
+	s.Len(dbParserProject.Tasks, 2)
 
 	s.Equal(false, utility.FromBoolPtr(dbVersion.Activated))
 	dbBuild, err := build.FindOneId(v.BuildIds[0])
@@ -846,28 +891,31 @@ tasks:
   exec_timeout_secs: 3
 `
 	p := &model.Project{}
-	ctx := context.Background()
-	pp, err := model.LoadProjectInto(ctx, []byte(configYml), nil, s.ref.Id, p)
+	pp, err := model.LoadProjectInto(s.ctx, []byte(configYml), nil, s.ref.Id, p)
 	s.NoError(err)
 	projectInfo := &model.ProjectInfo{
 		Ref:                 s.ref,
 		IntermediateProject: pp,
 		Project:             p,
 	}
-	v, err := CreateVersionFromConfig(context.Background(), projectInfo, model.VersionMetadata{Revision: *s.rev}, false, nil)
+	v, err := CreateVersionFromConfig(s.ctx, projectInfo, model.VersionMetadata{Revision: *s.rev}, false, nil)
 	s.NoError(err)
 	s.Require().NotNil(v)
 
 	dbVersion, err := model.VersionFindOneId(v.Id)
 	s.NoError(err)
-	s.Equal(v.Config, dbVersion.Config)
-	fmt.Println(dbVersion.Errors)
-	fmt.Println(dbVersion.Warnings)
 	s.Require().Len(dbVersion.Errors, 1)
 	s.Require().Len(dbVersion.Warnings, 2)
 	s.Equal("buildvariant 'bv' must either specify run_on field or have every task specify run_on", dbVersion.Errors[0])
 	s.Equal("task 'task1' does not contain any commands", dbVersion.Warnings[0])
 	s.Equal("task 'task2' does not contain any commands", dbVersion.Warnings[1])
+
+	s.Equal(evergreen.ProjectStorageMethodDB, dbVersion.ProjectStorageMethod)
+	dbParserProject, err := model.ParserProjectFindOneByID(s.ctx, s.env.Settings(), dbVersion.ProjectStorageMethod, dbVersion.Id)
+	s.Require().NoError(err)
+	s.Require().NotZero(dbParserProject)
+	s.Len(dbParserProject.BuildVariants, 1)
+	s.Len(dbParserProject.Tasks, 2)
 
 	dbBuild, err := build.FindOne(build.ByVersion(v.Id))
 	s.NoError(err)
@@ -901,8 +949,7 @@ tasks:
       script: echo "test"
 `
 	p := &model.Project{}
-	ctx := context.Background()
-	pp, err := model.LoadProjectInto(ctx, []byte(configYml), nil, s.ref.Id, p)
+	pp, err := model.LoadProjectInto(s.ctx, []byte(configYml), nil, s.ref.Id, p)
 	s.NoError(err)
 	vErrs := VersionErrors{
 		Errors:   []string{"err1"},
@@ -913,15 +960,21 @@ tasks:
 		IntermediateProject: pp,
 		Project:             p,
 	}
-	v, err := CreateVersionFromConfig(context.Background(), projectInfo, model.VersionMetadata{Revision: *s.rev}, false, &vErrs)
+	v, err := CreateVersionFromConfig(s.ctx, projectInfo, model.VersionMetadata{Revision: *s.rev}, false, &vErrs)
 	s.NoError(err)
 	s.Require().NotNil(v)
 
 	dbVersion, err := model.VersionFindOneId(v.Id)
 	s.NoError(err)
-	s.Equal(v.Config, dbVersion.Config)
 	s.Len(dbVersion.Errors, 2)
 	s.Len(dbVersion.Warnings, 2)
+
+	s.Equal(evergreen.ProjectStorageMethodDB, dbVersion.ProjectStorageMethod)
+	dbParserProject, err := model.ParserProjectFindOneByID(s.ctx, s.env.Settings(), dbVersion.ProjectStorageMethod, dbVersion.Id)
+	s.Require().NoError(err)
+	s.Require().NotZero(dbParserProject)
+	s.Len(dbParserProject.BuildVariants, 1)
+	s.Len(dbParserProject.Tasks, 2)
 }
 
 func (s *CreateVersionFromConfigSuite) TestTransactionAbort() {
@@ -938,8 +991,7 @@ tasks:
 - name: task2
 `
 	p := &model.Project{}
-	ctx := context.Background()
-	pp, err := model.LoadProjectInto(ctx, []byte(configYml), nil, s.ref.Id, p)
+	pp, err := model.LoadProjectInto(s.ctx, []byte(configYml), nil, s.ref.Id, p)
 	s.NoError(err)
 	s.NotNil(pp)
 	//force a duplicate key error with the version
@@ -953,7 +1005,7 @@ tasks:
 		IntermediateProject: pp,
 		Project:             p,
 	}
-	v, err = CreateVersionFromConfig(context.Background(), projectInfo, model.VersionMetadata{Revision: *s.rev, SourceVersion: s.sourceVersion}, false, nil)
+	v, err = CreateVersionFromConfig(s.ctx, projectInfo, model.VersionMetadata{Revision: *s.rev, SourceVersion: s.sourceVersion}, false, nil)
 	s.Error(err)
 
 	tasks, err := task.Find(task.ByVersion(v.Id))
@@ -985,8 +1037,7 @@ tasks:
 - name: task3
 `
 	p := &model.Project{}
-	ctx := context.Background()
-	pp, err := model.LoadProjectInto(ctx, []byte(configYml), nil, s.ref.Id, p)
+	pp, err := model.LoadProjectInto(s.ctx, []byte(configYml), nil, s.ref.Id, p)
 	s.NoError(err)
 	projectInfo := &model.ProjectInfo{
 		Ref:                 s.ref,
@@ -997,7 +1048,7 @@ tasks:
 	now := time.Now()
 	tomorrow := now.Add(time.Hour * 24) // next day
 	y, m, d := tomorrow.Date()
-	v, err := CreateVersionFromConfig(context.Background(), projectInfo, metadata, false, nil)
+	v, err := CreateVersionFromConfig(s.ctx, projectInfo, metadata, false, nil)
 	s.NoError(err)
 	s.Require().NotNil(v)
 	s.Len(v.Errors, 0)
@@ -1047,8 +1098,7 @@ tasks:
 - name: task2
 `
 	p := &model.Project{}
-	ctx := context.Background()
-	pp, err := model.LoadProjectInto(ctx, []byte(configYml), nil, s.ref.Id, p)
+	pp, err := model.LoadProjectInto(s.ctx, []byte(configYml), nil, s.ref.Id, p)
 	s.NoError(err)
 	projectInfo := &model.ProjectInfo{
 		Ref:                 s.ref,
@@ -1062,14 +1112,13 @@ tasks:
 		Variant:   ".*",
 	}
 	s.NoError(alias.Upsert())
-	v, err := CreateVersionFromConfig(context.Background(), projectInfo, model.VersionMetadata{Revision: *s.rev, Alias: evergreen.GithubPRAlias}, false, nil)
+	v, err := CreateVersionFromConfig(s.ctx, projectInfo, model.VersionMetadata{Revision: *s.rev, Alias: evergreen.GithubPRAlias}, false, nil)
 	s.NoError(err)
 	s.Require().NotNil(v)
 
 	dbVersion, err := model.VersionFindOneId(v.Id)
 	s.NoError(err)
 	s.Require().NotNil(dbVersion)
-	s.Equal(v.Config, dbVersion.Config)
 	s.Equal(evergreen.VersionCreated, dbVersion.Status)
 	s.Equal(s.rev.RevisionMessage, dbVersion.Message)
 
@@ -1087,12 +1136,20 @@ tasks:
 func TestCreateManifest(t *testing.T) {
 	assert := assert.New(t)
 	settings := testutil.TestConfig()
-	testutil.ConfigureIntegrationTest(t, settings, "TestFetchRevisions")
+	testutil.ConfigureIntegrationTest(t, settings, t.Name())
 	// with a revision from 5/31/15
 	v := model.Version{
-		Id:         "v",
+		Id:         "aaaaaaaaaaff001122334455",
 		Revision:   "1bb42195fd415f144abbae509a5d5bef80d829b7",
 		Identifier: "proj",
+		Requester:  evergreen.RepotrackerVersionRequester,
+	}
+
+	patchVersion := model.Version{
+		Id:         "aaaaaaaaaaff001122334455",
+		Revision:   "1bb42195fd415f144abbae509a5d5bef80d829b7",
+		Identifier: "proj",
+		Requester:  evergreen.GithubPRRequester,
 	}
 
 	// no revision specified
@@ -1113,7 +1170,7 @@ func TestCreateManifest(t *testing.T) {
 		Branch: "main",
 	}
 
-	manifest, err := CreateManifest(v, &proj, projRef, settings)
+	manifest, err := model.CreateManifest(&v, &proj, projRef, settings)
 	assert.NoError(err)
 	assert.Equal(v.Id, manifest.Id)
 	assert.Equal(v.Revision, manifest.Revision)
@@ -1124,6 +1181,20 @@ func TestCreateManifest(t *testing.T) {
 	assert.Equal("main", module.Branch)
 	// the most recent module commit as of the version's revision (from 5/30/15)
 	assert.Equal("b27779f856b211ffaf97cbc124b7082a20ea8bc0", module.Revision)
+
+	proj.Modules[0].AutoUpdate = true
+	manifest, err = model.CreateManifest(&patchVersion, &proj, projRef, settings)
+	assert.NoError(err)
+	assert.Equal(patchVersion.Id, manifest.Id)
+	assert.Equal(patchVersion.Revision, manifest.Revision)
+	assert.Len(manifest.Modules, 1)
+	module, ok = manifest.Modules["module1"]
+	assert.True(ok)
+	assert.Equal("sample", module.Repo)
+	assert.Equal("main", module.Branch)
+	// a patch version should use the most recent module commit as of the current time
+	assert.NotNil(module.Revision)
+	assert.NotEqual("b27779f856b211ffaf97cbc124b7082a20ea8bc0", module.Revision)
 
 	// revision specified
 	hash := "cf46076567e4949f9fc68e0634139d4ac495c89b"
@@ -1138,7 +1209,7 @@ func TestCreateManifest(t *testing.T) {
 			},
 		},
 	}
-	manifest, err = CreateManifest(v, &proj, projRef, settings)
+	manifest, err = model.CreateManifest(&v, &proj, projRef, settings)
 	assert.NoError(err)
 	assert.Equal(v.Id, manifest.Id)
 	assert.Equal(v.Revision, manifest.Revision)
@@ -1163,7 +1234,7 @@ func TestCreateManifest(t *testing.T) {
 			},
 		},
 	}
-	manifest, err = CreateManifest(v, &proj, projRef, settings)
+	manifest, err = model.CreateManifest(&v, &proj, projRef, settings)
 	assert.Contains(err.Error(), "No commit found for SHA")
 }
 

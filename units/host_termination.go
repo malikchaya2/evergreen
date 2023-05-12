@@ -15,7 +15,6 @@ import (
 	"github.com/mongodb/amboy"
 	"github.com/mongodb/amboy/job"
 	"github.com/mongodb/amboy/registry"
-	adb "github.com/mongodb/anser/db"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
@@ -84,11 +83,11 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 	if j.host == nil {
 		j.host, err = host.FindOneId(j.HostID)
 		if err != nil {
-			j.AddError(errors.Wrapf(err, "error finding host '%s'", j.HostID))
+			j.AddError(errors.Wrapf(err, "finding host '%s'", j.HostID))
 			return
 		}
 		if j.host == nil {
-			j.AddError(fmt.Errorf("could not find host %s for job %s", j.HostID, j.TaskID))
+			j.AddError(errors.Errorf("could not find host '%s'", j.HostID))
 			return
 		}
 	}
@@ -114,7 +113,7 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 		idle, err = j.host.IsIdleParent()
 		if err != nil {
 			grip.Error(message.WrapError(err, message.Fields{
-				"message": "problem checking if host is an idle parent",
+				"message": "checking if host is an idle parent",
 				"host_id": j.host.Id,
 				"job":     j.ID(),
 			}))
@@ -153,7 +152,10 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 	// nor is the intent host associated with any instance in the cloud that
 	// we're aware of.
 	switch j.host.Status {
-	case evergreen.HostUninitialized, evergreen.HostBuildingFailed:
+	case evergreen.HostUninitialized, evergreen.HostBuilding, evergreen.HostBuildingFailed:
+		// If the host never successfully started, this means the host is an
+		// intent host, and should be marked terminated, and not in the cloud
+		// provider.
 		if err := j.host.Terminate(evergreen.User, j.TerminationReason); err != nil {
 			j.AddError(errors.Wrapf(err, "terminating intent host '%s' in DB", j.host.Id))
 		}
@@ -177,15 +179,16 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 	if j.host.RunningTask != "" {
 		if j.TerminateIfBusy {
 			grip.Warning(message.Fields{
-				"message":  "Host has running task; clearing before terminating",
-				"job":      j.ID(),
-				"job_type": j.Type().Name,
-				"host_id":  j.host.Id,
-				"provider": j.host.Distro.Provider,
-				"task":     j.host.RunningTask,
+				"message":        "Host has running task; clearing before terminating",
+				"job":            j.ID(),
+				"job_type":       j.Type().Name,
+				"host_id":        j.host.Id,
+				"provider":       j.host.Distro.Provider,
+				"task":           j.host.RunningTask,
+				"task_execution": j.host.RunningTaskExecution,
 			})
 
-			j.AddError(model.ClearAndResetStrandedHostTask(j.host))
+			j.AddError(model.ClearAndResetStrandedHostTask(j.env.Settings(), j.host))
 		} else {
 			return
 		}
@@ -210,7 +213,7 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 				if tasks[len(tasks)-1].Id != lastTask.Id {
 					// If we aren't looking at the last task in the group, then we should mark the whole thing for restart,
 					// because later tasks in the group need to run on the same host as the earlier ones.
-					j.AddError(errors.Wrap(model.TryResetTask(lastTask.Id, evergreen.User, evergreen.MonitorPackage, nil), "problem resetting task"))
+					j.AddError(errors.Wrapf(model.TryResetTask(j.env.Settings(), lastTask.Id, evergreen.User, evergreen.MonitorPackage, nil), "resetting task '%s'", lastTask.Id))
 				}
 			}
 		}
@@ -232,11 +235,11 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 
 	j.host, err = host.FindOneId(j.HostID)
 	if err != nil {
-		j.AddError(errors.Wrapf(err, "error finding host '%s'", j.HostID))
+		j.AddError(errors.Wrapf(err, "finding host '%s'", j.HostID))
 		return
 	}
 	if j.host == nil {
-		j.AddError(fmt.Errorf("could not find host %s for job %s", j.HostID, j.TaskID))
+		j.AddError(errors.Errorf("host '%s' not found", j.HostID))
 		return
 	}
 
@@ -244,15 +247,16 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 	if j.host.RunningTask != "" {
 		if j.TerminateIfBusy {
 			grip.Warning(message.Fields{
-				"message":  "Host has running task; clearing before terminating",
-				"job":      j.ID(),
-				"job_type": j.Type().Name,
-				"host_id":  j.host.Id,
-				"provider": j.host.Distro.Provider,
-				"task":     j.host.RunningTask,
+				"message":        "Host has running task; clearing before terminating",
+				"job":            j.ID(),
+				"job_type":       j.Type().Name,
+				"host_id":        j.host.Id,
+				"provider":       j.host.Distro.Provider,
+				"task":           j.host.RunningTask,
+				"task_execution": j.host.RunningTaskExecution,
 			})
 
-			j.AddError(model.ClearAndResetStrandedHostTask(j.host))
+			j.AddError(errors.Wrapf(model.ClearAndResetStrandedHostTask(j.env.Settings(), j.host), "fixing stranded task '%s' execution '%d'", j.host.RunningTask, j.host.RunningTaskExecution))
 		} else {
 			return
 		}
@@ -264,36 +268,16 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 		parent, err = j.host.GetParent()
 		if err != nil {
 			if err.Error() != host.ErrorParentNotFound {
-				j.AddError(errors.Wrapf(err, "problem finding parent of '%s'", j.host.Id))
+				j.AddError(errors.Wrapf(err, "finding parent for container '%s'", j.host.Id))
 				return
 			}
 		}
 		if parent == nil || parent.Status == evergreen.HostTerminated {
 			if err = j.host.Terminate(evergreen.User, "parent was already terminated"); err != nil {
-				j.AddError(errors.Wrapf(err, "terminating container '%s' in db", j.host.Id))
+				j.AddError(errors.Wrapf(err, "terminating container '%s' in DB", j.host.Id))
 			}
 			return
 		}
-	} else if prevStatus == evergreen.HostBuilding {
-		// If the host is not a container and is building, this means the host is an intent
-		// host, and should be terminated in the database, and not in the cloud manager.
-		if err = j.host.Terminate(evergreen.User, "host was never started"); err != nil {
-			// It is possible that the provisioning-create-host job has removed the
-			// intent host from the database before this job got to it. If so, there is
-			// nothing to terminate with a cloud manager, since if there is a
-			// cloud-managed host, it has a different ID.
-			if adb.ResultsNotFound(err) {
-				return
-			}
-			j.AddError(errors.Wrapf(err, "terminating intent host '%s' in db", j.host.Id))
-		}
-
-		return
-	}
-
-	idleTimeStartsAt := j.host.LastTaskCompletedTime
-	if idleTimeStartsAt.IsZero() || idleTimeStartsAt == utility.ZeroTime {
-		idleTimeStartsAt = j.host.StartTime
 	}
 
 	if err := j.checkAndTerminateCloudHost(ctx, prevStatus); err != nil {
@@ -301,17 +285,26 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 		return
 	}
 
-	grip.Info(message.Fields{
-		"message":           "host successfully terminated",
-		"host_id":           j.host.Id,
-		"distro":            j.host.Distro.Id,
-		"job":               j.ID(),
-		"reason":            j.TerminationReason,
-		"total_idle_secs":   j.host.TotalIdleTime.Seconds(),
-		"total_uptime_secs": j.host.TerminationTime.Sub(j.host.CreationTime).Seconds(),
-		"termination_time":  j.host.TerminationTime,
-		"creation_time":     j.host.CreationTime,
-	})
+	j.AddError(j.incrementIdleTime(ctx))
+
+	terminationMessage := message.Fields{
+		"message":            "host successfully terminated",
+		"host_id":            j.host.Id,
+		"distro":             j.host.Distro.Id,
+		"job":                j.ID(),
+		"reason":             j.TerminationReason,
+		"total_idle_secs":    j.host.TotalIdleTime.Seconds(),
+		"total_started_secs": j.host.TerminationTime.Sub(j.host.StartTime).Seconds(),
+		"total_uptime_secs":  j.host.TerminationTime.Sub(j.host.CreationTime).Seconds(),
+		"termination_time":   j.host.TerminationTime,
+		"creation_time":      j.host.CreationTime,
+		"started_by":         j.host.StartedBy,
+		"user_host":          j.host.UserHost,
+	}
+	if !utility.IsZeroTime(j.host.BillingStartTime) {
+		terminationMessage["total_billable_secs"] = j.host.TerminationTime.Sub(j.host.BillingStartTime).Seconds()
+	}
+	grip.Info(terminationMessage)
 
 	if utility.StringSliceContains(evergreen.ProvisioningHostStatus, prevStatus) && j.host.TaskCount == 0 {
 		event.LogHostProvisionFailed(j.HostID, fmt.Sprintf("terminating host in status '%s'", prevStatus))
@@ -326,6 +319,20 @@ func (j *hostTerminationJob) Run(ctx context.Context) {
 			"spawn_host":  j.host.StartedBy != evergreen.User,
 		})
 	}
+}
+
+func (j *hostTerminationJob) incrementIdleTime(ctx context.Context) error {
+	idleTime := j.host.SinceLastTaskCompletion()
+
+	cloudHost, err := cloud.GetCloudHost(ctx, j.host, j.env)
+	if err != nil {
+		return errors.Wrapf(err, "getting cloud host for host '%s'", j.HostID)
+	}
+	if pad := cloudHost.CloudMgr.TimeTilNextPayment(j.host); pad > time.Second {
+		idleTime += pad
+	}
+
+	return j.host.IncIdleTime(idleTime)
 }
 
 // checkAndTerminateCloudHost checks if the host is still up according to the
@@ -353,12 +360,12 @@ func (j *hostTerminationJob) checkAndTerminateCloudHost(ctx context.Context, old
 		catcher := grip.NewBasicCatcher()
 		catcher.Add(errors.Wrap(err, "getting cloud host instance status"))
 		if !utility.StringSliceContains(evergreen.UpHostStatus, oldStatus) {
-			catcher.Wrap(j.host.Terminate(evergreen.User, "unable to get cloud status for host"), "marking host as terminated")
+			catcher.Wrap(j.host.Terminate(evergreen.User, j.TerminationReason), "marking host as terminated")
 		}
 		return catcher.Resolve()
 	}
 	if cloudStatus == cloud.StatusNonExistent {
-		return j.host.Terminate(evergreen.User, "cloud host does not exist")
+		return errors.Wrap(j.host.Terminate(evergreen.User, j.TerminationReason), "marking nonexistent host as terminated")
 	}
 
 	if cloudStatus == cloud.StatusTerminated {

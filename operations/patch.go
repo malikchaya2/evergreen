@@ -2,7 +2,7 @@ package operations
 
 import (
 	"context"
-	"io/ioutil"
+	"os"
 	"strings"
 
 	"github.com/evergreen-ci/evergreen"
@@ -19,6 +19,9 @@ const (
 	patchTriggerAliasFlag      = "trigger-alias"
 	repeatDefinitionFlag       = "repeat"
 	repeatFailedDefinitionFlag = "repeat-failed"
+	repeatPatchIdFlag          = "repeat-patch"
+	includeModulesFlag         = "include-modules"
+	autoDescriptionFlag        = "auto-description"
 )
 
 func getPatchFlags(flags ...cli.Flag) []cli.Flag {
@@ -36,6 +39,7 @@ func getPatchFlags(flags ...cli.Flag) []cli.Flag {
 		addSkipConfirmFlag(),
 		addRefFlag(),
 		addUncommittedChangesFlag(),
+		addReuseFlags(),
 		addPreserveCommitsFlag(
 			cli.StringSliceFlag{
 				Name:  joinFlagNames(tasksFlagName, "t"),
@@ -50,6 +54,10 @@ func getPatchFlags(flags ...cli.Flag) []cli.Flag {
 				Usage: "description for the patch",
 			},
 			cli.BoolFlag{
+				Name:  joinFlagNames(autoDescriptionFlag, "ad"),
+				Usage: "use last commit message as the patch description",
+			},
+			cli.BoolFlag{
 				Name:  patchVerboseFlagName,
 				Usage: "show patch summary",
 			},
@@ -57,17 +65,9 @@ func getPatchFlags(flags ...cli.Flag) []cli.Flag {
 				Name:  patchTriggerAliasFlag,
 				Usage: "patch trigger alias (set by project admin) specifying tasks from other projects",
 			},
-			cli.BoolFlag{
-				Name:  joinFlagNames(repeatDefinitionFlag, "reuse"),
-				Usage: "use all of the same tasks/variants defined for the last patch you scheduled for this project",
-			},
-			cli.BoolFlag{
-				Name:  joinFlagNames(repeatFailedDefinitionFlag, "rf"),
-				Usage: "use only the failed tasks/variants defined for the last patch you scheduled for this project",
-			},
 			cli.StringFlag{
 				Name:  pathFlagName,
-				Usage: "path to an evergreen project configuration file",
+				Usage: "path to an Evergreen project configuration file",
 			},
 			cli.StringSliceFlag{
 				Name:  joinFlagNames(regexVariantsFlagName, "rv"),
@@ -86,8 +86,10 @@ func Patch() cli.Command {
 		Before: mergeBeforeFuncs(
 			autoUpdateCLI,
 			setPlainLogger,
+			mutuallyExclusiveArgs(false, patchDescriptionFlagName, autoDescriptionFlag),
 			mutuallyExclusiveArgs(false, preserveCommitsFlag, uncommittedChangesFlag),
-			mutuallyExclusiveArgs(false, repeatDefinitionFlag, repeatFailedDefinitionFlag),
+			mutuallyExclusiveArgs(false, repeatDefinitionFlag, repeatPatchIdFlag,
+				repeatFailedDefinitionFlag),
 			func(c *cli.Context) error {
 				catcher := grip.NewBasicCatcher()
 				for _, status := range utility.SplitCommas(c.StringSlice(syncStatusesFlagName)) {
@@ -99,8 +101,13 @@ func Patch() cli.Command {
 			},
 		),
 		Aliases: []string{"create-patch", "submit-patch"},
-		Usage:   "submit a new patch to evergreen",
-		Flags:   getPatchFlags(),
+		Usage:   "submit a new patch to Evergreen",
+		Flags: getPatchFlags(
+			cli.BoolFlag{
+				Name:  includeModulesFlag,
+				Usage: "include module diffs using changes from defined module paths",
+			},
+		),
 		Action: func(c *cli.Context) error {
 			confPath := c.Parent().String(confFlagName)
 			args := c.Args()
@@ -117,6 +124,7 @@ func Patch() cli.Command {
 				SyncTimeout:       c.Duration(syncTimeoutFlagName),
 				SkipConfirm:       c.Bool(skipConfirmFlagName),
 				Description:       c.String(patchDescriptionFlagName),
+				AutoDescription:   c.Bool(autoDescriptionFlag),
 				Finalize:          c.Bool(patchFinalizeFlagName),
 				Browse:            c.Bool(patchBrowseFlagName),
 				ShowSummary:       c.Bool(patchVerboseFlagName),
@@ -126,11 +134,11 @@ func Patch() cli.Command {
 				Uncommitted:       c.Bool(uncommittedChangesFlag),
 				PreserveCommits:   c.Bool(preserveCommitsFlag),
 				TriggerAliases:    utility.SplitCommas(c.StringSlice(patchTriggerAliasFlag)),
-				RepeatDefinition:  c.Bool(repeatDefinitionFlag),
-				RepeatFailed:      c.Bool(repeatFailedDefinitionFlag),
 			}
 
 			var err error
+			params.addReuseFlags(c)
+			includeModules := c.Bool(includeModulesFlag)
 			paramsPairs := c.StringSlice(parameterFlagName)
 			params.Parameters, err = getParametersFromInput(paramsPairs)
 			if err != nil {
@@ -142,30 +150,33 @@ func Patch() cli.Command {
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
 
 			params.PreserveCommits = params.PreserveCommits || conf.PreserveCommits
 			if !params.SkipConfirm {
 				var keepGoing bool
-				keepGoing, err = confirmUncommittedChanges(params.PreserveCommits, params.Uncommitted || conf.UncommittedChanges)
+				keepGoing, err = confirmUncommittedChanges("", params.PreserveCommits, params.Uncommitted || conf.UncommittedChanges)
 				if err != nil {
-					return errors.Wrap(err, "can't test for uncommitted changes")
+					return errors.Wrap(err, "confirming uncommitted changes")
 				}
 				if keepGoing && utility.StringSliceContains(params.Variants, "all") && utility.StringSliceContains(params.Tasks, "all") {
-					keepGoing = confirm(`For some projects, scheduling all tasks/variants may result in a very large patch build. Continue? (Y/n)`, true)
+					keepGoing = confirm(`For some projects, scheduling all tasks/variants may result in a very large patch build. Continue?`, true)
 				}
 				if !keepGoing {
 					return errors.New("patch aborted")
 				}
 			}
 
-			comm := conf.setupRestCommunicator(ctx)
+			comm, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer comm.Close()
 
-			ac, _, err := conf.getLegacyClients()
+			ac, rc, err := conf.getLegacyClients()
 			if err != nil {
-				return errors.Wrap(err, "problem accessing evergreen service")
+				return errors.Wrap(err, "setting up legacy Evergreen client")
 			}
 
 			ref, err := params.validatePatchCommand(ctx, conf, ac, comm)
@@ -174,15 +185,15 @@ func Patch() cli.Command {
 			}
 			params.Description = params.getDescription()
 
-			if err = params.setLocalAliases(conf); err != nil {
-				return errors.Wrap(err, "setting local aliases")
+			isReusing := params.RepeatDefinition || params.RepeatFailed
+			hasTasksOrVariants := len(params.Tasks) > 0 || len(params.Variants) > 0
+			hasRegexTasksOrVariants := len(params.RegexTasks) > 0 || len(params.RegexVariants) > 0
+
+			if isReusing && (hasTasksOrVariants || hasRegexTasksOrVariants || len(params.Alias) > 0) {
+				return errors.Errorf("can't define tasks, variants, regex tasks, regex variants or aliases when reusing previous patch's tasks and variants")
 			}
 
-			if (params.RepeatDefinition || params.RepeatFailed) && (len(params.Tasks) > 0 || len(params.Variants) > 0) {
-				return errors.Errorf("can't define tasks/variants when reusing previous patch's tasks and variants")
-			}
-
-			diffData, err := loadGitData(ref.Branch, params.Ref, "", params.PreserveCommits, args...)
+			diffData, err := loadGitData("", ref.Branch, params.Ref, "", params.PreserveCommits, args...)
 			if err != nil {
 				return err
 			}
@@ -190,10 +201,41 @@ func Patch() cli.Command {
 			if err = params.validateSubmission(diffData); err != nil {
 				return err
 			}
+			var originalFinalize bool
+			// If including modules, don't finalize the patch until we've checked all modules for changes.
+			if includeModules {
+				originalFinalize = params.Finalize
+				params.Finalize = false
+			}
 			newPatch, err := params.createPatch(ac, diffData)
 			if err != nil {
 				return err
 			}
+			patchId := newPatch.Id.Hex()
+			if includeModules {
+				proj, err := rc.GetPatchedConfig(patchId)
+				if err != nil {
+					return err
+				}
+
+				for _, module := range proj.Modules {
+					modulePath, err := params.getModulePath(conf, module.Name)
+					if err != nil {
+						grip.Error(err)
+						continue
+					}
+					if err = addModuleToPatch(params, args, conf, newPatch, &module, modulePath); err != nil {
+						grip.Errorf("Error adding module '%s' to patch: %s", module.Name, err)
+					}
+				}
+			}
+
+			if originalFinalize {
+				if err = ac.FinalizePatch(patchId); err != nil {
+					return errors.Wrapf(err, "finalizing patch '%s'", patchId)
+				}
+			}
+
 			if err = params.displayPatch(newPatch, conf.UIServerHost, false); err != nil {
 				grip.Error(err)
 			}
@@ -203,13 +245,19 @@ func Patch() cli.Command {
 	}
 }
 
+func (p *patchParams) addReuseFlags(c *cli.Context) {
+	p.RepeatPatchId = c.String(repeatPatchIdFlag)
+	p.RepeatDefinition = c.Bool(repeatDefinitionFlag) || p.RepeatPatchId != ""
+	p.RepeatFailed = c.Bool(repeatFailedDefinitionFlag)
+}
+
 func getParametersFromInput(params []string) ([]patch.Parameter, error) {
 	res := []patch.Parameter{}
 	catcher := grip.NewBasicCatcher()
 	for _, param := range params {
 		pair := strings.Split(param, "=")
 		if len(pair) < 2 {
-			catcher.Add(errors.Errorf("problem parsing parameter '%s'", param))
+			catcher.Errorf("could not parse parameter '%s' in key=value format", param)
 		}
 		key := pair[0]
 		val := strings.Join(pair[1:], "=")
@@ -236,39 +284,59 @@ func PatchFile() cli.Command {
 				Name:  diffPathFlagName,
 				Usage: "path to a file for diff of the patch",
 			},
+			cli.StringFlag{
+				Name: patchAuthorFlag,
+				Usage: "optionally define the patch author by providing an Evergreen username; " +
+					"if not found or provided, will default to the submitter",
+			},
 		),
-		Before: mergeBeforeFuncs(autoUpdateCLI, requireFileExists(diffPathFlagName)),
+		Before: mergeBeforeFuncs(
+			autoUpdateCLI,
+			requireFileExists(diffPathFlagName),
+			mutuallyExclusiveArgs(false, patchDescriptionFlagName, autoDescriptionFlag),
+		),
 		Action: func(c *cli.Context) error {
 			confPath := c.Parent().String(confFlagName)
 			params := &patchParams{
-				Project:     c.String(projectFlagName),
-				Variants:    utility.SplitCommas(c.StringSlice(variantsFlagName)),
-				Tasks:       utility.SplitCommas(c.StringSlice(tasksFlagName)),
-				Alias:       c.String(patchAliasFlagName),
-				SkipConfirm: c.Bool(skipConfirmFlagName),
-				Description: c.String(patchDescriptionFlagName),
-				Finalize:    c.Bool(patchFinalizeFlagName),
-				ShowSummary: c.Bool(patchVerboseFlagName),
-				Large:       c.Bool(largeFlagName),
-				SyncTasks:   utility.SplitCommas(c.StringSlice(syncTasksFlagName)),
+				Project:         c.String(projectFlagName),
+				Variants:        utility.SplitCommas(c.StringSlice(variantsFlagName)),
+				Tasks:           utility.SplitCommas(c.StringSlice(tasksFlagName)),
+				Alias:           c.String(patchAliasFlagName),
+				SkipConfirm:     c.Bool(skipConfirmFlagName),
+				Description:     c.String(patchDescriptionFlagName),
+				AutoDescription: c.Bool(autoDescriptionFlag),
+				Finalize:        c.Bool(patchFinalizeFlagName),
+				ShowSummary:     c.Bool(patchVerboseFlagName),
+				Large:           c.Bool(largeFlagName),
+				SyncTasks:       utility.SplitCommas(c.StringSlice(syncTasksFlagName)),
+				PatchAuthor:     c.String(patchAuthorFlag),
 			}
+			var err error
 			diffPath := c.String(diffPathFlagName)
 			base := c.String(baseFlagName)
+			paramsPairs := c.StringSlice(parameterFlagName)
+			params.Parameters, err = getParametersFromInput(paramsPairs)
+			if err != nil {
+				return err
+			}
 
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 
 			conf, err := NewClientSettings(confPath)
 			if err != nil {
-				return errors.Wrap(err, "problem loading configuration")
+				return errors.Wrap(err, "loading configuration")
 			}
 
-			comm := conf.setupRestCommunicator(ctx)
+			comm, err := conf.setupRestCommunicator(ctx, true)
+			if err != nil {
+				return errors.Wrap(err, "setting up REST communicator")
+			}
 			defer comm.Close()
 
 			ac, _, err := conf.getLegacyClients()
 			if err != nil {
-				return errors.Wrap(err, "problem accessing evergreen service")
+				return errors.Wrap(err, "setting up legacy Evergreen client")
 			}
 
 			if _, err = params.validatePatchCommand(ctx, conf, ac, comm); err != nil {
@@ -276,9 +344,9 @@ func PatchFile() cli.Command {
 			}
 			params.Description = params.getDescription()
 
-			fullPatch, err := ioutil.ReadFile(diffPath)
+			fullPatch, err := os.ReadFile(diffPath)
 			if err != nil {
-				return errors.Wrap(err, "problem reading diff file")
+				return errors.Wrapf(err, "reading diff file '%s'", diffPath)
 			}
 
 			diffData := &localDiff{

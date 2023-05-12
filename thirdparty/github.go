@@ -5,7 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,31 +14,61 @@ import (
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/model/commitqueue"
 	"github.com/evergreen-ci/utility"
-	"github.com/google/go-github/v34/github"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/level"
 	"github.com/mongodb/grip/message"
+	"github.com/mongodb/grip/sometimes"
 	"github.com/pkg/errors"
 )
 
 const (
-	NumGithubAttempts   = 3
-	GithubRetryMinDelay = time.Second
-	GithubStatusBase    = "https://status.github.com"
-	GithubAccessURL     = "https://github.com/login/oauth/access_token"
+	numGithubAttempts   = 3
+	githubRetryMinDelay = time.Second
+	githubAccessURL     = "https://github.com/login/oauth/access_token"
 	githubHookURL       = "%s/rest/v2/hooks/github"
-
-	GithubAPIStatusMinor = "minor"
-	GithubAPIStatusMajor = "major"
-	GithubAPIStatusGood  = "good"
 
 	Github502Error   = "502 Server Error"
 	commitObjectType = "commit"
 	tagObjectType    = "tag"
+	githubWrite      = "write"
 
-	githubInvestigation = "Github API Limit Investigation"
+	GithubInvestigation = "Github API Limit Investigation"
 )
+
+var UnblockedGithubStatuses = []string{
+	githubPRBehind,
+	githubPRClean,
+	githubPRDirty,
+	githubPRDraft,
+	githubPRHasHooks,
+	githubPRUnknown,
+	githubPRUnstable,
+}
+
+const (
+	GithubPRBlocked = "blocked"
+
+	// All PR statuses except for "blocked" based on statuses listed here:
+	// https://docs.github.com/en/graphql/reference/enums#mergestatestatus
+	// Because the pr.MergeableState is not documented, it can change without
+	// notice. That's why we want to only allow fields we know to be unblocked
+	// rather than simply blocking the "blocked" status. That way if it does
+	// change, it doesn't fail silently.
+	githubPRBehind   = "behind"
+	githubPRClean    = "clean"
+	githubPRDirty    = "dirty"
+	githubPRDraft    = "draft"
+	githubPRHasHooks = "has_hooks"
+	githubPRUnknown  = "unknown"
+	githubPRUnstable = "unstable"
+)
+
+// IsUnblockedGithubStatus returns true if the status is in the list of unblocked statuses
+func IsUnblockedGithubStatus(status string) bool {
+	return utility.StringSliceContains(UnblockedGithubStatuses, status)
+}
 
 // GithubPatch stores patch data for patches create from GitHub pull requests
 type GithubPatch struct {
@@ -56,6 +86,18 @@ type GithubPatch struct {
 	CommitMessage  string `bson:"commit_message"`
 }
 
+// SendGithubStatusInput is the input to the SendPendingStatusToGithub function and contains
+// all the information associated with a version necessary to send a status to GitHub.
+type SendGithubStatusInput struct {
+	VersionId string
+	Owner     string
+	Repo      string
+	Ref       string
+	Desc      string
+	Caller    string
+	Context   string
+}
+
 var (
 	// BSON fields for GithubPatch
 	GithubPatchPRNumberKey  = bsonutil.MustHaveTag(GithubPatch{}, "PRNumber")
@@ -65,7 +107,7 @@ var (
 
 func githubShouldRetry(caller string) utility.HTTPRetryFunction {
 	return func(index int, req *http.Request, resp *http.Response, err error) bool {
-		if index >= NumGithubAttempts {
+		if index >= numGithubAttempts {
 			return false
 		}
 
@@ -80,7 +122,7 @@ func githubShouldRetry(caller string) utility.HTTPRetryFunction {
 				"temporary": temporary,
 			}))
 			grip.InfoWhen(temporary, message.Fields{
-				"ticket":    githubInvestigation,
+				"ticket":    GithubInvestigation,
 				"message":   "error is temporary",
 				"caller":    caller,
 				"retry_num": index,
@@ -90,7 +132,7 @@ func githubShouldRetry(caller string) utility.HTTPRetryFunction {
 
 		if resp == nil {
 			grip.Info(message.Fields{
-				"ticket":    githubInvestigation,
+				"ticket":    GithubInvestigation,
 				"message":   "resp is nil in githubShouldRetry",
 				"caller":    caller,
 				"retry_num": index,
@@ -115,7 +157,7 @@ func githubShouldRetry(caller string) utility.HTTPRetryFunction {
 
 		if resp.StatusCode == http.StatusBadGateway {
 			grip.Info(message.Fields{
-				"ticket":    githubInvestigation,
+				"ticket":    GithubInvestigation,
 				"message":   fmt.Sprintf("hit %d in githubShouldRetry", http.StatusBadGateway),
 				"caller":    caller,
 				"retry_num": index,
@@ -129,16 +171,15 @@ func githubShouldRetry(caller string) utility.HTTPRetryFunction {
 
 // githubShouldRetryWith404s allows HTTP requests to respond event when 404s
 // are returned.
-
 func githubShouldRetryWith404s(caller string) utility.HTTPRetryFunction {
 	return func(index int, req *http.Request, resp *http.Response, err error) bool {
-		if index >= NumGithubAttempts {
+		if index >= numGithubAttempts {
 			return false
 		}
 
 		if resp == nil {
 			grip.Info(message.Fields{
-				"ticket":    githubInvestigation,
+				"ticket":    GithubInvestigation,
 				"message":   "resp is nil in githubShouldRetryWith404s",
 				"caller":    caller,
 				"retry_num": index,
@@ -154,7 +195,7 @@ func githubShouldRetryWith404s(caller string) utility.HTTPRetryFunction {
 		if resp.StatusCode == http.StatusNotFound {
 			logGitHubRateLimit(limit)
 			grip.Info(message.Fields{
-				"ticket":    githubInvestigation,
+				"ticket":    GithubInvestigation,
 				"message":   fmt.Sprintf("hit %d in githubShouldRetryWith404s", http.StatusNotFound),
 				"caller":    caller,
 				"retry_num": index,
@@ -169,7 +210,7 @@ func githubShouldRetryWith404s(caller string) utility.HTTPRetryFunction {
 
 func getGithubClientRetryWith404s(token, caller string) *http.Client {
 	grip.Info(message.Fields{
-		"ticket":  githubInvestigation,
+		"ticket":  GithubInvestigation,
 		"message": "called getGithubClientRetryWith404s",
 		"caller":  caller,
 	})
@@ -177,15 +218,15 @@ func getGithubClientRetryWith404s(token, caller string) *http.Client {
 		token,
 		githubShouldRetryWith404s(caller),
 		utility.RetryHTTPDelay(utility.RetryOptions{
-			MaxAttempts: NumGithubAttempts,
-			MinDelay:    GithubRetryMinDelay,
+			MaxAttempts: numGithubAttempts,
+			MinDelay:    githubRetryMinDelay,
 		}),
 	)
 }
 
 func getGithubClient(token, caller string) *http.Client {
 	grip.Info(message.Fields{
-		"ticket":  githubInvestigation,
+		"ticket":  GithubInvestigation,
 		"message": "called getGithubClient",
 		"caller":  caller,
 	})
@@ -193,9 +234,11 @@ func getGithubClient(token, caller string) *http.Client {
 	return utility.GetOAuth2HTTPClient(token)
 }
 
+// getGithubClientRetry will retry github operations if the error is temporary, resp is nil,
+// or we hit a bad gateway error.
 func getGithubClientRetry(token, caller string) *http.Client {
 	grip.Info(message.Fields{
-		"ticket":  githubInvestigation,
+		"ticket":  GithubInvestigation,
 		"message": "called getGithubClientRetry",
 		"caller":  caller,
 	})
@@ -203,8 +246,8 @@ func getGithubClientRetry(token, caller string) *http.Client {
 		token,
 		githubShouldRetry(caller),
 		utility.RetryHTTPDelay(utility.RetryOptions{
-			MaxAttempts: NumGithubAttempts,
-			MinDelay:    GithubRetryMinDelay,
+			MaxAttempts: numGithubAttempts,
+			MinDelay:    githubRetryMinDelay,
 		}),
 	)
 }
@@ -241,7 +284,7 @@ func GetGithubCommits(ctx context.Context, oauthToken, owner, repo, ref string, 
 }
 
 func parseGithubErrorResponse(resp *github.Response) error {
-	respBody, err := ioutil.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return ResponseReadError{err.Error()}
 	}
@@ -288,29 +331,91 @@ func GetGithubFile(ctx context.Context, oauthToken, owner, repo, path, ref strin
 	return file, nil
 }
 
-func GetGithubMergeBaseRevision(ctx context.Context, oauthToken, repoOwner, repo, baseRevision, currentCommitHash string) (string, error) {
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
+// SendPendingStatusToGithub sends a pending status to a Github PR patch
+// associated with a given version.
+func SendPendingStatusToGithub(input SendGithubStatusInput) error {
+	flags, err := evergreen.GetServiceFlags()
+	if err != nil {
+		return errors.Wrap(err, "error retrieving admin settings")
+	}
+	if flags.GithubStatusAPIDisabled {
+		grip.InfoWhen(sometimes.Percent(evergreen.DegradedLoggingPercent), message.Fields{
+			"job":     input.Caller,
+			"message": "GitHub status updates are disabled, not updating status",
+		})
+		return nil
+	}
+	env := evergreen.GetEnvironment()
+	uiConfig := evergreen.UIConfig{}
+	if err = uiConfig.Get(env); err != nil {
+		return errors.Wrap(err, "retrieving UI config")
+	}
+	urlBase := uiConfig.Url
+	if urlBase == "" {
+		return errors.New("url base doesn't exist")
+	}
+	status := &message.GithubStatus{
+		Owner:       input.Owner,
+		Repo:        input.Repo,
+		Ref:         input.Ref,
+		URL:         fmt.Sprintf("%s/version/%s?redirect_spruce_users=true", urlBase, input.VersionId),
+		Context:     input.Context,
+		State:       message.GithubStatePending,
+		Description: input.Desc,
+	}
+	sender, err := env.GetSender(evergreen.SenderGithubStatus)
+	if err != nil {
+		return errors.Wrap(err, "getting github status sender")
+	}
 
+	c := message.MakeGithubStatusMessageWithRepo(*status)
+	if !c.Loggable() {
+		return errors.Errorf("status message is invalid: %+v", status)
+	}
+
+	if err = c.SetPriority(level.Notice); err != nil {
+		return errors.Wrap(err, "setting priority")
+	}
+
+	sender.Send(c)
+	grip.Info(message.Fields{
+		"ticket":  GithubInvestigation,
+		"message": "called github status send",
+		"caller":  "github check subscriptions",
+		"version": input.VersionId,
+	})
+	return nil
+}
+
+// GetGithubMergeBaseRevision compares baseRevision and currentCommitHash in a
+// GitHub repo and returns the merge base commit's SHA.
+func GetGithubMergeBaseRevision(ctx context.Context, oauthToken, repoOwner, repo, baseRevision, currentCommitHash string) (string, error) {
 	httpClient := getGithubClientRetry(oauthToken, "GetGithubMergeBaseRevision")
 	defer utility.PutHTTPClient(httpClient)
 	client := github.NewClient(httpClient)
 
 	compare, resp, err := client.Repositories.CompareCommits(ctx,
-		repoOwner, repo, baseRevision, currentCommitHash)
+		repoOwner, repo, baseRevision, currentCommitHash, nil)
 	if resp != nil {
 		defer resp.Body.Close()
 		if err != nil {
 			return "", parseGithubErrorResponse(resp)
 		}
 	} else {
-		errMsg := fmt.Sprintf("nil response from merge base commit response for '%s/%s'@%s..%s: %v", repoOwner, repo, baseRevision, currentCommitHash, err)
-		grip.Error(errMsg)
-		return "", APIResponseError{errMsg}
+		apiErr := errors.Errorf("nil response from merge base commit response for '%s/%s'@%s..%s: %v", repoOwner, repo, baseRevision, currentCommitHash, err)
+		grip.Error(message.WrapError(apiErr, message.Fields{
+			"message":             "failed to compare commits to find merge base commit",
+			"op":                  "GetGithubMergeBaseRevision",
+			"github_error":        fmt.Sprint(err),
+			"repo":                repo,
+			"base_revision":       baseRevision,
+			"current_commit_hash": currentCommitHash,
+		}))
+		return "", APIResponseError{apiErr.Error()}
 	}
 
 	if compare == nil || compare.MergeBaseCommit == nil || compare.MergeBaseCommit.SHA == nil {
-		return "", APIRequestError{Message: "missing data from github compare response"}
+		return "", APIRequestError{Message: "missing data from GitHub compare response"}
 	}
 
 	return *compare.MergeBaseCommit.SHA, nil
@@ -327,7 +432,7 @@ func GetCommitEvent(ctx context.Context, oauthToken, repoOwner, repo, githash st
 		"repo":    repoOwner + "/" + repo,
 	})
 
-	commit, resp, err := client.Repositories.GetCommit(ctx, repoOwner, repo, githash)
+	commit, resp, err := client.Repositories.GetCommit(ctx, repoOwner, repo, githash, nil)
 	if resp != nil {
 		defer resp.Body.Close()
 		if err != nil {
@@ -396,7 +501,7 @@ func GetBranchEvent(ctx context.Context, oauthToken, repoOwner, repo, branch str
 
 	grip.Debugf("requesting github commit for '%s/%s': branch: %s\n", repoOwner, repo, branch)
 
-	branchEvent, resp, err := client.Repositories.GetBranch(ctx, repoOwner, repo, branch)
+	branchEvent, resp, err := client.Repositories.GetBranch(ctx, repoOwner, repo, branch, false)
 	if resp != nil {
 		defer resp.Body.Close()
 		if err != nil {
@@ -425,7 +530,7 @@ func githubRequest(ctx context.Context, method string, url string, oauthToken st
 		if err != nil {
 			return nil, err
 		}
-		req.Body = ioutil.NopCloser(bytes.NewReader(jsonBytes))
+		req.Body = io.NopCloser(bytes.NewReader(jsonBytes))
 	}
 
 	// check if there is an oauth token, if there is make sure it is a valid oauthtoken
@@ -446,8 +551,12 @@ func githubRequest(ctx context.Context, method string, url string, oauthToken st
 
 // tryGithubPost posts the data to the Github api endpoint with the url given
 func tryGithubPost(ctx context.Context, url string, oauthToken string, data interface{}) (resp *http.Response, err error) {
-	grip.Errorf("Attempting GitHub API POST at ‘%s’", url)
 	err = utility.Retry(ctx, func() (bool, error) {
+		grip.Info(message.Fields{
+			"message": "Attempting GitHub API POST",
+			"ticket":  GithubInvestigation,
+			"url":     url,
+		})
 		resp, err = githubRequest(ctx, http.MethodPost, url, oauthToken, data)
 		if err != nil {
 			grip.Errorf("failed trying to call github POST on %s: %+v", url, err)
@@ -467,8 +576,8 @@ func tryGithubPost(ctx context.Context, url string, oauthToken string, data inte
 
 		return false, nil
 	}, utility.RetryOptions{
-		MaxAttempts: NumGithubAttempts,
-		MinDelay:    GithubRetryMinDelay,
+		MaxAttempts: numGithubAttempts,
+		MinDelay:    githubRetryMinDelay,
 	})
 
 	if err != nil {
@@ -522,7 +631,7 @@ func GithubAuthenticate(ctx context.Context, code, clientId, clientSecret string
 		ClientSecret: clientSecret,
 		Code:         code,
 	}
-	resp, err := tryGithubPost(ctx, GithubAccessURL, "", authParameters)
+	resp, err := tryGithubPost(ctx, githubAccessURL, "", authParameters)
 	if resp != nil {
 		defer resp.Body.Close()
 	}
@@ -532,7 +641,7 @@ func GithubAuthenticate(ctx context.Context, code, clientId, clientSecret string
 	if resp == nil {
 		return nil, errors.New("invalid github response")
 	}
-	respBody, err := ioutil.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return nil, ResponseReadError{err.Error()}
 	}
@@ -554,13 +663,13 @@ func GetTaggedCommitFromGithub(ctx context.Context, oauthToken, owner, repo, tag
 		defer resp.Body.Close()
 	}
 	if err != nil {
-		return "", errors.Wrap(err, "failed to get tag information from Github")
+		return "", errors.Wrap(err, "failed to get tag information from GitHub")
 	}
 	if resp == nil {
 		return "", errors.New("invalid github response")
 	}
 
-	respBody, err := ioutil.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", ResponseReadError{err.Error()}
 	}
@@ -588,7 +697,7 @@ func GetTaggedCommitFromGithub(ctx context.Context, oauthToken, owner, repo, tag
 	}
 
 	if tagSha == "" {
-		return "", errors.New("empty SHA from Github")
+		return "", errors.New("empty SHA from GitHub")
 	}
 
 	return sha, nil
@@ -600,7 +709,7 @@ func IsUserInGithubTeam(ctx context.Context, teams []string, org, user, oauthTok
 	client := github.NewClient(httpClient)
 
 	grip.Info(message.Fields{
-		"ticket":  githubInvestigation,
+		"ticket":  GithubInvestigation,
 		"message": "number of teams in IsUserInGithubTeam",
 		"teams":   len(teams),
 	})
@@ -628,7 +737,7 @@ func GetGithubTokenUser(ctx context.Context, token string, requiredOrg string) (
 		defer resp.Body.Close()
 		if err != nil {
 			var respBody []byte
-			respBody, err = ioutil.ReadAll(resp.Body)
+			respBody, err = io.ReadAll(resp.Body)
 			if err != nil {
 				return nil, false, ResponseReadError{err.Error()}
 			}
@@ -649,7 +758,7 @@ func GetGithubTokenUser(ctx context.Context, token string, requiredOrg string) (
 
 	if user.Login == nil || user.ID == nil || user.Company == nil ||
 		user.Email == nil || user.OrganizationsURL == nil {
-		return nil, false, errors.New("Github user is missing required data")
+		return nil, false, errors.New("GitHub user is missing required data")
 	}
 
 	return &GithubLoginUser{
@@ -729,6 +838,40 @@ func GithubUserInOrganization(ctx context.Context, token, requiredOrganization, 
 	return isMember, err
 }
 
+// AppAuthorizedForOrg returns true if the given app name exists in the org's installation list,
+// and has permission to write to pull requests. Returns an error if the app name exists but doesn't have permission.
+func AppAuthorizedForOrg(ctx context.Context, token, requiredOrganization, name string) (bool, error) {
+	httpClient := getGithubClientRetry(token, "AppAuthorizedForOrg")
+	defer utility.PutHTTPClient(httpClient)
+
+	client := github.NewClient(httpClient)
+	opts := &github.ListOptions{PerPage: 100}
+	for {
+		installations, resp, err := client.Organizations.ListInstallations(ctx, requiredOrganization, opts)
+		if err != nil {
+			return false, err
+		}
+
+		for _, installation := range installations.Installations {
+			if installation.GetAppSlug() == name {
+				prPermission := installation.GetPermissions().GetPullRequests()
+				if prPermission == githubWrite {
+					return true, nil
+				}
+				return false, errors.Errorf("app '%s' is installed but has pull request permission '%s'", name, prPermission)
+			}
+		}
+
+		if resp.NextPage > 0 {
+			opts.Page = resp.NextPage
+		} else {
+			break
+		}
+	}
+
+	return false, nil
+}
+
 func GitHubUserPermissionLevel(ctx context.Context, token, owner, repo, username string) (string, error) {
 	httpClient := getGithubClientRetryWith404s(token, "GithubUserPermissionLevel")
 	defer utility.PutHTTPClient(httpClient)
@@ -766,7 +909,7 @@ func GetPullRequestMergeBase(ctx context.Context, token string, data GithubPatch
 		return "", errors.New("hash is missing from pull request commit list")
 	}
 
-	commit, _, err := client.Repositories.GetCommit(ctx, data.BaseOwner, data.BaseRepo, *commits[0].SHA)
+	commit, _, err := client.Repositories.GetCommit(ctx, data.BaseOwner, data.BaseRepo, *commits[0].SHA, nil)
 	if err != nil {
 		return "", err
 	}
@@ -783,35 +926,18 @@ func GetPullRequestMergeBase(ctx context.Context, token string, data GithubPatch
 	return *commit.Parents[0].SHA, nil
 }
 
-func GetGithubPullRequest(ctx context.Context, token, baseOwner, baseRepo string, PRNumber int) (*github.PullRequest, error) {
+func GetGithubPullRequest(ctx context.Context, token, baseOwner, baseRepo string, prNumber int) (*github.PullRequest, error) {
 	httpClient := getGithubClientRetryWith404s(token, "GetGithubPullRequest")
 	defer utility.PutHTTPClient(httpClient)
 
 	client := github.NewClient(httpClient)
 
-	pr, _, err := client.PullRequests.Get(ctx, baseOwner, baseRepo, PRNumber)
+	pr, _, err := client.PullRequests.Get(ctx, baseOwner, baseRepo, prNumber)
 	if err != nil {
 		return nil, err
 	}
 
 	return pr, nil
-}
-
-func GetGithubPullRequestCommits(ctx context.Context, token, owner, repo string, PRNumber int) ([]*github.RepositoryCommit, error) {
-	httpClient := getGithubClientRetryWith404s(token, "GetGithubPullRequestCommits")
-	defer utility.PutHTTPClient(httpClient)
-
-	client := github.NewClient(httpClient)
-
-	commits, _, err := client.PullRequests.ListCommits(ctx, owner, repo, PRNumber, nil)
-	if err != nil {
-		return nil, err
-	}
-	if len(commits) == 0 {
-		return nil, errors.New("No commits received from github")
-	}
-
-	return commits, nil
 }
 
 // GetGithubPullRequestDiff downloads a diff from a Github Pull Request diff
@@ -908,8 +1034,7 @@ func missingHeadSHA(pr *github.PullRequest) bool {
 	return pr.Head == nil || pr.Head.GetSHA() == ""
 }
 
-func SendCommitQueueGithubStatus(pr *github.PullRequest, state message.GithubState, description, versionID string) error {
-	env := evergreen.GetEnvironment()
+func SendCommitQueueGithubStatus(env evergreen.Environment, pr *github.PullRequest, state message.GithubState, description, versionID string) error {
 	sender, err := env.GetSender(evergreen.SenderGithubStatus)
 	if err != nil {
 		return errors.Wrap(err, "can't get GitHub status sender")
@@ -919,7 +1044,7 @@ func SendCommitQueueGithubStatus(pr *github.PullRequest, state message.GithubSta
 	if versionID != "" {
 		uiConfig := evergreen.UIConfig{}
 		if err := uiConfig.Get(env); err == nil {
-			url = fmt.Sprintf("%s/version/%s", uiConfig.Url, versionID)
+			url = fmt.Sprintf("%s/version/%s?redirect_spruce_users=true", uiConfig.Url, versionID)
 		}
 	}
 
@@ -935,11 +1060,16 @@ func SendCommitQueueGithubStatus(pr *github.PullRequest, state message.GithubSta
 
 	c := message.NewGithubStatusMessageWithRepo(level.Notice, msg)
 	sender.Send(c)
-
+	grip.Info(message.Fields{
+		"ticket":  GithubInvestigation,
+		"message": "called github status send",
+		"caller":  "commit queue github status",
+	})
 	return nil
 }
 
-func GetPullRequest(ctx context.Context, issue int, githubToken, owner, repo string) (*github.PullRequest, error) {
+// GetMergeablePullRequest gets the pull request and returns if the PR is valid and mergeable.
+func GetMergeablePullRequest(ctx context.Context, issue int, githubToken, owner, repo string) (*github.PullRequest, error) {
 	pr, err := GetGithubPullRequest(ctx, githubToken, owner, repo, issue)
 	if err != nil {
 		return nil, errors.Wrap(err, "can't get PR from GitHub")
@@ -949,23 +1079,14 @@ func GetPullRequest(ctx context.Context, issue int, githubToken, owner, repo str
 		return nil, errors.Wrap(err, "GitHub returned an incomplete PR")
 	}
 
-	if pr.Mergeable == nil {
-		if *pr.Merged {
-			return pr, errors.New("PR is already merged")
-		}
-		// GitHub hasn't yet tested if the PR is mergeable.
-		// Check back later
-		// See: https://developer.github.com/v3/pulls/#response-1
-		return pr, errors.New("GitHub hasn't yet generated a merge commit")
-	}
-
-	if !*pr.Mergeable {
+	if !utility.FromBoolTPtr(pr.Mergeable) {
 		return pr, errors.New("PR is not mergeable")
 	}
 
 	return pr, nil
 }
 
+// CreateGithubHook creates a new GitHub webhook for a repo.
 func CreateGithubHook(ctx context.Context, settings evergreen.Settings, owner string, repo string) (*github.Hook, error) {
 	token, err := settings.GetGithubOauthToken()
 	if err != nil {
@@ -988,10 +1109,8 @@ func CreateGithubHook(ctx context.Context, settings evergreen.Settings, owner st
 			"insecure_ssl": github.String("0"),
 		},
 	}
-	newCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
 
-	respHook, resp, err := client.Repositories.CreateHook(newCtx, owner, repo, &hookObj)
+	respHook, resp, err := client.Repositories.CreateHook(ctx, owner, repo, &hookObj)
 	if err != nil {
 		return nil, err
 	}
@@ -1002,6 +1121,8 @@ func CreateGithubHook(ctx context.Context, settings evergreen.Settings, owner st
 	return respHook, nil
 }
 
+// GetExistingGithubHook gets information from GitHub about an existing webhook
+// for a repo.
 func GetExistingGithubHook(ctx context.Context, settings evergreen.Settings, owner, repo string) (*github.Hook, error) {
 	token, err := settings.GetGithubOauthToken()
 	if err != nil {
@@ -1011,10 +1132,8 @@ func GetExistingGithubHook(ctx context.Context, settings evergreen.Settings, own
 	httpClient := getGithubClient(token, "ListGithubHooks")
 	defer utility.PutHTTPClient(httpClient)
 	client := github.NewClient(httpClient)
-	newCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
 
-	respHooks, _, err := client.Repositories.ListHooks(newCtx, owner, repo, nil)
+	respHooks, _, err := client.Repositories.ListHooks(ctx, owner, repo, nil)
 	if err != nil {
 		return nil, errors.Wrapf(err, "getting hooks for owner '%s', repo '%s'", owner, repo)
 	}
@@ -1029,6 +1148,8 @@ func GetExistingGithubHook(ctx context.Context, settings evergreen.Settings, own
 	return nil, errors.Errorf("no matching hooks found")
 }
 
+// MergePullRequest attempts to merge the given pull request. If commits are merged one after another, Github may
+// not have updated that this can be merged, so we allow retries.
 func MergePullRequest(ctx context.Context, token, owner, repo, commitMessage string, prNum int, mergeOpts *github.PullRequestOptions) error {
 	httpClient := getGithubClient(token, "MergePullRequest")
 	defer utility.PutHTTPClient(httpClient)
@@ -1036,10 +1157,30 @@ func MergePullRequest(ctx context.Context, token, owner, repo, commitMessage str
 	res, _, err := githubClient.PullRequests.Merge(ctx, owner, repo,
 		prNum, commitMessage, mergeOpts)
 	if err != nil {
-		return errors.Wrap(err, "can't access GitHub merge API")
+		return errors.Wrap(err, "accessing GitHub merge API")
 	}
 	if !res.GetMerged() {
-		return errors.Errorf("Github refused to merge PR '%s/%s:%d': '%s'", owner, repo, prNum, res.GetMessage())
+		return errors.Errorf("GitHub refused to merge PR '%s/%s:%d': '%s'", owner, repo, prNum, res.GetMessage())
+	}
+	return nil
+}
+
+// PostCommentToPullRequest posts the given comment to the associated PR.
+func PostCommentToPullRequest(ctx context.Context, token, owner, repo string, prNum int, comment string) error {
+	httpClient := getGithubClient(token, "PostCommentToPullRequest")
+	defer utility.PutHTTPClient(httpClient)
+	githubClient := github.NewClient(httpClient)
+
+	githubComment := &github.IssueComment{
+		Body: &comment,
+	}
+	respComment, resp, err := githubClient.Issues.CreateComment(ctx, owner, repo, prNum, githubComment)
+	if err != nil {
+		return errors.Wrap(err, "can't access GitHub merge API")
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusCreated || respComment == nil || respComment.ID == nil {
+		return errors.New("unexpected data from GitHub")
 	}
 	return nil
 }

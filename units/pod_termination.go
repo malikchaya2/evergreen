@@ -11,6 +11,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/pod"
 	"github.com/evergreen-ci/evergreen/model/pod/dispatcher"
+	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/mongodb/amboy"
 	"github.com/mongodb/amboy/job"
 	"github.com/mongodb/amboy/registry"
@@ -33,8 +34,6 @@ type podTerminationJob struct {
 	Reason   string `bson:"reason,omitempty" json:"reason,omitempty"`
 
 	pod       *pod.Pod
-	smClient  cocoa.SecretsManagerClient
-	vault     cocoa.Vault
 	ecsClient cocoa.ECSClient
 	ecsPod    cocoa.ECSPod
 	env       evergreen.Environment
@@ -76,11 +75,8 @@ func (j *podTerminationJob) Run(ctx context.Context) {
 	defer j.MarkComplete()
 
 	defer func() {
-		if j.smClient != nil {
-			j.AddError(j.smClient.Close(ctx))
-		}
 		if j.ecsClient != nil {
-			j.AddError(j.ecsClient.Close(ctx))
+			j.AddError(errors.Wrap(j.ecsClient.Close(ctx), "closing ECS client"))
 		}
 	}()
 	if err := j.populateIfUnset(ctx); err != nil {
@@ -96,10 +92,10 @@ func (j *podTerminationJob) Run(ctx context.Context) {
 	switch j.pod.Status {
 	case pod.StatusInitializing:
 		grip.Info(message.Fields{
-			"message":                    "not deleting resources because pod has not initialized any yet",
-			"pod":                        j.PodID,
-			"termination_attempt_reason": j.Reason,
-			"job":                        j.ID(),
+			"message":            "not deleting resources because pod has not initialized any yet",
+			"pod":                j.PodID,
+			"termination_reason": j.Reason,
+			"job":                j.ID(),
 		})
 	case pod.StatusStarting, pod.StatusRunning, pod.StatusDecommissioned:
 		if j.ecsPod != nil {
@@ -110,31 +106,32 @@ func (j *podTerminationJob) Run(ctx context.Context) {
 		}
 	case pod.StatusTerminated:
 		grip.Info(message.Fields{
-			"message":                    "pod is already terminated",
-			"pod":                        j.PodID,
-			"termination_attempt_reason": j.Reason,
-			"job":                        j.ID(),
+			"message":            "pod is already terminated",
+			"pod":                j.PodID,
+			"termination_reason": j.Reason,
+			"job":                j.ID(),
 		})
 		return
 	default:
 		grip.Error(message.Fields{
-			"message":                    "could not terminate pod with unrecognized status",
-			"pod":                        j.PodID,
-			"status":                     j.pod.Status,
-			"termination_attempt_reason": j.Reason,
-			"job":                        j.ID(),
+			"message":            "could not terminate pod with unrecognized status",
+			"pod":                j.PodID,
+			"status":             j.pod.Status,
+			"termination_reason": j.Reason,
+			"job":                j.ID(),
 		})
 	}
 
-	if err := j.pod.UpdateStatus(pod.StatusTerminated); err != nil {
+	if err := j.pod.UpdateStatus(pod.StatusTerminated, j.Reason); err != nil {
 		j.AddError(errors.Wrap(err, "marking pod as terminated"))
 	}
 
 	grip.Info(message.Fields{
-		"message":                    "successfully terminated pod",
-		"pod":                        j.PodID,
-		"termination_attempt_reason": j.Reason,
-		"job":                        j.ID(),
+		"message":            "successfully terminated pod",
+		"pod":                j.PodID,
+		"usage":              "container task health dashboard",
+		"termination_reason": j.Reason,
+		"job":                j.ID(),
 	})
 }
 
@@ -150,10 +147,10 @@ func (j *podTerminationJob) populateIfUnset(ctx context.Context) error {
 	if j.pod == nil {
 		p, err := pod.FindOneByID(j.PodID)
 		if err != nil {
-			return err
+			return errors.Wrapf(err, "finding pod '%s'", j.PodID)
 		}
 		if p == nil {
-			return errors.New("pod not found")
+			return errors.Errorf("pod '%s' not found", j.PodID)
 		}
 		j.pod = p
 	}
@@ -167,17 +164,6 @@ func (j *podTerminationJob) populateIfUnset(ctx context.Context) error {
 
 	settings := j.env.Settings()
 
-	if j.vault == nil {
-		if j.smClient == nil {
-			client, err := cloud.MakeSecretsManagerClient(settings)
-			if err != nil {
-				return errors.Wrap(err, "initializing Secrets Manager client")
-			}
-			j.smClient = client
-		}
-		j.vault = cloud.MakeSecretsManagerVault(j.smClient)
-	}
-
 	if j.ecsClient == nil {
 		client, err := cloud.MakeECSClient(settings)
 		if err != nil {
@@ -186,11 +172,13 @@ func (j *podTerminationJob) populateIfUnset(ctx context.Context) error {
 		j.ecsClient = client
 	}
 
-	ecsPod, err := cloud.ExportECSPod(j.pod, j.ecsClient, j.vault)
-	if err != nil {
-		return errors.Wrap(err, "exporting pod")
+	if j.ecsPod == nil {
+		ecsPod, err := cloud.ExportECSPod(j.pod, j.ecsClient, nil)
+		if err != nil {
+			return errors.Wrap(err, "exporting pod")
+		}
+		j.ecsPod = ecsPod
 	}
-	j.ecsPod = ecsPod
 
 	return nil
 }
@@ -201,22 +189,56 @@ func (j *podTerminationJob) populateIfUnset(ctx context.Context) error {
 // no pods remaining to run tasks after this one is terminated, it marks the
 // tasks in the dispatcher as needing re-allocation.
 func (j *podTerminationJob) fixStrandedTasks(ctx context.Context) error {
-	if j.pod.RunningTask != "" {
-		if err := model.ClearAndResetStrandedContainerTask(j.pod); err != nil {
-			return errors.Wrap(err, "resetting stranded container task running on pod")
-		}
+	if err := j.fixStrandedRunningTask(ctx); err != nil {
+		return errors.Wrapf(err, "fixing container task stranded on pod '%s'", j.pod.ID)
 	}
 
 	disp, err := dispatcher.FindOneByPodID(j.pod.ID)
 	if err != nil {
-		return errors.Wrap(err, "finding dispatcher associated with pod")
+		return errors.Wrapf(err, "finding dispatcher associated with pod '%s'", j.pod.ID)
 	}
 	if disp == nil {
 		return nil
 	}
 
 	if err := disp.RemovePod(ctx, j.env, j.pod.ID); err != nil {
-		return errors.Wrap(err, "removing pod from dispatcher")
+		return errors.Wrapf(err, "removing pod '%s' from dispatcher '%s'", j.pod.ID, disp.ID)
+	}
+
+	return nil
+}
+
+func (j *podTerminationJob) fixStrandedRunningTask(ctx context.Context) error {
+	if j.pod.TaskRuntimeInfo.RunningTaskID == "" {
+		return nil
+	}
+
+	// A stranded task will need to be re-allocated to ensure that it
+	// dispatches to a new pod after this one is terminated.
+
+	t, err := task.FindOneIdAndExecution(j.pod.TaskRuntimeInfo.RunningTaskID, j.pod.TaskRuntimeInfo.RunningTaskExecution)
+	if err != nil {
+		return errors.Wrapf(err, "finding stranded container task '%s' execution %d", j.pod.TaskRuntimeInfo.RunningTaskID, j.pod.TaskRuntimeInfo.RunningTaskExecution)
+	}
+	if t == nil {
+		return nil
+	}
+	if t.Archived {
+		grip.Warning(message.Fields{
+			"message":   "stranded container task has already been archived, refusing to fix it",
+			"task":      t.Id,
+			"execution": t.Execution,
+			"status":    t.Status,
+		})
+		return nil
+	}
+
+	if err := t.MarkAsContainerDeallocated(ctx, j.env); err != nil {
+		return errors.Wrapf(err, "marking stranded container task '%s' execution %d running on pod '%s' as deallocated", j.pod.TaskRuntimeInfo.RunningTaskID, j.pod.TaskRuntimeInfo.RunningTaskExecution, j.pod.ID)
+	}
+
+	if err := model.ClearAndResetStrandedContainerTask(j.env.Settings(), j.pod); err != nil {
+		return errors.Wrapf(err, "resetting stranded container task '%s' execution %d running on pod '%s'", j.pod.TaskRuntimeInfo.RunningTaskID, j.pod.TaskRuntimeInfo.RunningTaskExecution, j.pod.ID)
 	}
 
 	return nil

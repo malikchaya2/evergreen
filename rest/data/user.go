@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/event"
 	"github.com/evergreen-ci/evergreen/model/user"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
@@ -21,16 +20,23 @@ func UpdateSettings(dbUser *user.DBUser, settings user.UserSettings) error {
 			Message:    "expected a Slack username, but got a channel",
 		}
 	}
+
 	settings.SlackUsername = strings.TrimPrefix(settings.SlackUsername, "@")
 	settings.Notifications.PatchFinishID = dbUser.Settings.Notifications.PatchFinishID
 	settings.Notifications.SpawnHostOutcomeID = dbUser.Settings.Notifications.SpawnHostOutcomeID
 	settings.Notifications.SpawnHostExpirationID = dbUser.Settings.Notifications.SpawnHostExpirationID
 	settings.Notifications.CommitQueueID = dbUser.Settings.Notifications.CommitQueueID
 
+	slackTarget := fmt.Sprintf("@%s", settings.SlackUsername)
+
+	if settings.SlackMemberId != "" {
+		slackTarget = settings.SlackMemberId
+	}
+
 	var patchSubscriber event.Subscriber
 	switch settings.Notifications.PatchFinish {
 	case user.PreferenceSlack:
-		patchSubscriber = event.NewSlackSubscriber(fmt.Sprintf("@%s", settings.SlackUsername))
+		patchSubscriber = event.NewSlackSubscriber(slackTarget)
 	case user.PreferenceEmail:
 		patchSubscriber = event.NewEmailSubscriber(dbUser.Email())
 	}
@@ -48,7 +54,7 @@ func UpdateSettings(dbUser *user.DBUser, settings user.UserSettings) error {
 	var patchFailureSubscriber event.Subscriber
 	switch settings.Notifications.PatchFirstFailure {
 	case user.PreferenceSlack:
-		patchFailureSubscriber = event.NewSlackSubscriber(fmt.Sprintf("@%s", settings.SlackUsername))
+		patchFailureSubscriber = event.NewSlackSubscriber(slackTarget)
 	case user.PreferenceEmail:
 		patchFailureSubscriber = event.NewEmailSubscriber(dbUser.Email())
 	}
@@ -66,7 +72,7 @@ func UpdateSettings(dbUser *user.DBUser, settings user.UserSettings) error {
 	var buildBreakSubscriber event.Subscriber
 	switch settings.Notifications.BuildBreak {
 	case user.PreferenceSlack:
-		buildBreakSubscriber = event.NewSlackSubscriber(fmt.Sprintf("@%s", settings.SlackUsername))
+		buildBreakSubscriber = event.NewSlackSubscriber(slackTarget)
 	case user.PreferenceEmail:
 		buildBreakSubscriber = event.NewEmailSubscriber(dbUser.Email())
 	}
@@ -84,7 +90,7 @@ func UpdateSettings(dbUser *user.DBUser, settings user.UserSettings) error {
 	var spawnhostSubscriber event.Subscriber
 	switch settings.Notifications.SpawnHostExpiration {
 	case user.PreferenceSlack:
-		spawnhostSubscriber = event.NewSlackSubscriber(fmt.Sprintf("@%s", settings.SlackUsername))
+		spawnhostSubscriber = event.NewSlackSubscriber(slackTarget)
 	case user.PreferenceEmail:
 		spawnhostSubscriber = event.NewEmailSubscriber(dbUser.Email())
 	}
@@ -102,7 +108,7 @@ func UpdateSettings(dbUser *user.DBUser, settings user.UserSettings) error {
 	var spawnHostOutcomeSubscriber event.Subscriber
 	switch settings.Notifications.SpawnHostOutcome {
 	case user.PreferenceSlack:
-		spawnHostOutcomeSubscriber = event.NewSlackSubscriber(fmt.Sprintf("@%s", settings.SlackUsername))
+		spawnHostOutcomeSubscriber = event.NewSlackSubscriber(slackTarget)
 	case user.PreferenceEmail:
 		spawnHostOutcomeSubscriber = event.NewEmailSubscriber(dbUser.Email())
 	}
@@ -120,7 +126,7 @@ func UpdateSettings(dbUser *user.DBUser, settings user.UserSettings) error {
 	var commitQueueSubscriber event.Subscriber
 	switch settings.Notifications.CommitQueue {
 	case user.PreferenceSlack:
-		commitQueueSubscriber = event.NewSlackSubscriber(fmt.Sprintf("@%s", settings.SlackUsername))
+		commitQueueSubscriber = event.NewSlackSubscriber(slackTarget)
 	case user.PreferenceEmail:
 		commitQueueSubscriber = event.NewEmailSubscriber(dbUser.Email())
 	}
@@ -140,12 +146,7 @@ func UpdateSettings(dbUser *user.DBUser, settings user.UserSettings) error {
 
 func SubmitFeedback(in restModel.APIFeedbackSubmission) error {
 	f, _ := in.ToService()
-	feedback, isValid := f.(model.FeedbackSubmission)
-	if !isValid {
-		return errors.Errorf("unknown feedback submission type %T", feedback)
-	}
-
-	return errors.Wrap(feedback.Insert(), "error saving feedback")
+	return errors.Wrap(f.Insert(), "error saving feedback")
 }
 
 func GetServiceUsers() ([]restModel.APIDBUser, error) {
