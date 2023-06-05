@@ -1,8 +1,11 @@
 package route
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -21,9 +24,11 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
+	"github.com/google/go-github/v52/github"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
+	sns "github.com/robbiet480/go.sns"
 )
 
 type (
@@ -909,6 +914,86 @@ func (m *EventLogPermissionsMiddleware) ServeHTTP(rw http.ResponseWriter, r *htt
 			http.Error(rw, "not authorized for this action", http.StatusUnauthorized)
 			return
 		}
+	}
+
+	next(rw, r)
+}
+
+// NewGithubAuthMiddleware returns a middleware that verifies the payload
+func NewGithubAuthMiddleware() gimlet.Middleware {
+	return &githubAuthMiddleware{}
+}
+
+type githubAuthMiddleware struct{}
+
+func (m *githubAuthMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	githubSecret := []byte(evergreen.GetEnvironment().Settings().Api.GithubWebhookSecret)
+
+	// save the body for future reads
+	payload, err := io.ReadAll(r.Body)
+	r.Body = io.NopCloser(bytes.NewBuffer(payload))
+
+	_, err = github.ValidatePayload(r, githubSecret)
+
+	if err != nil {
+		grip.Error(message.WrapError(err, message.Fields{
+			"source":  "GitHub hook",
+			"message": "rejecting GitHub webhook",
+			"msg_id":  r.Header.Get("X-Github-Delivery"),
+			"event":   r.Header.Get("X-Github-Event"),
+		}))
+		gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(errors.Wrap(err, "unable to validate github payload")))
+		return
+	}
+
+	//reset the body so that it can be parsed again
+	r.Body = io.NopCloser(bytes.NewBuffer(payload))
+	next(rw, r)
+}
+
+type snsAuthMiddleware struct{}
+
+// NewSNSAuthMiddleware returns a middleware that verifies the payload
+func NewSNSAuthMiddleware() gimlet.Middleware {
+	return &snsAuthMiddleware{}
+}
+
+func (m *snsAuthMiddleware) ServeHTTP(rw http.ResponseWriter, r *http.Request, next http.HandlerFunc) {
+	// grip.Error(message.Fields{
+	// 	"message": "chayaMTesting 961",
+	// })
+	body, err := io.ReadAll(r.Body)
+	// grip.Error(message.Fields{
+	// 	"message": "chayaMTesting 965",
+	// 	"error":   err,
+	// })
+	if err != nil {
+		// grip.Error(message.Fields{
+		// 	"error":   err,
+		// 	"message": "chayaMTesting",
+		// })
+		gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(errors.Wrap(err, "reading body")))
+		return
+	}
+
+	var payload sns.Payload
+	if err = json.Unmarshal(body, &payload); err != nil {
+		gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(errors.Wrap(err, "unmarshalling JSON payload")))
+		return
+	}
+
+	// grip.Error(message.Fields{
+	// 	"message": "chayaMTesting 984",
+	// 	"error":   err,
+	// })
+	if err = payload.VerifyPayload(); err != nil {
+		msg := "AWS SNS message failed validation"
+		grip.Error(message.WrapError(err, message.Fields{
+			"message": msg,
+			"payload": payload,
+		}))
+		gimlet.WriteResponse(rw, gimlet.MakeJSONErrorResponder(errors.Wrap(err, msg)))
+		return
 	}
 
 	next(rw, r)
