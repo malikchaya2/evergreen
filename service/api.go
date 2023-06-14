@@ -131,18 +131,51 @@ func (as *APIServer) FetchTask(w http.ResponseWriter, r *http.Request) {
 }
 
 // fetchProjectRef returns a project ref given the project identifier
-func (as *APIServer) fetchProjectRef(w http.ResponseWriter, r *http.Request) {
+func (as *APIServer) fetchRestrictedProjectRef(w http.ResponseWriter, r *http.Request) {
 	id := gimlet.GetVars(r)["identifier"]
-	projectRef, err := model.FindMergedProjectRef(id, "", true)
+	p, err := model.FindMergedProjectRef(id, "", true)
 	if err != nil {
 		as.LoggedError(w, r, http.StatusInternalServerError, err)
 		return
 	}
-	if projectRef == nil {
+	if p == nil {
 		http.Error(w, fmt.Sprintf("no project found named '%v'", id), http.StatusNotFound)
 		return
 	}
-	gimlet.WriteJSON(w, projectRef)
+
+	restricted := &model.ProjectRef{}
+
+	restricted.CommitQueue.Message = p.CommitQueue.Message
+	restricted.CommitQueue.Enabled = p.CommitQueue.Enabled
+	restricted.Owner = p.Owner
+	restricted.Repo = p.Repo
+	restricted.Branch = p.Branch
+
+	gimlet.WriteJSON(w, restricted)
+}
+
+// fetchProjectRef returns a project ref given the project identifier
+func (as *APIServer) projectWithWorkstationConfig(w http.ResponseWriter, r *http.Request) {
+	id := gimlet.GetVars(r)["identifier"]
+	p, err := model.FindMergedProjectRef(id, "", true)
+	if err != nil {
+		as.LoggedError(w, r, http.StatusInternalServerError, err)
+		return
+	}
+	if p == nil {
+		http.Error(w, fmt.Sprintf("no project found named '%v'", id), http.StatusNotFound)
+		return
+	}
+
+	restricted := &model.ProjectRef{}
+
+	restricted.Id = p.Id
+	restricted.Identifier = p.Identifier
+	restricted.WorkstationConfig.SetupCommands = p.WorkstationConfig.SetupCommands
+	restricted.Branch = p.Branch
+	restricted.Owner = p.Owner
+	restricted.Repo = p.Repo
+	gimlet.WriteJSON(w, restricted)
 }
 
 // listProjects returns the projects merged with the repo settings
@@ -313,7 +346,6 @@ func (as *APIServer) GetSettings() evergreen.Settings {
 func (as *APIServer) GetServiceApp() *gimlet.APIApp {
 	requireProject := gimlet.WrapperMiddleware(as.requireProject)
 	requireUser := gimlet.NewRequireAuthHandler()
-	viewProject := route.RequiresProjectPermission(evergreen.PermissionProjectSettings, evergreen.ProjectSettingsView)
 	viewTasks := route.RequiresProjectPermission(evergreen.PermissionTasks, evergreen.TasksView)
 	submitPatch := route.RequiresProjectPermission(evergreen.PermissionPatches, evergreen.PatchSubmit)
 
@@ -323,7 +355,8 @@ func (as *APIServer) GetServiceApp() *gimlet.APIApp {
 	app.SimpleVersions = true
 
 	// Project lookup and validation routes
-	app.AddRoute("/ref/{projectId}").Wrap(requireUser, viewProject).Handler(as.fetchProjectRef).Get()
+	app.AddRoute("/ref/{projectId}").Wrap(requireUser).Handler(as.fetchRestrictedProjectRef).Get()
+	app.AddRoute("/ref/{projectId}/workstation").Wrap(requireUser).Handler(as.projectWithWorkstationConfig).Get()
 	app.AddRoute("/validate").Wrap(requireUser).Handler(as.validateProjectConfig).Post()
 
 	// Internal status reporting
