@@ -278,7 +278,8 @@ func (ac *legacyClient) GetProjectRef(projectId string) (*model.ProjectRef, erro
 	return ref, nil
 }
 
-// GetProjectWorkstationConfig requests the project workstation config from the API server for a given project ID.
+// GetProjectWorkstationConfig requests the project ref that includes the workstation config
+// from the API server for a given project ID.
 func (ac *legacyClient) GetProjectWithWorkstationConfig(projectId string) (*model.ProjectRef, error) {
 	resp, err := ac.get(fmt.Sprintf("/ref/%s/workstation", projectId), nil)
 	if err != nil {
