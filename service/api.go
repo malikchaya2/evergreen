@@ -143,13 +143,15 @@ func (as *APIServer) fetchRestrictedProjectRef(w http.ResponseWriter, r *http.Re
 		return
 	}
 
-	restricted := &model.ProjectRef{}
-
-	restricted.CommitQueue.Message = p.CommitQueue.Message
-	restricted.CommitQueue.Enabled = p.CommitQueue.Enabled
-	restricted.Owner = p.Owner
-	restricted.Repo = p.Repo
-	restricted.Branch = p.Branch
+	restricted := &model.ProjectRef{
+		Owner:  p.Owner,
+		Repo:   p.Repo,
+		Branch: p.Branch,
+		CommitQueue: model.CommitQueueParams{
+			Message: p.CommitQueue.Message,
+			Enabled: p.CommitQueue.Enabled,
+		},
+	}
 
 	gimlet.WriteJSON(w, restricted)
 }
@@ -167,14 +169,17 @@ func (as *APIServer) projectWithWorkstationConfig(w http.ResponseWriter, r *http
 		return
 	}
 
-	restricted := &model.ProjectRef{}
+	restricted := &model.ProjectRef{
+		Id:         p.Id,
+		Identifier: p.Identifier,
+		Owner:      p.Owner,
+		Repo:       p.Repo,
+		Branch:     p.Branch,
+		WorkstationConfig: model.WorkstationConfig{
+			SetupCommands: p.WorkstationConfig.SetupCommands,
+		},
+	}
 
-	restricted.Id = p.Id
-	restricted.Identifier = p.Identifier
-	restricted.WorkstationConfig.SetupCommands = p.WorkstationConfig.SetupCommands
-	restricted.Branch = p.Branch
-	restricted.Owner = p.Owner
-	restricted.Repo = p.Repo
 	gimlet.WriteJSON(w, restricted)
 }
 
