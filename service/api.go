@@ -313,6 +313,7 @@ func (as *APIServer) GetSettings() evergreen.Settings {
 func (as *APIServer) GetServiceApp() *gimlet.APIApp {
 	requireProject := gimlet.WrapperMiddleware(as.requireProject)
 	requireUser := gimlet.NewRequireAuthHandler()
+	viewProject := route.RequiresProjectPermission(evergreen.PermissionProjectSettings, evergreen.ProjectSettingsView)
 	viewTasks := route.RequiresProjectPermission(evergreen.PermissionTasks, evergreen.TasksView)
 	submitPatch := route.RequiresProjectPermission(evergreen.PermissionPatches, evergreen.PatchSubmit)
 
@@ -322,7 +323,7 @@ func (as *APIServer) GetServiceApp() *gimlet.APIApp {
 	app.SimpleVersions = true
 
 	// Project lookup and validation routes
-	app.AddRoute("/ref/{identifier}").Wrap(requireUser).Handler(as.fetchProjectRef).Get()
+	app.AddRoute("/ref/{projectId}").Wrap(requireUser, viewProject).Handler(as.fetchProjectRef).Get()
 	app.AddRoute("/validate").Wrap(requireUser).Handler(as.validateProjectConfig).Post()
 
 	// Internal status reporting
