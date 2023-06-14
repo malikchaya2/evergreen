@@ -144,6 +144,7 @@ func (as *APIServer) fetchRestrictedProjectRef(w http.ResponseWriter, r *http.Re
 	}
 
 	restricted := &model.ProjectRef{
+		Id:     p.Id,
 		Owner:  p.Owner,
 		Repo:   p.Repo,
 		Branch: p.Branch,
