@@ -566,7 +566,7 @@ func GetVersionsWithOptions(projectName string, opts GetVersionsOptions) ([]Vers
 	}
 
 	if opts.StartAfter > 0 {
-		match[VersionRevisionOrderNumberKey] = bson.M{"$lt": opts.StartAfter}
+		match[VersionRevisionOrderNumberKey] = bson.M{"$gte": opts.StartAfter}
 	}
 	pipeline := []bson.M{{"$match": match}}
 	pipeline = append(pipeline, bson.M{"$sort": bson.M{VersionRevisionOrderNumberKey: -1}})
