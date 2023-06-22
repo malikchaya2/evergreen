@@ -890,38 +890,17 @@ func (h *getProjectVersionsHandler) Parse(ctx context.Context, r *http.Request) 
 		return errors.New("start must be a non-negative integer")
 	}
 
-	combinationMsg := `cannot be combined with start. 'start' is deprecated, use revision_start 
-	instead but keep in mind that it uses lte and not lt`
-	revisionStartStr := params.Get("revision_start")
-	if revisionStartStr != "" {
-		revisionStartOrder, err := strconv.Atoi(params.Get("revision_start"))
-		if err != nil {
-			return errors.Wrap(err, "invalid revision_start query parameter")
-		}
-		h.opts.RevisionStart = revisionStartOrder
-
-		if h.opts.Start < 0 {
-			return errors.Wrapf(err, "revision_start %s", combinationMsg)
-		}
-	}
 	if h.opts.RevisionStart < 0 {
 		return errors.New("revision_start must be a non-negative integer")
 	}
 
-	revisionEndStr := params.Get("revision_end")
-	if revisionEndStr != "" {
-		revisionEndOrder, err := strconv.Atoi(params.Get("revision_end"))
-		if err != nil {
-			return errors.Wrap(err, "invalid start query parameter")
-		}
-		h.opts.RevisionEnd = revisionEndOrder
-
-		if h.opts.Start < 0 {
-			return errors.Wrapf(err, "revision_start %s", combinationMsg)
-		}
-	}
 	if h.opts.RevisionEnd < 0 {
 		return errors.New("revision_end must be a non-negative integer")
+	}
+
+	if h.opts.Start > 0 && (h.opts.RevisionStart > 0 || h.opts.RevisionEnd > 0) {
+		return errors.Errorf(`revision_start and revision_end cannot be combined with start. start is deprecated, use revision_start 
+	instead but keep in mind that it uses lte and not lt`)
 	}
 
 	requester := params.Get("requester")
