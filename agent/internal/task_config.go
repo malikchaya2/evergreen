@@ -133,19 +133,9 @@ func (c *TaskConfig) GetCloneMethod() string {
 }
 
 func (tc *TaskConfig) GetTaskGroup(taskGroup string) (*model.TaskGroup, error) {
-	if tc == nil {
-		return nil, errors.New("unable to get task group because task config is nil")
+	if err := tc.validateTaskConfig(); err != nil {
+		return nil, err
 	}
-	if tc.Task == nil {
-		return nil, errors.New("unable to get task group because task is nil")
-	}
-	if tc.Task.Version == "" {
-		return nil, errors.New("task has no version")
-	}
-	if tc.Project == nil {
-		return nil, errors.New("project is nil")
-	}
-
 	var tg *model.TaskGroup
 	if taskGroup == "" {
 		// if there is no named task group, fall back to project definitions
@@ -166,6 +156,55 @@ func (tc *TaskConfig) GetTaskGroup(taskGroup string) (*model.TaskGroup, error) {
 		tg.Timeout = tc.Project.Timeout
 	}
 	return tg, nil
+}
+
+type taskSetup struct {
+	SetupTask             *model.YAMLCommandSet
+	Name                  string
+	ShouldFailTask        bool
+	SetupGroup            *model.YAMLCommandSet
+	SetupGroupTimeoutSecs int
+}
+
+func (tc *TaskConfig) GetPre(taskGroup string) (*taskSetup, error) {
+	if err := tc.validateTaskConfig(); err != nil {
+		return nil, err
+	}
+
+	var ts *taskSetup
+	if taskGroup == "" {
+		return nil, errors.New("taskGroup is not provided")
+	}
+	tg := tc.Project.FindTaskGroup(taskGroup)
+	tg.SetupGroup.SingleCommand.DisplayName
+	if tg == nil {
+		return nil, errors.Errorf("couldn't find task group '%s' in project '%s'", tc.Task.TaskGroup, tc.Project.Identifier)
+	}
+	ts = &taskSetup{
+		SetupTask:             tg.SetupTask,
+		Name:                  tg.Name,
+		ShouldFailTask:        tg.SetupGroupFailTask,
+		SetupGroup:            tg.SetupGroup,
+		SetupGroupTimeoutSecs: tg.SetupGroupTimeoutSecs,
+	}
+
+	return ts, nil
+}
+
+func (tc *TaskConfig) validateTaskConfig() error {
+	if tc == nil {
+		return errors.New("unable to get task setup because task config is nil")
+	}
+	if tc.Task == nil {
+		return errors.New("unable to get task setup because task is nil")
+	}
+	if tc.Task.Version == "" {
+		return errors.New("task has no version")
+	}
+	if tc.Project == nil {
+		return errors.New("project is nil")
+	}
+	return nil
 }
 
 func (tc *TaskConfig) TaskAttributeMap() map[string]string {
