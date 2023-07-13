@@ -131,50 +131,50 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 	opts := runCommandsOptions{}
 
 	if !tc.ranSetupGroup {
-		taskGroup, err := tc.taskConfig.GetTaskGroup(tc.taskGroup)
+		taskSetup, err := tc.taskConfig.GetPre(tc.taskGroup)
 		if err != nil {
 			tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for task setup group commands"))
 			return nil
 		}
-		if taskGroup.SetupGroup != nil {
-			tc.logger.Task().Infof("Running setup group for task group '%s'.", taskGroup.Name)
-			opts.failPreAndPost = taskGroup.SetupGroupFailTask
+		if taskSetup.SetupGroup != nil {
+			tc.logger.Task().Infof("Running setup group for task group '%s'.", taskSetup.Name)
+			opts.failPreAndPost = taskSetup.SetupGroupFailTask
 
 			var setupGroupCtx context.Context
 			var setupGroupCancel context.CancelFunc
-			if taskGroup.SetupGroupTimeoutSecs > 0 {
-				setupGroupCtx, setupGroupCancel = context.WithTimeout(ctx, time.Duration(taskGroup.SetupGroupTimeoutSecs)*time.Second)
+			if taskSetup.SetupGroupTimeoutSecs > 0 {
+				setupGroupCtx, setupGroupCancel = context.WithTimeout(ctx, time.Duration(taskSetup.SetupGroupTimeoutSecs)*time.Second)
 			} else {
 				setupGroupCtx, setupGroupCancel = a.withCallbackTimeout(ctx, tc)
 			}
 			defer setupGroupCancel()
 
-			err = a.runCommandsInBlock(setupGroupCtx, tc, taskGroup.SetupGroup.List(), opts, setupGroupBlock)
+			err = a.runCommandsInBlock(setupGroupCtx, tc, taskSetup.SetupGroup.List(), opts, setupGroupBlock)
 			if err != nil {
 				tc.logger.Execution().Error(errors.Wrap(err, "running task setup group"))
-				if taskGroup.SetupGroupFailTask {
+				if taskSetup.SetupGroupFailTask {
 					return err
 				}
 			}
-			tc.logger.Task().Infof("Finished running setup group for task group '%s'.", taskGroup.Name)
+			tc.logger.Task().Infof("Finished running setup group for task group '%s'.", taskSetup.Name)
 		}
 		tc.ranSetupGroup = true
 	}
 
-	taskGroup, err := tc.taskConfig.GetTaskGroup(tc.taskGroup)
+	taskSetup, err := tc.taskConfig.GetPre(tc.taskGroup)
 	if err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for pre-task commands"))
 		return nil
 	}
 
-	if taskGroup.SetupTask != nil {
-		tc.logger.Task().Infof("Running setup task for task group '%s'.", taskGroup.Name)
-		opts.failPreAndPost = taskGroup.SetupGroupFailTask
+	if taskSetup.SetupTask != nil {
+		tc.logger.Task().Infof("Running setup task for task group '%s'.", taskSetup.Name)
+		opts.failPreAndPost = taskSetup.SetupGroupFailTask
 		block := preBlock
 		if tc.taskGroup != "" {
 			block = setupTaskBlock
 		}
-		err = a.runCommandsInBlock(ctx, tc, taskGroup.SetupTask.List(), opts, block)
+		err = a.runCommandsInBlock(ctx, tc, taskSetup.SetupTask.List(), opts, block)
 	}
 	if err != nil {
 		err = errors.Wrap(err, "Running pre-task commands failed")

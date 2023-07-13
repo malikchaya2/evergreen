@@ -659,13 +659,13 @@ func (a *Agent) runTaskTimeoutCommands(ctx context.Context, tc *taskContext) {
 	ctx, cancel = a.withCallbackTimeout(ctx, tc)
 	defer cancel()
 
-	taskGroup, err := tc.taskConfig.GetTaskGroup(tc.taskGroup)
+	timeout, err := tc.taskConfig.GetTaskTimeout(tc.taskGroup)
 	if err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for task timeout commands"))
 		return
 	}
-	if taskGroup.Timeout != nil {
-		err := a.runCommandsInBlock(ctx, tc, taskGroup.Timeout.List(), runCommandsOptions{}, taskTimeoutBlock)
+	if timeout != nil {
+		err := a.runCommandsInBlock(ctx, tc, timeout.List(), runCommandsOptions{}, taskTimeoutBlock)
 		tc.logger.Execution().Error(errors.Wrap(err, "running timeout commands"))
 		tc.logger.Task().Infof("Finished running timeout commands in %s.", time.Since(start))
 	}
@@ -793,21 +793,21 @@ func (a *Agent) runPostTaskCommands(ctx context.Context, tc *taskContext) error 
 	postCtx, cancel := a.withCallbackTimeout(ctx, tc)
 	defer cancel()
 	taskConfig := tc.getTaskConfig()
-	taskGroup, err := taskConfig.GetTaskGroup(tc.taskGroup)
+	teardownTask, canFail, err := taskConfig.GetPost(tc.taskGroup)
 	if err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for post-task commands"))
 		return nil
 	}
-	if taskGroup.TeardownTask != nil {
-		opts.failPreAndPost = taskGroup.TeardownTaskCanFailTask
+	if teardownTask != nil {
+		opts.failPreAndPost = canFail
 		block := postBlock
 		if tc.taskGroup != "" {
 			block = teardownTaskBlock
 		}
-		err = a.runCommandsInBlock(postCtx, tc, taskGroup.TeardownTask.List(), opts, block)
+		err = a.runCommandsInBlock(postCtx, tc, teardownTask.List(), opts, block)
 		if err != nil {
 			tc.logger.Task().Error(errors.Wrap(err, "running post-task commands"))
-			if taskGroup.TeardownTaskCanFailTask {
+			if canFail {
 				return err
 			}
 		}
@@ -830,20 +830,20 @@ func (a *Agent) runPostGroupCommands(ctx context.Context, tc *taskContext) {
 			grip.Error(tc.logger.Close())
 		}
 	}()
-	taskGroup, err := tc.taskConfig.GetTaskGroup(tc.taskGroup)
+	teardownGroup, err := tc.taskConfig.GetTeardownGroup(tc.taskGroup)
 	if err != nil {
 		if tc.logger != nil {
 			tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for post-group commands"))
 		}
 		return
 	}
-	if taskGroup.TeardownGroup != nil {
+	if teardownGroup != nil {
 		grip.Info("Running post-group commands.")
 		a.killProcs(ctx, tc, true, "teardown group commands are starting")
 		var cancel context.CancelFunc
 		ctx, cancel = a.withCallbackTimeout(ctx, tc)
 		defer cancel()
-		err := a.runCommandsInBlock(ctx, tc, taskGroup.TeardownGroup.List(), runCommandsOptions{}, teardownGroupBlock)
+		err := a.runCommandsInBlock(ctx, tc, teardownGroup.List(), runCommandsOptions{}, teardownGroupBlock)
 		grip.Error(errors.Wrap(err, "running post-group commands"))
 		grip.Info("Finished running post-group commands.")
 	}
@@ -934,12 +934,12 @@ func (a *Agent) shouldKill(tc *taskContext, ignoreTaskGroupCheck bool) bool {
 	if ignoreTaskGroupCheck {
 		return true
 	}
-	taskGroup, err := tc.taskConfig.GetTaskGroup(tc.taskGroup)
+	shareProcs, err := tc.taskConfig.GetShareProcs(tc.taskGroup)
 	if err != nil {
 		return false
 	}
 	// do not kill if share_processes is set
-	if taskGroup.ShareProcs {
+	if shareProcs {
 		return false
 	}
 	// return true otherwise
