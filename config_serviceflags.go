@@ -45,6 +45,7 @@ type ServiceFlags struct {
 	EmailNotificationsDisabled   bool `bson:"email_notifications_disabled" json:"email_notifications_disabled"`
 	WebhookNotificationsDisabled bool `bson:"webhook_notifications_disabled" json:"webhook_notifications_disabled"`
 	GithubStatusAPIDisabled      bool `bson:"github_status_api_disabled" json:"github_status_api_disabled"`
+	UnsetFunctionVarsDisabled    bool `bson:"unset_function_vars_disabled" json:"unset_function_vars_disabled"`
 }
 
 func (c *ServiceFlags) SectionId() string { return "service_flags" }
@@ -100,6 +101,7 @@ func (c *ServiceFlags) Set(ctx context.Context) error {
 			legacyUIPublicAccessDisabledKey:   c.LegacyUIPublicAccessDisabled,
 			globalGitHubTokenDisabledKey:      c.GlobalGitHubTokenDisabled,
 			unrecognizedPodCleanupDisabledKey: c.UnrecognizedPodCleanupDisabled,
+			unsetFunctionVarsDisabledKey:      c.UnsetFunctionVarsDisabled,
 		},
 	}, options.Update().SetUpsert(true))
 
