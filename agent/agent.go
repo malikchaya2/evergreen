@@ -536,6 +536,8 @@ func (a *Agent) startLogging(ctx context.Context, tc *taskContext) error {
 func (a *Agent) runTask(ctx context.Context, tc *taskContext) (shouldExit bool, err error) {
 	// we want to have separate context trees for tasks and loggers, so
 	// when a task is canceled by a context, it can log its clean up.
+
+	// note: we can probably remove this and use ctx directly.
 	tskCtx, tskCancel := context.WithCancel(ctx)
 	defer tskCancel()
 
@@ -548,6 +550,28 @@ func (a *Agent) runTask(ctx context.Context, tc *taskContext) (shouldExit bool, 
 		err = a.logPanic(tc.logger, pErr, err, op)
 	}()
 
+	// setup starts here
+	// this should happen before the heartbeat, shouldn't be abortable
+	setupCtx, setupCancel := context.WithTimeout(tskCtx, evergreen.HeartbeatTimeoutThreshold)
+	defer setupCancel()
+	shouldExit, err = a.setupTask(setupCtx, tc)
+	if err != nil {
+		return shouldExit, errors.Wrap(err, "setting up task")
+	}
+
+	idleTimeoutCtx, idleTimeoutCancel := context.WithCancel(tskCtx)
+	go a.startIdleTimeoutWatch(tskCtx, tc, idleTimeoutCancel)
+
+	preAndMainCtx, preAndMainCancel := context.WithCancel(idleTimeoutCtx)
+	go a.startHeartbeat(tskCtx, preAndMainCancel, tc)
+
+	// todo: rename all instances of startTask to runPreAndMain
+	status := a.runPreAndMain(preAndMainCtx, tc)
+	// this stays
+	return a.handleTaskResponse(tskCtx, tc, status, "")
+}
+
+func (a *Agent) setupTask(setupCtx context.Context, tc *taskContext) (shouldExit bool, err error) {
 	// If the heartbeat aborts the task immediately, we should report that
 	// the task failed during initial task setup.
 	factory, ok := command.GetCommandFactory("setup.initial")
@@ -555,24 +579,25 @@ func (a *Agent) runTask(ctx context.Context, tc *taskContext) (shouldExit bool, 
 		return false, errors.New("setup.initial command is not registered")
 	}
 	tc.setCurrentCommand(factory())
+	a.comm.UpdateLastMessageTime()
 
 	var taskConfig *internal.TaskConfig
-	taskConfig, err = a.makeTaskConfig(ctx, tc)
+	taskConfig, err = a.makeTaskConfig(setupCtx, tc)
 	if err != nil {
 		err = errors.Wrap(err, "making task config")
 		grip.Error(err)
 		grip.Infof("Task complete: '%s'.", tc.task.ID)
 		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
-		return a.handleTaskResponse(tskCtx, tc, evergreen.TaskSystemFailed, err.Error())
+		return a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
 	}
 	tc.setTaskConfig(taskConfig)
 
-	if err = a.startLogging(ctx, tc); err != nil {
+	if err = a.startLogging(setupCtx, tc); err != nil {
 		err = errors.Wrap(err, "setting up logger producer")
 		grip.Error(err)
 		grip.Infof("Task complete: '%s'.", tc.task.ID)
 		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
-		return a.handleTaskResponse(tskCtx, tc, evergreen.TaskSystemFailed, err.Error())
+		return a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
 	}
 
 	if !tc.ranSetupGroup {
@@ -582,7 +607,7 @@ func (a *Agent) runTask(ctx context.Context, tc *taskContext) (shouldExit bool, 
 			grip.Error(err)
 			grip.Infof("Task complete: '%s'.", tc.task.ID)
 			tc.logger.Execution().Error(errors.Wrap(err, "creating task directory"))
-			return a.handleTaskResponse(tskCtx, tc, evergreen.TaskSystemFailed, err.Error())
+			return a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
 		}
 	}
 	tc.taskConfig.WorkDir = tc.taskDirectory
@@ -594,39 +619,46 @@ func (a *Agent) runTask(ctx context.Context, tc *taskContext) (shouldExit bool, 
 		"task_secret": tc.task.Secret,
 	})
 
-	defer a.killProcs(ctx, tc, false, "task is finished")
-
-	tskCtx = utility.ContextWithAttributes(tskCtx, tc.taskConfig.TaskAttributes())
-	tskCtx, span := a.tracer.Start(tskCtx, fmt.Sprintf("task: '%s'", tc.taskConfig.Task.DisplayName))
+	setupCtx = utility.ContextWithAttributes(setupCtx, tc.taskConfig.TaskAttributes())
+	setupCtx, span := a.tracer.Start(setupCtx, fmt.Sprintf("task: '%s'", tc.taskConfig.Task.DisplayName))
 	defer span.End()
 	tc.traceID = span.SpanContext().TraceID().String()
 
-	shutdown, err := a.startMetrics(tskCtx, tc.taskConfig)
+	shutdown, err := a.startMetrics(setupCtx, tc.taskConfig)
 	grip.Error(errors.Wrap(err, "starting metrics collection"))
 	if shutdown != nil {
-		defer shutdown(ctx)
+		defer shutdown(setupCtx)
 	}
 
 	defer func() {
-		tc.logger.Execution().Error(errors.Wrap(a.uploadTraces(tskCtx, tc.taskConfig.WorkDir), "uploading traces"))
+		tc.logger.Execution().Error(errors.Wrap(a.uploadTraces(setupCtx, tc.taskConfig.WorkDir), "uploading traces"))
 	}()
 
-	idleTimeoutCtx, idleTimeoutCancel := context.WithCancel(tskCtx)
-	go a.startIdleTimeoutWatch(tskCtx, tc, idleTimeoutCancel)
+	tc.logger.Task().Infof("Task logger initialized (agent version '%s' from Evergreen build revision '%s').", evergreen.AgentVersion, evergreen.BuildRevision)
+	tc.logger.Execution().Info("Execution logger initialized.")
+	tc.logger.System().Info("System logger initialized.")
 
-	preAndMainCtx, preAndMainCancel := context.WithCancel(idleTimeoutCtx)
-	go a.startHeartbeat(tskCtx, preAndMainCancel, tc)
+	if err := setupCtx.Err(); err != nil {
+		grip.Error(err)
+		tc.logger.Execution().Infof("Stopping task execution: %s", err)
+		return a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
+	}
 
-	status := a.startTask(preAndMainCtx, tc)
+	hostname, err := os.Hostname()
+	tc.logger.Execution().Info(errors.Wrap(err, "getting hostname"))
+	if hostname != "" {
+		tc.logger.Execution().Infof("Hostname is '%s'.", hostname)
+	}
+	tc.logger.Task().Infof("Starting task '%s', execution %d.", tc.taskConfig.Task.Id, tc.taskConfig.Task.Execution)
 
-	return a.handleTaskResponse(tskCtx, tc, status, "")
+	return false, nil
 }
 
 // startTask performs initial task setup and then runs the pre and main blocks
 // for the task. This method returns the status of the task after pre and main
 // have run. Also note that it's critical that all operations in this method
 // must respect the context. If the context errors, this must eventually return.
-func (a *Agent) startTask(ctx context.Context, tc *taskContext) (status string) {
+func (a *Agent) runPreAndMain(ctx context.Context, tc *taskContext) (status string) {
 	defer func() {
 		op := "running task pre and main blocks"
 		pErr := recovery.HandlePanicWithError(recover(), nil, op)
@@ -636,38 +668,12 @@ func (a *Agent) startTask(ctx context.Context, tc *taskContext) (status string) 
 		_ = a.logPanic(tc.logger, pErr, nil, op)
 		status = evergreen.TaskSystemFailed
 	}()
-
-	factory, ok := command.GetCommandFactory("setup.initial")
-	if !ok {
-		tc.logger.Execution().Error("Marking task as system-failed because setup.initial command is not registered.")
-		return evergreen.TaskSystemFailed
-	}
-
-	if ctx.Err() != nil {
-		tc.logger.Execution().Infof("Stopping task execution before setup: %s", ctx.Err())
-		return evergreen.TaskSystemFailed
-	}
-	tc.setCurrentCommand(factory())
-	a.comm.UpdateLastMessageTime()
+	defer a.killProcs(ctx, tc, false, "task is finished")
 
 	if ctx.Err() != nil {
 		tc.logger.Execution().Infof("Stopping task execution during setup: %s", ctx.Err())
 		return evergreen.TaskSystemFailed
 	}
-	tc.logger.Task().Infof("Task logger initialized (agent version '%s' from Evergreen build revision '%s').", evergreen.AgentVersion, evergreen.BuildRevision)
-	tc.logger.Execution().Info("Execution logger initialized.")
-	tc.logger.System().Info("System logger initialized.")
-
-	if ctx.Err() != nil {
-		tc.logger.Execution().Infof("Stopping task execution: %s", ctx.Err())
-		return evergreen.TaskSystemFailed
-	}
-	hostname, err := os.Hostname()
-	tc.logger.Execution().Info(errors.Wrap(err, "getting hostname"))
-	if hostname != "" {
-		tc.logger.Execution().Infof("Hostname is '%s'.", hostname)
-	}
-	tc.logger.Task().Infof("Starting task '%s', execution %d.", tc.taskConfig.Task.Id, tc.taskConfig.Task.Execution)
 
 	innerCtx, innerCancel := context.WithCancel(ctx)
 	defer innerCancel()
@@ -682,6 +688,8 @@ func (a *Agent) startTask(ctx context.Context, tc *taskContext) (status string) 
 		"df -h",
 		"${ps|ps}",
 	)
+
+	//todo: shouldn't this keep running in post?
 	tc.statsCollector.logStats(innerCtx, tc.taskConfig.Expansions)
 
 	if innerCtx.Err() != nil {
@@ -691,25 +699,26 @@ func (a *Agent) startTask(ctx context.Context, tc *taskContext) (status string) 
 
 	// notify API server that the task has been started.
 	tc.logger.Execution().Info("Reporting task started.")
-	if err = a.comm.StartTask(innerCtx, tc.task); err != nil {
+
+	if err := a.comm.StartTask(innerCtx, tc.task); err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "marking task started"))
 		return evergreen.TaskSystemFailed
 	}
 
 	a.killProcs(innerCtx, tc, false, "task is starting")
 
-	if err = a.runPreTaskCommands(innerCtx, tc); err != nil {
+	if err := a.runPreTaskCommands(innerCtx, tc); err != nil {
 		return evergreen.TaskFailed
 	}
 
 	if tc.oomTrackerEnabled(a.opts.CloudProvider) {
 		tc.logger.Execution().Info("OOM tracker clearing system messages.")
-		if err = tc.oomTracker.Clear(innerCtx); err != nil {
+		if err := tc.oomTracker.Clear(innerCtx); err != nil {
 			tc.logger.Execution().Error(errors.Wrap(err, "clearing OOM tracker system messages"))
 		}
 	}
 
-	if err = a.runTaskCommands(innerCtx, tc); err != nil {
+	if err := a.runTaskCommands(innerCtx, tc); err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "running task commands"))
 		return evergreen.TaskFailed
 	}
