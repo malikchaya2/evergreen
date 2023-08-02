@@ -457,8 +457,13 @@ func checkTaskLogContent(body []byte, mode agent.Mode) error {
 		// Validate that teardown_group only runs in last task
 		const lastTaskGroupTaskLog = "smoke test is running the fourth task in the task group"
 		const teardownGroupLog = "smoke test is running the teardown group"
+		// smoke test is running the teardown task
+
 		if strings.Contains(page, lastTaskGroupTaskLog) {
 			if !strings.Contains(page, teardownGroupLog) {
+				// this is the error it hits
+				grip.Info("chayaMtesting logging log")
+				grip.Info(page)
 				return errors.New("did not find teardown_group in task logs for last task in the task group")
 			}
 		} else {

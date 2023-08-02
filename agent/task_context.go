@@ -18,7 +18,6 @@ func (tc *taskContext) setCurrentCommand(command command.Command) {
 	tc.Lock()
 	defer tc.Unlock()
 	tc.currentCommand = command
-
 	if tc.logger != nil {
 		tc.logger.Execution().Infof("Current command set to %s (%s).", tc.currentCommand.DisplayName(), tc.currentCommand.Type())
 	}
@@ -89,6 +88,9 @@ func (tc *taskContext) getOomTrackerInfo() *apimodels.OOMTrackerInfo {
 }
 
 func (tc *taskContext) oomTrackerEnabled(cloudProvider string) bool {
+	b := utility.StringSliceContains(evergreen.ProviderContainer, cloudProvider)
+	a := tc.project.OomTracker
+	print(a, b)
 	return tc.project.OomTracker && !utility.StringSliceContains(evergreen.ProviderContainer, cloudProvider)
 }
 
