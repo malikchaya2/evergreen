@@ -554,7 +554,7 @@ func (a *Agent) runTask(ctx context.Context, nt *apimodels.NextTaskResponse, sho
 
 	// todo: rename all instances of startTask to runPreAndMain
 	status := a.runPreAndMain(preAndMainCtx, tc)
-	// this stays
+	// over here it's still failed
 	shouldExit, err = a.handleTaskResponse(tskCtx, tc, status, "")
 	return tc, shouldExit, err
 }
