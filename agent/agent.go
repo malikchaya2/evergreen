@@ -565,6 +565,26 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskConte
 		return tc, shouldExit, err
 	}
 
+	if !tc.ranSetupGroup {
+		tc.taskDirectory, err = a.createTaskDirectory(tc)
+		if err != nil {
+			err = errors.Wrap(err, "creating task directory")
+			grip.Error(err)
+			grip.Infof("Task complete: '%s'.", tc.task.ID)
+			tc.logger.Execution().Error(errors.Wrap(err, "creating task directory"))
+			shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
+			return tc, shouldExit, err
+		}
+	}
+	tc.taskConfig.WorkDir = tc.taskDirectory
+	tc.taskConfig.Expansions.Put("workdir", tc.taskConfig.WorkDir)
+
+	grip.Info(message.Fields{
+		"message":     "running task",
+		"task_id":     tc.task.ID,
+		"task_secret": tc.task.Secret,
+	})
+
 	return tc, false, nil
 }
 
@@ -592,26 +612,6 @@ func (a *Agent) runTask(ctx context.Context, tcInput *taskContext, nt *apimodels
 		}
 		err = a.logPanic(tc.logger, pErr, err, op)
 	}()
-
-	if !tc.ranSetupGroup {
-		tc.taskDirectory, err = a.createTaskDirectory(tc)
-		if err != nil {
-			err = errors.Wrap(err, "creating task directory")
-			grip.Error(err)
-			grip.Infof("Task complete: '%s'.", tc.task.ID)
-			tc.logger.Execution().Error(errors.Wrap(err, "creating task directory"))
-			shouldExit, err := a.handleTaskResponse(tskCtx, tc, evergreen.TaskSystemFailed, err.Error())
-			return tc, shouldExit, err
-		}
-	}
-	tc.taskConfig.WorkDir = tc.taskDirectory
-	tc.taskConfig.Expansions.Put("workdir", tc.taskConfig.WorkDir)
-
-	grip.Info(message.Fields{
-		"message":     "running task",
-		"task_id":     tc.task.ID,
-		"task_secret": tc.task.Secret,
-	})
 
 	defer a.killProcs(ctx, tc, false, "task is finished")
 
