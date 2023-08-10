@@ -543,6 +543,7 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskConte
 		return tc, false, errors.New("setup.initial command is not registered")
 	}
 	tc.setCurrentCommand(factory())
+	a.comm.UpdateLastMessageTime()
 
 	var taskConfig *internal.TaskConfig
 	taskConfig, err = a.makeTaskConfig(setupCtx, tc)
@@ -657,19 +658,6 @@ func (a *Agent) startTask(ctx context.Context, tc *taskContext) (status string) 
 		_ = a.logPanic(tc.logger, pErr, nil, op)
 		status = evergreen.TaskSystemFailed
 	}()
-
-	factory, ok := command.GetCommandFactory("setup.initial")
-	if !ok {
-		tc.logger.Execution().Error("Marking task as system-failed because setup.initial command is not registered.")
-		return evergreen.TaskSystemFailed
-	}
-
-	if ctx.Err() != nil {
-		tc.logger.Execution().Infof("Stopping task execution before setup: %s", ctx.Err())
-		return evergreen.TaskSystemFailed
-	}
-	tc.setCurrentCommand(factory())
-	a.comm.UpdateLastMessageTime()
 
 	if ctx.Err() != nil {
 		tc.logger.Execution().Infof("Stopping task execution during setup: %s", ctx.Err())
