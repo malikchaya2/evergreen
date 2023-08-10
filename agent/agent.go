@@ -556,6 +556,15 @@ func (a *Agent) setupTask(setupCtx context.Context, tcInput *taskContext, nt *ap
 	}
 	tc.setTaskConfig(taskConfig)
 
+	if err = a.startLogging(setupCtx, tc); err != nil {
+		err = errors.Wrap(err, "setting up logger producer")
+		grip.Error(err)
+		grip.Infof("Task complete: '%s'.", tc.task.ID)
+		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
+		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
+		return tc, shouldExit, err
+	}
+
 	return tc, false, nil
 }
 
@@ -583,15 +592,6 @@ func (a *Agent) runTask(ctx context.Context, tcInput *taskContext, nt *apimodels
 		}
 		err = a.logPanic(tc.logger, pErr, err, op)
 	}()
-
-	if err = a.startLogging(ctx, tc); err != nil {
-		err = errors.Wrap(err, "setting up logger producer")
-		grip.Error(err)
-		grip.Infof("Task complete: '%s'.", tc.task.ID)
-		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
-		shouldExit, err := a.handleTaskResponse(tskCtx, tc, evergreen.TaskSystemFailed, err.Error())
-		return tc, shouldExit, err
-	}
 
 	if !tc.ranSetupGroup {
 		tc.taskDirectory, err = a.createTaskDirectory(tc)
