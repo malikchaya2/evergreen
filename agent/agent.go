@@ -513,7 +513,7 @@ func (a *Agent) startLogging(ctx context.Context, tc *taskContext) error {
 	return nil
 }
 
-func (a *Agent) setupTask(setupCtx context.Context, tcInput *taskContext, nt *apimodels.NextTaskResponse, shouldSetupGroup bool, taskDirectory string) (tc *taskContext, shoulExit bool, err error) {
+func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskContext, nt *apimodels.NextTaskResponse, shouldSetupGroup bool, taskDirectory string) (tc *taskContext, shoulExit bool, err error) {
 	if tcInput == nil {
 		tc = &taskContext{
 			task: client.TaskData{
@@ -556,7 +556,7 @@ func (a *Agent) setupTask(setupCtx context.Context, tcInput *taskContext, nt *ap
 	}
 	tc.setTaskConfig(taskConfig)
 
-	if err = a.startLogging(setupCtx, tc); err != nil {
+	if err = a.startLogging(agentCtx, tc); err != nil {
 		err = errors.Wrap(err, "setting up logger producer")
 		grip.Error(err)
 		grip.Infof("Task complete: '%s'.", tc.task.ID)
@@ -579,7 +579,7 @@ func (a *Agent) runTask(ctx context.Context, tcInput *taskContext, nt *apimodels
 	//todo: create const
 	setupCtx, setupCancel := context.WithTimeout(tskCtx, 7*time.Minute)
 	defer setupCancel()
-	tc, _, err = a.setupTask(setupCtx, tcInput, nt, shouldSetupGroup, taskDirectory)
+	tc, _, err = a.setupTask(ctx, setupCtx, tcInput, nt, shouldSetupGroup, taskDirectory)
 	if err != nil {
 		return tc, shouldExit, errors.Wrap(err, "setting up task")
 	}
