@@ -388,7 +388,7 @@ func (a *Agent) processNextTask(ctx context.Context, nt *apimodels.NextTaskRespo
 		}, nil
 	}
 
-	shouldSetupGroup, taskDirectory := a.prepareNextTask(ctx, nt, tc)
+	shouldSetupGroup, taskDirectory := a.finishPrevTask(ctx, nt, tc)
 
 	tc, shouldExit, err := a.runTask(ctx, nil, nt, shouldSetupGroup, taskDirectory)
 	if err != nil {
@@ -412,7 +412,7 @@ func (a *Agent) processNextTask(ctx context.Context, nt *apimodels.NextTaskRespo
 	}, nil
 }
 
-func (a *Agent) prepareNextTask(ctx context.Context, nextTask *apimodels.NextTaskResponse, tc *taskContext) (bool, string) {
+func (a *Agent) finishPrevTask(ctx context.Context, nextTask *apimodels.NextTaskResponse, tc *taskContext) (bool, string) {
 	shouldSetupGroup := false
 	taskDirectory := tc.taskDirectory
 	if shouldRunSetupGroup(nextTask, tc) {
@@ -535,6 +535,27 @@ func (a *Agent) setupTask(setupCtx context.Context, tcInput *taskContext, nt *ap
 
 	a.jasper.Clear(setupCtx)
 	tc.jasper = a.jasper
+
+	// If the heartbeat aborts the task immediately, we should report that
+	// the task failed during initial task setup.
+	factory, ok := command.GetCommandFactory("setup.initial")
+	if !ok {
+		return tc, false, errors.New("setup.initial command is not registered")
+	}
+	tc.setCurrentCommand(factory())
+
+	var taskConfig *internal.TaskConfig
+	taskConfig, err = a.makeTaskConfig(setupCtx, tc)
+	if err != nil {
+		err = errors.Wrap(err, "making task config")
+		grip.Error(err)
+		grip.Infof("Task complete: '%s'.", tc.task.ID)
+		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
+		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
+		return tc, shouldExit, err
+	}
+	tc.setTaskConfig(taskConfig)
+
 	return tc, false, nil
 }
 
@@ -562,26 +583,6 @@ func (a *Agent) runTask(ctx context.Context, tcInput *taskContext, nt *apimodels
 		}
 		err = a.logPanic(tc.logger, pErr, err, op)
 	}()
-
-	// If the heartbeat aborts the task immediately, we should report that
-	// the task failed during initial task setup.
-	factory, ok := command.GetCommandFactory("setup.initial")
-	if !ok {
-		return tc, false, errors.New("setup.initial command is not registered")
-	}
-	tc.setCurrentCommand(factory())
-
-	var taskConfig *internal.TaskConfig
-	taskConfig, err = a.makeTaskConfig(ctx, tc)
-	if err != nil {
-		err = errors.Wrap(err, "making task config")
-		grip.Error(err)
-		grip.Infof("Task complete: '%s'.", tc.task.ID)
-		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
-		shouldExit, err := a.handleTaskResponse(tskCtx, tc, evergreen.TaskSystemFailed, err.Error())
-		return tc, shouldExit, err
-	}
-	tc.setTaskConfig(taskConfig)
 
 	if err = a.startLogging(ctx, tc); err != nil {
 		err = errors.Wrap(err, "setting up logger producer")
