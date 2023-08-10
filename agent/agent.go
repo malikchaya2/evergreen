@@ -267,8 +267,7 @@ func (a *Agent) loop(ctx context.Context) error {
 	needPostGroup := false
 	defer func() {
 		if tc.logger != nil {
-			grip.Infof("chayaMTesting: closing logger loop 270")
-			grip.Error(errors.Wrap(tc.logger.Flush(ctx), "closing logger"))
+			grip.Error(errors.Wrap(tc.logger.Close(), "closing logger"))
 		}
 	}()
 
@@ -353,8 +352,6 @@ func (a *Agent) processNextTask(ctx context.Context, nt *apimodels.NextTaskRespo
 	}
 	// if the host's current task group is finished we teardown
 	if nt.ShouldTeardownGroup {
-		// this is the call it hits, maybe tc should still be the previous tc here!!
-		// I think this is what it is. tc should still have the previous logger.
 		a.runPostGroupCommands(ctx, tc)
 		return processNextResponse{
 			// Running the post group commands implies exiting the group, so
@@ -402,7 +399,6 @@ func (a *Agent) processNextTask(ctx context.Context, nt *apimodels.NextTaskRespo
 			tc: tc,
 		}, nil
 	}
-
 	if shouldExit {
 		return processNextResponse{
 			shouldExit: true,
@@ -425,10 +421,97 @@ func (a *Agent) finishPrevTask(ctx context.Context, nextTask *apimodels.NextTask
 		a.runPostGroupCommands(ctx, tc)
 	}
 	if tc.logger != nil {
-		grip.Infof("chayaMTesting: closing logger finishPrevTask 426")
-		grip.Error(errors.Wrap(tc.logger.Flush(ctx), "closing the previous logger producer"))
+		grip.Error(errors.Wrap(tc.logger.Close(), "closing the previous logger producer"))
 	}
 	return shouldSetupGroup, taskDirectory
+}
+
+func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskContext, nt *apimodels.NextTaskResponse, shouldSetupGroup bool, taskDirectory string) (tc *taskContext, shoulExit bool, err error) {
+	if tcInput == nil {
+		tc = &taskContext{
+			task: client.TaskData{
+				ID:     nt.TaskId,
+				Secret: nt.TaskSecret,
+			},
+			taskGroup:                 nt.TaskGroup,
+			ranSetupGroup:             !shouldSetupGroup,
+			taskDirectory:             taskDirectory,
+			oomTracker:                jasper.NewOOMTracker(),
+			unsetFunctionVarsDisabled: nt.UnsetFunctionVarsDisabled,
+		}
+	} else {
+		tc = tcInput
+	}
+	a.jasper.Clear(setupCtx)
+	tc.jasper = a.jasper
+
+	// If the heartbeat aborts the task immediately, we should report that
+	// the task failed during initial task setup.
+	factory, ok := command.GetCommandFactory("setup.initial")
+	if !ok {
+		return tc, false, errors.New("setup.initial command is not registered")
+	}
+	tc.setCurrentCommand(factory())
+	a.comm.UpdateLastMessageTime()
+
+	var taskConfig *internal.TaskConfig
+	taskConfig, err = a.makeTaskConfig(setupCtx, tc)
+	if err != nil {
+		err = errors.Wrap(err, "making task config")
+		grip.Error(err)
+		grip.Infof("Task complete: '%s'.", tc.task.ID)
+		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
+		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
+		return tc, shouldExit, err
+	}
+	tc.setTaskConfig(taskConfig)
+	if err = a.startLogging(agentCtx, tc); err != nil {
+		err = errors.Wrap(err, "setting up logger producer")
+		grip.Error(err)
+		grip.Infof("Task complete: '%s'.", tc.task.ID)
+		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
+		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
+		return tc, shouldExit, err
+	}
+
+	if !tc.ranSetupGroup {
+		tc.taskDirectory, err = a.createTaskDirectory(tc)
+		if err != nil {
+			err = errors.Wrap(err, "creating task directory")
+			grip.Error(err)
+			grip.Infof("Task complete: '%s'.", tc.task.ID)
+			tc.logger.Execution().Error(errors.Wrap(err, "creating task directory"))
+			shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
+			return tc, shouldExit, err
+		}
+	}
+	tc.taskConfig.WorkDir = tc.taskDirectory
+	tc.taskConfig.Expansions.Put("workdir", tc.taskConfig.WorkDir)
+
+	grip.Info(message.Fields{
+		"message": "running task",
+		"task_id": tc.task.ID,
+	})
+
+	tc.logger.Task().Infof("Task logger initialized (agent version '%s' from Evergreen build revision '%s').", evergreen.AgentVersion, evergreen.BuildRevision)
+	tc.logger.Execution().Info("Execution logger initialized.")
+	tc.logger.System().Info("System logger initialized.")
+
+	if err := setupCtx.Err(); err != nil {
+		grip.Error(err)
+		tc.logger.Execution().Infof("Stopping task execution: %s", err)
+		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
+		return tc, shouldExit, err
+	}
+
+	hostname, err := os.Hostname()
+	tc.logger.Execution().Info(errors.Wrap(err, "getting hostname"))
+	if hostname != "" {
+		tc.logger.Execution().Infof("Hostname is '%s'.", hostname)
+	}
+	tc.logger.Task().Infof("Starting task '%s', execution %d.", tc.taskConfig.Task.Id, tc.taskConfig.Task.Execution)
+
+	return tc, false, nil
 }
 
 func shouldRunSetupGroup(nextTask *apimodels.NextTaskResponse, tc *taskContext) bool {
@@ -501,8 +584,7 @@ func (a *Agent) startLogging(ctx context.Context, tc *taskContext) error {
 	var err error
 
 	if tc.logger != nil {
-		grip.Infof("chayaMTesting: closing logger startLogging 502")
-		grip.Error(errors.Wrap(tc.logger.Flush(ctx), "closing the logger producer"))
+		grip.Error(errors.Wrap(tc.logger.Close(), "closing the logger producer"))
 	}
 	taskLogDir := filepath.Join(a.opts.WorkingDirectory, taskLogDirectory)
 	grip.Error(errors.Wrapf(os.RemoveAll(taskLogDir), "removing task log directory '%s'", taskLogDir))
@@ -520,95 +602,6 @@ func (a *Agent) startLogging(ctx context.Context, tc *taskContext) error {
 	grip.Error(errors.Wrap(grip.SetSender(sender), "setting sender"))
 
 	return nil
-}
-
-func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskContext, nt *apimodels.NextTaskResponse, shouldSetupGroup bool, taskDirectory string) (tc *taskContext, shoulExit bool, err error) {
-	if tcInput == nil {
-		tc = &taskContext{
-			task: client.TaskData{
-				ID:     nt.TaskId,
-				Secret: nt.TaskSecret,
-			},
-			taskGroup:                 nt.TaskGroup,
-			ranSetupGroup:             !shouldSetupGroup,
-			taskDirectory:             taskDirectory,
-			oomTracker:                jasper.NewOOMTracker(),
-			unsetFunctionVarsDisabled: nt.UnsetFunctionVarsDisabled,
-		}
-	} else {
-		tc = tcInput
-	}
-	a.jasper.Clear(setupCtx)
-	tc.jasper = a.jasper
-
-	// If the heartbeat aborts the task immediately, we should report that
-	// the task failed during initial task setup.
-	factory, ok := command.GetCommandFactory("setup.initial")
-	if !ok {
-		return tc, false, errors.New("setup.initial command is not registered")
-	}
-	tc.setCurrentCommand(factory())
-	a.comm.UpdateLastMessageTime()
-
-	var taskConfig *internal.TaskConfig
-	taskConfig, err = a.makeTaskConfig(setupCtx, tc)
-	if err != nil {
-		err = errors.Wrap(err, "making task config")
-		grip.Error(err)
-		grip.Infof("Task complete: '%s'.", tc.task.ID)
-		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
-		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
-		return tc, shouldExit, err
-	}
-	tc.setTaskConfig(taskConfig)
-	if err = a.startLogging(agentCtx, tc); err != nil {
-		err = errors.Wrap(err, "setting up logger producer")
-		grip.Error(err)
-		grip.Infof("Task complete: '%s'.", tc.task.ID)
-		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
-		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
-		return tc, shouldExit, err
-	}
-
-	if !tc.ranSetupGroup {
-		tc.taskDirectory, err = a.createTaskDirectory(tc)
-		if err != nil {
-			err = errors.Wrap(err, "creating task directory")
-			grip.Error(err)
-			grip.Infof("Task complete: '%s'.", tc.task.ID)
-			tc.logger.Execution().Error(errors.Wrap(err, "creating task directory"))
-			shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
-			return tc, shouldExit, err
-		}
-	}
-	tc.taskConfig.WorkDir = tc.taskDirectory
-	tc.taskConfig.Expansions.Put("workdir", tc.taskConfig.WorkDir)
-
-	grip.Info(message.Fields{
-		"message":     "running task",
-		"task_id":     tc.task.ID,
-		"task_secret": tc.task.Secret,
-	})
-
-	tc.logger.Task().Infof("Task logger initialized (agent version '%s' from Evergreen build revision '%s').", evergreen.AgentVersion, evergreen.BuildRevision)
-	tc.logger.Execution().Info("Execution logger initialized.")
-	tc.logger.System().Info("System logger initialized.")
-
-	if err := setupCtx.Err(); err != nil {
-		grip.Error(err)
-		tc.logger.Execution().Infof("Stopping task execution: %s", err)
-		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
-		return tc, shouldExit, err
-	}
-
-	hostname, err := os.Hostname()
-	tc.logger.Execution().Info(errors.Wrap(err, "getting hostname"))
-	if hostname != "" {
-		tc.logger.Execution().Infof("Hostname is '%s'.", hostname)
-	}
-	tc.logger.Task().Infof("Starting task '%s', execution %d.", tc.taskConfig.Task.Id, tc.taskConfig.Task.Execution)
-
-	return tc, false, nil
 }
 
 // runTask runs a task. It returns true if the agent should exit.
@@ -1006,9 +999,7 @@ func (a *Agent) runPostGroupCommands(ctx context.Context, tc *taskContext) {
 	defer a.killProcs(ctx, tc, true, "teardown group commands are finished")
 	defer func() {
 		if tc.logger != nil {
-			grip.Infof("chayaMTesting: closing logger runPostGroupCommands 1010")
-			// what is it set to here?
-			grip.Error(tc.logger.Flush(ctx))
+			grip.Error(tc.logger.Close())
 		}
 	}()
 	taskGroup, err := tc.taskConfig.GetTaskGroup(tc.taskGroup)

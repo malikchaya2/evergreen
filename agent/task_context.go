@@ -88,9 +88,6 @@ func (tc *taskContext) getOomTrackerInfo() *apimodels.OOMTrackerInfo {
 }
 
 func (tc *taskContext) oomTrackerEnabled(cloudProvider string) bool {
-	b := utility.StringSliceContains(evergreen.ProviderContainer, cloudProvider)
-	a := tc.project.OomTracker
-	print(a, b)
 	return tc.project.OomTracker && !utility.StringSliceContains(evergreen.ProviderContainer, cloudProvider)
 }
 

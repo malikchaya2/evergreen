@@ -799,7 +799,6 @@ func (s *AgentSuite) TestSetupTask() {
 
 }
 
-// todo: rewrite this whole test. move parts of this test where we moved the logic
 func (s *AgentSuite) TestPrepareNextTask() {
 	var err error
 	nextTask := &apimodels.NextTaskResponse{}

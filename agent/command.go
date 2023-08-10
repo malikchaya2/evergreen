@@ -89,8 +89,7 @@ func (a *Agent) runCommandOrFunc(ctx context.Context, tc *taskContext, commandIn
 			return errors.Wrap(err, "making command logger")
 		}
 		defer func() {
-			grip.Infof("chayaMTesting: closing logger runCommandOrFunc 93")
-			grip.Error(errors.Wrap(logger.Flush(ctx), "closing command logger"))
+			grip.Error(errors.Wrap(logger.Close(), "closing command logger"))
 		}()
 	}
 
