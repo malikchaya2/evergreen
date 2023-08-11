@@ -426,7 +426,7 @@ func (a *Agent) finishPrevTask(ctx context.Context, nextTask *apimodels.NextTask
 	return shouldSetupGroup, taskDirectory
 }
 
-func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskContext, nt *apimodels.NextTaskResponse, shouldSetupGroup bool, taskDirectory string) (tc *taskContext, shoulExit bool, err error) {
+func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskContext, nt *apimodels.NextTaskResponse, shouldSetupGroup bool, taskDirectory string) (tc *taskContext, setupFailed bool, shouldExit bool, err error) {
 	if tcInput == nil {
 		tc = &taskContext{
 			task: client.TaskData{
@@ -449,7 +449,7 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskConte
 	// the task failed during initial task setup.
 	factory, ok := command.GetCommandFactory("setup.initial")
 	if !ok {
-		return tc, false, errors.New("setup.initial command is not registered")
+		return tc, setupFailed, shouldExit, errors.New("setup.initial command is not registered")
 	}
 	tc.setCurrentCommand(factory())
 	a.comm.UpdateLastMessageTime()
@@ -457,32 +457,35 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskConte
 	var taskConfig *internal.TaskConfig
 	taskConfig, err = a.makeTaskConfig(setupCtx, tc)
 	if err != nil {
+		setupFailed = true
 		err = errors.Wrap(err, "making task config")
 		grip.Error(err)
 		grip.Infof("Task complete: '%s'.", tc.task.ID)
 		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
 		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
-		return tc, shouldExit, err
+		return tc, setupFailed, shouldExit, err
 	}
 	tc.setTaskConfig(taskConfig)
 	if err = a.startLogging(agentCtx, tc); err != nil {
+		setupFailed = true
 		err = errors.Wrap(err, "setting up logger producer")
 		grip.Error(err)
 		grip.Infof("Task complete: '%s'.", tc.task.ID)
 		tc.logger = client.NewSingleChannelLogHarness("agent.error", a.defaultLogger)
 		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
-		return tc, shouldExit, err
+		return tc, setupFailed, shouldExit, err
 	}
 
 	if !tc.ranSetupGroup {
 		tc.taskDirectory, err = a.createTaskDirectory(tc)
 		if err != nil {
+			setupFailed = true
 			err = errors.Wrap(err, "creating task directory")
 			grip.Error(err)
 			grip.Infof("Task complete: '%s'.", tc.task.ID)
 			tc.logger.Execution().Error(errors.Wrap(err, "creating task directory"))
 			shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
-			return tc, shouldExit, err
+			return tc, setupFailed, shouldExit, err
 		}
 	}
 	tc.taskConfig.WorkDir = tc.taskDirectory
@@ -498,10 +501,11 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskConte
 	tc.logger.System().Info("System logger initialized.")
 
 	if err := setupCtx.Err(); err != nil {
+		setupFailed = true
 		grip.Error(err)
 		tc.logger.Execution().Infof("Stopping task execution: %s", err)
 		shouldExit, err := a.handleTaskResponse(setupCtx, tc, evergreen.TaskSystemFailed, err.Error())
-		return tc, shouldExit, err
+		return tc, setupFailed, shouldExit, err
 	}
 
 	hostname, err := os.Hostname()
@@ -511,7 +515,7 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, tcInput *taskConte
 	}
 	tc.logger.Task().Infof("Starting task '%s', execution %d.", tc.taskConfig.Task.Id, tc.taskConfig.Task.Execution)
 
-	return tc, false, nil
+	return tc, setupFailed, shouldExit, nil
 }
 
 func shouldRunSetupGroup(nextTask *apimodels.NextTaskResponse, tc *taskContext) bool {
@@ -623,8 +627,8 @@ func (a *Agent) runTask(ctx context.Context, tcInput *taskContext, nt *apimodels
 	// setup should happen before the heartbeat so that it's not abortable
 	setupCtx, setupCancel := context.WithTimeout(tskCtx, evergreen.HeartbeatTimeoutThreshold)
 	defer setupCancel()
-	tc, shouldExit, err = a.setupTask(ctx, setupCtx, tcInput, nt, shouldSetupGroup, taskDirectory)
-	if err != nil {
+	tc, setupFailed, shouldExit, err := a.setupTask(ctx, setupCtx, tcInput, nt, shouldSetupGroup, taskDirectory)
+	if err != nil || setupFailed == true {
 		return tc, shouldExit, errors.Wrap(err, "setting up task")
 	}
 

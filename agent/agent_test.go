@@ -784,8 +784,9 @@ func (s *AgentSuite) TestSetupTask() {
 	s.setupRunTask(defaultProjYml)
 	s.tc.taskDirectory = "task_directory"
 	shouldSetupGroup, taskDirectory := s.a.finishPrevTask(s.ctx, nextTask, s.tc)
-	_, shouldExit, err := s.a.setupTask(s.ctx, s.ctx, s.tc, nextTask, shouldSetupGroup, taskDirectory)
+	_, setupFailed, shouldExit, err := s.a.setupTask(s.ctx, s.ctx, s.tc, nextTask, shouldSetupGroup, taskDirectory)
 	s.False(shouldExit)
+	s.False(setupFailed)
 	s.NoError(err)
 	s.NoError(s.tc.logger.Close())
 	checkMockLogs(s.T(), s.mockCommunicator, s.tc.taskConfig.Task.Id, []string{
