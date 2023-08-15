@@ -1,5 +1,4 @@
 unset_function_vars: true
-foo: bar-expansion-original
 command_type: test
 stepback: true
 ignore:
@@ -161,7 +160,7 @@ functions:
     - command: shell.exec
       params:
         script: |
-          echo "value of foo before expansion.update ${foo}"
+          echo "value of foo before expansion.update '${foo}'"
     - command: expansions.update
       params:
         key: foo
@@ -169,7 +168,7 @@ functions:
     - command: shell.exec
       params:
         script: |
-          echo "value of foo after update ${foo}"
+          echo "value of foo after update '${foo}'"
   get-project-and-modules:
     - command: git.get_project
       type: setup
@@ -536,6 +535,11 @@ tasks:
   - name: chaya-funcs
     commands:
       - func: test-vars
+        vars:
+          foo: "bar-function-var"
+      - command: shell.exec
+        params:
+          script: echo value of foo after the function ran '${foo}'
   - name: test-repotracker
     tags: ["db", "test"]
     commands:
@@ -626,6 +630,7 @@ buildvariants:
       - ubuntu2204-small
       - ubuntu2204-large
     expansions:
+      foo: bar-expansion-bv
       goos: linux
       goarch: amd64
       nodebin: /opt/node/bin
