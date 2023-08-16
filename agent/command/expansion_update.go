@@ -73,6 +73,7 @@ func (c *Update) ExecuteUpdates(ctx context.Context, conf *internal.TaskConfig) 
 				return errors.WithStack(err)
 			}
 			conf.Expansions.Put(update.Key, newValue)
+			conf.DynamicExpansions.Put(update.Key, newValue)
 		} else {
 			newValue, err := conf.Expansions.ExpandString(update.Concat)
 			if err != nil {
@@ -81,6 +82,7 @@ func (c *Update) ExecuteUpdates(ctx context.Context, conf *internal.TaskConfig) 
 
 			oldValue := conf.Expansions.Get(update.Key)
 			conf.Expansions.Put(update.Key, oldValue+newValue)
+			conf.DynamicExpansions.Put(update.Key, oldValue+newValue)
 		}
 	}
 
@@ -92,7 +94,6 @@ func (c *Update) Execute(ctx context.Context,
 	comm client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 
 	err := c.ExecuteUpdates(ctx, conf)
-
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -118,7 +119,12 @@ func (c *Update) Execute(ctx context.Context,
 		if err != nil {
 			return errors.WithStack(err)
 		}
+		err = conf.DynamicExpansions.UpdateFromYaml(filename)
+		if err != nil {
+			return errors.WithStack(err)
+		}
 	}
-	return nil
 
+	conf.DynamicExpansions.Update(conf.Expansions.Get())
+	return nil
 }

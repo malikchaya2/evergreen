@@ -352,5 +352,31 @@ functions:
 
 	key3Value := s.tc.taskConfig.Expansions.Get("key3")
 	s.Equal("expansionVar3", key3Value, "key3 should be the original expansion value")
+}
 
+func (s *CommandSuite) TestVarsUnsetPreserveExpansionUpdates2() {
+	projYml := `
+functions:
+  yes:
+    command: expansions.update
+    params:
+      file: command/testdata/git/test_expansions.yml
+`
+	s.setUpConfigAndProject(projYml)
+
+	func1 := model.PluginCommandConf{
+		Function:    "yes",
+		DisplayName: "function",
+		Vars:        map[string]string{"key1": "functionVar1", "key2": "functionVar2", "key3": "functionVar3"},
+	}
+
+	cmds := []model.PluginCommandConf{func1}
+	err := s.a.runCommandsInBlock(s.ctx, s.tc, cmds, runCommandsOptions{}, "")
+	s.NoError(err)
+
+	key1Value := s.tc.taskConfig.Expansions.Get("key1")
+	s.Equal("functionVar1", key1Value, "key1 should be set to what it was updated to with expansions.update")
+
+	key2Value := s.tc.taskConfig.Expansions.Get("key2")
+	s.Equal("expansionVar2", key2Value, "key2 should be the original expansion value")
 }

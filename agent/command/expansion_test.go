@@ -20,7 +20,7 @@ func TestExpansionsPlugin(t *testing.T) {
 	ctx := context.Background()
 
 	Convey("Should be able to update expansions", t, func() {
-		updateCommand := update{
+		updateCommand := Update{
 			Updates: []updateParams{
 				{
 					Key:   "base",
@@ -59,14 +59,14 @@ func TestExpansionsPluginWExecution(t *testing.T) {
 	Convey("When running Update commands", t, func() {
 		Convey("if there is no expansion, the file name is not changed", func() {
 			So(conf.Expansions, ShouldResemble, &util.Expansions{})
-			cmd := &update{YamlFile: "foo"}
+			cmd := &Update{YamlFile: "foo"}
 			So(cmd.Execute(ctx, comm, logger, conf), ShouldNotBeNil)
 			So(cmd.YamlFile, ShouldEqual, "foo")
 		})
 
 		Convey("With an Expansion, the file name is expanded", func() {
 			conf.Expansions = util.NewExpansions(map[string]string{"foo": "bar"})
-			cmd := &update{YamlFile: "${foo}"}
+			cmd := &Update{YamlFile: "${foo}"}
 			So(cmd.Execute(ctx, comm, logger, conf), ShouldNotBeNil)
 			So(cmd.YamlFile, ShouldEqual, "bar")
 		})

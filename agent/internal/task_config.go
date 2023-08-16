@@ -28,6 +28,7 @@ type TaskConfig struct {
 	Task               *task.Task
 	BuildVariant       *model.BuildVariant
 	Expansions         *util.Expansions
+	DynamicExpansions  *util.Expansions
 	Redacted           map[string]bool
 	WorkDir            string
 	GithubPatchData    thirdparty.GithubPatch
