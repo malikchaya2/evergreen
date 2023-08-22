@@ -73,3 +73,11 @@ func CoalesceString(in ...string) string {
 func CoalesceStrings(inArray []string, inStrs ...string) string {
 	return CoalesceString(CoalesceString(inArray...), CoalesceString(inStrs...))
 }
+
+// func EscapeUrls(){
+// 	qs := []string{}
+// 	for _, v := range variants {
+// 		qs = append(qs, url.QueryEscape(v))
+// 	}
+// 	q := strings.Join(qs, "&")
+// }

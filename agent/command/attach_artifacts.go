@@ -93,7 +93,7 @@ func (c *attachArtifacts) Execute(ctx context.Context,
 			continue
 		}
 
-		files = append(files, segment...)
+		files = append(files, artifact.EscapeFiles(segment)...)
 	}
 	if catcher.HasErrors() {
 		return errors.Wrap(catcher.Resolve(), "reading artifact JSON files")

@@ -1,6 +1,7 @@
 package artifact
 
 import (
+	"net/url"
 	"time"
 
 	"github.com/evergreen-ci/pail"
@@ -45,7 +46,7 @@ type File struct {
 	// Name is a human-readable name for the file being linked, e.g. "Coverage Report"
 	Name string `json:"name" bson:"name"`
 	// Link is the link to the file, e.g. "http://fileserver/coverage.html"
-	Link string `json:"link" bson:"link"`
+	Link string `json:"link" bson:"link"` // should this be escaped?
 	// Visibility determines who can see the file in the UI
 	Visibility string `json:"visibility" bson:"visibility"`
 	// When true, these artifacts are excluded from reproduction
@@ -90,6 +91,14 @@ func StripHiddenFiles(files []File, hasUser bool) ([]File, error) {
 		}
 	}
 	return publicFiles, nil
+}
+
+// EscapeFiles escapes the file urls
+func EscapeFiles(files []*File) []*File {
+	for _, file := range files {
+		file.Link = url.QueryEscape(file.Link)
+	}
+	return files
 }
 
 // ContainsSigningParams returns true if all the params needed for

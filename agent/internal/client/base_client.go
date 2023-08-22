@@ -770,6 +770,7 @@ func (c *baseCommunicator) UpdatePushStatus(ctx context.Context, taskData TaskDa
 }
 
 // AttachFiles attaches task files.
+// this
 func (c *baseCommunicator) AttachFiles(ctx context.Context, taskData TaskData, taskFiles []*artifact.File) error {
 	if len(taskFiles) == 0 {
 		return nil

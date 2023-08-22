@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"time"
@@ -339,7 +340,7 @@ func (c *s3copy) attachFiles(ctx context.Context, comm client.Communicator,
 	logger client.LoggerProducer, td client.TaskData, request apimodels.S3CopyRequest) error {
 
 	remotePath := filepath.ToSlash(request.S3DestinationPath)
-	fileLink := agentutil.S3DefaultURL(request.S3DestinationBucket, remotePath)
+	fileLink := url.QueryEscape(agentutil.S3DefaultURL(request.S3DestinationBucket, remotePath))
 	displayName := request.S3DisplayName
 	if displayName == "" {
 		displayName = filepath.Base(request.S3SourcePath)
@@ -350,6 +351,7 @@ func (c *s3copy) attachFiles(ctx context.Context, comm client.Communicator,
 		Link: fileLink,
 	}
 	files := []*artifact.File{&file}
+	// strip wherever this is called
 	if err := comm.AttachFiles(ctx, td, files); err != nil {
 		return errors.Wrapf(err, "attaching file '%s'", displayName)
 	}

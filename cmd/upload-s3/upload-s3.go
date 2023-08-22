@@ -14,6 +14,7 @@ import (
 	"github.com/pkg/errors"
 )
 
+// should we escape in here?
 // Upload a directory/file to S3.
 func main() {
 	var bucketName, local, remote, exclude string
