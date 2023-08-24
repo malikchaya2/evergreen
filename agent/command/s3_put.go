@@ -519,7 +519,6 @@ func (s3pc *s3put) attachFiles(ctx context.Context, comm client.Communicator, lo
 			FileKey:    fileKey,
 		})
 	}
-	// strip wherever this is called
 	err := comm.AttachFiles(ctx, s3pc.taskdata, files)
 	if err != nil {
 		return errors.Wrap(err, "attaching files")

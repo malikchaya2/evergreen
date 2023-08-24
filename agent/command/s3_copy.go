@@ -351,7 +351,6 @@ func (c *s3copy) attachFiles(ctx context.Context, comm client.Communicator,
 		Link: fileLink,
 	}
 	files := []*artifact.File{&file}
-	// strip wherever this is called
 	if err := comm.AttachFiles(ctx, td, files); err != nil {
 		return errors.Wrapf(err, "attaching file '%s'", displayName)
 	}
