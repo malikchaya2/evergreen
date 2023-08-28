@@ -14,7 +14,9 @@ import (
 	agentutil "github.com/evergreen-ci/evergreen/agent/util"
 	"github.com/evergreen-ci/evergreen/apimodels"
 	"github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/thirdparty/docker"
+	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
@@ -490,20 +492,20 @@ func shouldRunSetupGroup(nextTask *apimodels.NextTaskResponse, tc *taskContext) 
 	return false
 }
 
-func (a *Agent) fetchProjectConfig(ctx context.Context, tc *taskContext) error {
+func (a *Agent) fetchProjectConfig(ctx context.Context, tc *taskContext) (*task.Task, *model.Project, util.Expansions, map[string]bool, error) {
 	project, err := a.comm.GetProject(ctx, tc.task)
 	if err != nil {
-		return errors.Wrap(err, "getting project")
+		return nil, nil, nil, nil, errors.Wrap(err, "getting project")
 	}
 
 	taskModel, err := a.comm.GetTask(ctx, tc.task)
 	if err != nil {
-		return errors.Wrap(err, "getting task")
+		return nil, nil, nil, nil, errors.Wrap(err, "getting task")
 	}
 
 	expAndVars, err := a.comm.GetExpansionsAndVars(ctx, tc.task)
 	if err != nil {
-		return errors.Wrap(err, "getting expansions and variables")
+		return nil, nil, nil, nil, errors.Wrap(err, "getting expansions and variables")
 	}
 
 	// GetExpansionsAndVars does not include build variant expansions or project
@@ -527,11 +529,7 @@ func (a *Agent) fetchProjectConfig(ctx context.Context, tc *taskContext) error {
 	// user-specified.
 	expAndVars.Expansions.Update(expAndVars.Parameters)
 
-	tc.taskModel = taskModel
-	tc.project = project
-	tc.expansions = expAndVars.Expansions
-	tc.privateVars = expAndVars.PrivateVars
-	return nil
+	return taskModel, project, expAndVars.Expansions, expAndVars.PrivateVars, nil
 }
 
 func (a *Agent) startLogging(ctx context.Context, tc *taskContext) error {
@@ -548,8 +546,8 @@ func (a *Agent) startLogging(ctx context.Context, tc *taskContext) error {
 	}
 	taskLogDir := filepath.Join(a.opts.WorkingDirectory, taskLogDirectory)
 	grip.Error(errors.Wrapf(os.RemoveAll(taskLogDir), "removing task log directory '%s'", taskLogDir))
-	if tc.project != nil && tc.project.Loggers != nil {
-		tc.logger, err = a.makeLoggerProducer(ctx, tc, tc.project.Loggers, "")
+	if tc.taskConfig.Project != nil && tc.taskConfig.Project.Loggers != nil {
+		tc.logger, err = a.makeLoggerProducer(ctx, tc, tc.taskConfig.Project.Loggers, "")
 	} else {
 		tc.logger, err = a.makeLoggerProducer(ctx, tc, &model.LoggerConfig{}, "")
 	}
@@ -1072,7 +1070,7 @@ func (a *Agent) runPostGroupCommands(ctx context.Context, tc *taskContext) {
 
 // runEndTaskSync runs task sync if it was requested for the end of this task.
 func (a *Agent) runEndTaskSync(ctx context.Context, tc *taskContext, detail *apimodels.TaskEndDetail) {
-	if tc.taskModel == nil {
+	if tc.taskConfig.Task == nil {
 		tc.logger.Task().Error("Task model not found for running task sync.")
 		return
 	}
@@ -1084,7 +1082,7 @@ func (a *Agent) runEndTaskSync(ctx context.Context, tc *taskContext, detail *api
 
 	var syncCtx context.Context
 	var cancel context.CancelFunc
-	if timeout := tc.taskModel.SyncAtEndOpts.Timeout; timeout != 0 {
+	if timeout := tc.taskConfig.Task.SyncAtEndOpts.Timeout; timeout != 0 {
 		syncCtx, cancel = context.WithTimeout(ctx, timeout)
 	} else {
 		// Default to a generously long timeout if none is specified, since

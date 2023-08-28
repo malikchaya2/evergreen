@@ -137,10 +137,10 @@ func TestStartLogging(t *testing.T) {
 
 	ctx := context.Background()
 	assert.NoError(agt.fetchProjectConfig(ctx, tc))
-	require.NotNil(t, tc.project)
-	assert.EqualValues(model.EvergreenLogSender, tc.project.Loggers.Agent[0].Type)
-	assert.EqualValues(model.SplunkLogSender, tc.project.Loggers.System[0].Type)
-	assert.EqualValues(model.FileLogSender, tc.project.Loggers.Task[0].Type)
+	require.NotNil(t, tc.taskConfig.Project)
+	assert.EqualValues(model.EvergreenLogSender, tc.taskConfig.Project.Loggers.Agent[0].Type)
+	assert.EqualValues(model.SplunkLogSender, tc.taskConfig.Project.Loggers.System[0].Type)
+	assert.EqualValues(model.FileLogSender, tc.taskConfig.Project.Loggers.Task[0].Type)
 
 	assert.NoError(agt.startLogging(ctx, tc))
 	tc.logger.Execution().Info("foo")
@@ -153,7 +153,7 @@ func TestStartLogging(t *testing.T) {
 	assert.NotNil(config.Project)
 
 	// check that expansions are correctly populated
-	logConfig := agt.prepLogger(tc, tc.project.Loggers, "")
+	logConfig := agt.prepLogger(tc, tc.taskConfig.Project.Loggers, "")
 	assert.Equal("bar", logConfig.System[0].SplunkToken)
 }
 
@@ -191,24 +191,24 @@ func TestDefaultSender(t *testing.T) {
 	}
 
 	t.Run("Valid", func(t *testing.T) {
-		tc.project.Loggers = &model.LoggerConfig{}
+		tc.taskConfig.Project.Loggers = &model.LoggerConfig{}
 		tc.taskConfig.ProjectRef = &model.ProjectRef{DefaultLogger: model.BuildloggerLogSender}
 
 		assert.NoError(t, agt.startLogging(ctx, tc))
 		expectedLogOpts := []model.LogOpts{{Type: model.BuildloggerLogSender}}
-		assert.Equal(t, expectedLogOpts, tc.project.Loggers.Agent)
-		assert.Equal(t, expectedLogOpts, tc.project.Loggers.System)
-		assert.Equal(t, expectedLogOpts, tc.project.Loggers.Task)
+		assert.Equal(t, expectedLogOpts, tc.taskConfig.Project.Loggers.Agent)
+		assert.Equal(t, expectedLogOpts, tc.taskConfig.Project.Loggers.System)
+		assert.Equal(t, expectedLogOpts, tc.taskConfig.Project.Loggers.Task)
 	})
 	t.Run("Invalid", func(t *testing.T) {
-		tc.project.Loggers = &model.LoggerConfig{}
+		tc.taskConfig.Project.Loggers = &model.LoggerConfig{}
 		tc.taskConfig.ProjectRef = &model.ProjectRef{DefaultLogger: model.SplunkLogSender}
 
 		assert.NoError(t, agt.startLogging(ctx, tc))
 		expectedLogOpts := []model.LogOpts{{Type: model.EvergreenLogSender}}
-		assert.Equal(t, expectedLogOpts, tc.project.Loggers.Agent)
-		assert.Equal(t, expectedLogOpts, tc.project.Loggers.System)
-		assert.Equal(t, expectedLogOpts, tc.project.Loggers.Task)
+		assert.Equal(t, expectedLogOpts, tc.taskConfig.Project.Loggers.Agent)
+		assert.Equal(t, expectedLogOpts, tc.taskConfig.Project.Loggers.System)
+		assert.Equal(t, expectedLogOpts, tc.taskConfig.Project.Loggers.Task)
 	})
 }
 

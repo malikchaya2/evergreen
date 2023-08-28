@@ -10,10 +10,7 @@ import (
 	"github.com/evergreen-ci/evergreen/agent/internal"
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	"github.com/evergreen-ci/evergreen/apimodels"
-	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/patch"
-	"github.com/evergreen-ci/evergreen/model/task"
-	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/jasper"
@@ -28,20 +25,17 @@ import (
 type taskContext struct {
 	currentCommand command.Command
 	// remove
-	expansions util.Expansions
+	// expansions util.Expansions
 	// remove
-	privateVars map[string]bool // use Redacted
-	logger      client.LoggerProducer
-	task        client.TaskData
-	// use model instead
-	// store the model in TaskConfig
-	// taskGroup     string
+	// privateVars   map[string]bool // use Redacted
+	logger        client.LoggerProducer
+	task          client.TaskData
 	ranSetupGroup bool
 	taskConfig    *internal.TaskConfig
 	timeout       timeoutInfo
-	project       *model.Project
+	// project       *model.Project
 	// remove
-	taskModel                 *task.Task // use Task
+	// taskModel                 *task.Task // use Task
 	oomTracker                jasper.OOMTracker
 	traceID                   string
 	unsetFunctionVarsDisabled bool
@@ -126,7 +120,7 @@ func (tc *taskContext) getOomTrackerInfo() *apimodels.OOMTrackerInfo {
 }
 
 func (tc *taskContext) oomTrackerEnabled(cloudProvider string) bool {
-	return tc.project.OomTracker && !utility.StringSliceContains(evergreen.ProviderContainer, cloudProvider)
+	return tc.taskConfig.Project.OomTracker && !utility.StringSliceContains(evergreen.ProviderContainer, cloudProvider)
 }
 
 func (tc *taskContext) setIdleTimeout(dur time.Duration) {
@@ -160,16 +154,18 @@ func (tc *taskContext) getTimeoutType() timeoutType {
 
 // makeTaskConfig fetches task configuration data required to run the task from the API server.
 func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.TaskConfig, error) {
-	if tc.project == nil {
-		grip.Info("Fetching project config.")
-		err := a.fetchProjectConfig(ctx, tc)
-		if err != nil {
-			return nil, err
-		}
+	if tc.taskConfig != nil {
+		return tc.taskConfig, nil
 	}
+
+	grip.Info("Fetching project config.")
+	task, project, expansions, redacted, err := a.fetchProjectConfig(ctx, tc)
+	if err != nil {
+		return nil, err
+	}
+
 	grip.Info("Fetching distro configuration.")
 	var confDistro *apimodels.DistroView
-	var err error
 	if a.opts.Mode == HostMode {
 		confDistro, err = a.comm.GetDistroView(ctx, tc.task)
 		if err != nil {
@@ -187,7 +183,7 @@ func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.
 	}
 
 	var confPatch *patch.Patch
-	if evergreen.IsGitHubPatchRequester(tc.taskModel.Requester) {
+	if evergreen.IsGitHubPatchRequester(tc.taskConfig.Task.Requester) {
 		grip.Info("Fetching patch document for GitHub PR request.")
 		confPatch, err = a.comm.GetTaskPatch(ctx, tc.task, "")
 		if err != nil {
@@ -196,16 +192,16 @@ func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.
 	}
 
 	grip.Info("Constructing task config.")
-	taskConfig, err := internal.NewTaskConfig(a.opts.WorkingDirectory, confDistro, tc.project, tc.taskModel, confRef, confPatch, tc.expansions)
+	taskConfig, err := internal.NewTaskConfig(a.opts.WorkingDirectory, confDistro, project, task, confRef, confPatch, expansions)
 	if err != nil {
 		return nil, err
 	}
-	taskConfig.Redacted = tc.privateVars
+	taskConfig.Redacted = redacted
 	taskConfig.TaskSync = a.opts.SetupData.TaskSync
 	taskConfig.EC2Keys = a.opts.SetupData.EC2Keys
 
 	if tc.taskConfig.Task.TaskGroup != "" {
-		taskConfig.TaskGroup = tc.project.FindTaskGroup(tc.taskConfig.Task.TaskGroup)
+		taskConfig.TaskGroup = project.FindTaskGroup(tc.taskConfig.Task.TaskGroup)
 	}
 
 	return taskConfig, nil

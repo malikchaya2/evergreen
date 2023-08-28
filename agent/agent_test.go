@@ -657,7 +657,7 @@ func (s *AgentSuite) setupRunTask(projYml string) {
 	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
-	s.tc.project = p
+	s.tc.taskConfig.Project = p
 	s.mockCommunicator.GetProjectResponse = p
 
 	t := &task.Task{
@@ -1435,8 +1435,8 @@ func (s *AgentSuite) TestFetchProjectConfig() {
 
 	s.NoError(s.a.fetchProjectConfig(s.ctx, s.tc))
 
-	s.Require().NotZero(s.tc.project)
-	s.Equal(s.mockCommunicator.GetProjectResponse.Identifier, s.tc.project.Identifier)
+	s.Require().NotZero(s.tc.taskConfig.Project)
+	s.Equal(s.mockCommunicator.GetProjectResponse.Identifier, s.tc.taskConfig.Project.Identifier)
 	s.Require().NotZero(s.tc.expansions)
 	s.Equal("bar", s.tc.expansions["foo"], "should include mock communicator expansions")
 	s.Equal("new-parameter-value", s.tc.expansions["overwrite-this-parameter"], "user-specified parameter should overwrite any other conflicting expansion")

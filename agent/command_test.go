@@ -241,7 +241,7 @@ func (s *CommandSuite) setUpConfigAndProject(projYml string) {
 
 	s.tc.logger, err = s.mockCommunicator.GetLoggerProducer(s.ctx, s.tc.task, nil)
 	s.NoError(err)
-	s.tc.project = p
+	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Project = p
 }
 
