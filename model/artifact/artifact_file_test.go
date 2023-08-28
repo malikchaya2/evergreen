@@ -223,17 +223,17 @@ func (s *TestArtifactFileSuite) TestEscapeFiles() {
 	files := []*File{
 		{
 			Name: "cat_pix",
-			Link: "placekitten#0.png",
+			Link: "https://bucket.s3.amazonaws.com/something/file#1.tar.gz",
 		},
 		{
 			Name: "fast_download",
-			Link: "fastdl#0.png",
+			Link: "https://fastdl#0.png",
 		},
 	}
 
 	EscapeFiles(files)
 
-	s.Equal("placekitten%230.png", files[0].Link)
-	s.Equal("fastdl%230.png", files[1].Link)
+	s.Equal("https://bucket.s3.amazonaws.com%2Fsomething%2Ffile%231.tar.gz", files[0].Link)
+	s.Equal("https://fastdl%230.png", files[1].Link)
 
 }

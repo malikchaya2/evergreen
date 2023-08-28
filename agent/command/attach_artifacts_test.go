@@ -35,12 +35,12 @@ func TestArtifactsSuite(t *testing.T) {
 func (s *ArtifactsSuite) SetupSuite() {
 	s.tmpdir = s.T().TempDir()
 
-	path := filepath.Join(s.tmpdir, "example.json")
+	path := filepath.Join(s.tmpdir, "https://bucket.s3.amazonaws.com/something/file#1.tar.gz")
 	s.NoError(utility.WriteJSONFile(path,
 		[]*artifact.File{
 			{
-				Name: "name_of_artifact",
-				Link: "here it is",
+				Name: "cat_pix",
+				Link: "https://bucket.s3.amazonaws.com/something/file#1.tar.gz",
 			},
 		}))
 
@@ -122,14 +122,14 @@ func (s *ArtifactsSuite) TestReadFileFailsIfTasksDoesNotExist() {
 }
 
 func (s *ArtifactsSuite) TestReadFileSucceeds() {
-	result, err := readArtifactsFile(s.tmpdir, "example.json")
+	result, err := readArtifactsFile(s.tmpdir, "https://bucket.s3.amazonaws.com/something/file#1.tar.gz")
 	s.NoError(err)
 	s.Len(result, 1)
 }
 
 func (s *ArtifactsSuite) TestCommandParsesFile() {
 	s.Len(s.mock.AttachedFiles, 0)
-	s.cmd.Files = []string{"example.json"}
+	s.cmd.Files = []string{"https://bucket.s3.amazonaws.com/something/file#1.tar.gz"}
 	s.NoError(s.cmd.Execute(s.ctx, s.comm, s.logger, s.conf))
 	s.Len(s.mock.AttachedFiles, 1)
 	s.Len(s.mock.AttachedFiles[s.conf.Task.Id], 1)

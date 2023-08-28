@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -493,7 +492,7 @@ func (s3pc *s3put) attachFiles(ctx context.Context, comm client.Communicator, lo
 
 		}
 
-		fileLink := url.QueryEscape(agentutil.S3DefaultURL(s3pc.Bucket, remoteFileName))
+		fileLink := artifact.EscapeFile(agentutil.S3DefaultURL(s3pc.Bucket, remoteFileName))
 
 		displayName := s3pc.ResourceDisplayName
 		if displayName == "" {

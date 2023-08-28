@@ -2,6 +2,7 @@ package command
 
 import (
 	"context"
+	"net/url"
 	"os"
 	"path/filepath"
 
@@ -78,6 +79,7 @@ func (c *attachArtifacts) Execute(ctx context.Context,
 	files := []*artifact.File{}
 	var segment []*artifact.File
 	for idx := range c.Files {
+		c.Files[idx] = url.QueryEscape(c.Files[idx])
 		segment, err = readArtifactsFile(getJoinedWithWorkDir(conf, c.Prefix), c.Files[idx])
 		if err != nil {
 			if c.Optional && os.IsNotExist(errors.Cause(err)) {
@@ -93,7 +95,7 @@ func (c *attachArtifacts) Execute(ctx context.Context,
 			continue
 		}
 
-		files = append(files, artifact.EscapeFiles(segment)...)
+		files = append(files, segment...)
 	}
 	if catcher.HasErrors() {
 		return errors.Wrap(catcher.Resolve(), "reading artifact JSON files")

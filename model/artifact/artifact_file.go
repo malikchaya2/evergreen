@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/evergreen-ci/pail"
@@ -96,9 +97,17 @@ func StripHiddenFiles(files []File, hasUser bool) ([]File, error) {
 // EscapeFiles escapes the file urls
 func EscapeFiles(files []*File) []*File {
 	for _, file := range files {
-		file.Link = url.QueryEscape(file.Link)
+		file.Name = EscapeFile(file.Name)
+		// file.Link = EscapeFile(file.Link)
 	}
 	return files
+}
+
+// EscapeFiles escapes the file urls
+func EscapeFile(file string) string {
+	file = url.QueryEscape(file)
+	// if https:// was escaped, put that back
+	return strings.Replace(file, "https%3A%2F%2F", "https://", 1)
 }
 
 // ContainsSigningParams returns true if all the params needed for
