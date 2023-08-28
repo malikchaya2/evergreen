@@ -61,7 +61,6 @@ func TestAgentFileLogging(t *testing.T) {
 		DisplayName: "task1",
 	}
 	tc := &taskContext{
-		taskDirectory: tmpDirName,
 		task: client.TaskData{
 			ID:     taskID,
 			Secret: taskSecret,
@@ -95,7 +94,6 @@ func TestAgentFileLogging(t *testing.T) {
 			WorkDir:    tmpDirName,
 			Expansions: util.NewExpansions(nil),
 		},
-		taskModel: task,
 	}
 	assert.NoError(agt.startLogging(ctx, tc))
 	defer agt.removeTaskDirectory(tc)
@@ -136,7 +134,8 @@ func TestStartLogging(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	assert.NoError(agt.fetchProjectConfig(ctx, tc))
+	_, _, _, _, err := agt.fetchProjectConfig(ctx, tc)
+	assert.NoError(err)
 	require.NotNil(t, tc.taskConfig.Project)
 	assert.EqualValues(model.EvergreenLogSender, tc.taskConfig.Project.Loggers.Agent[0].Type)
 	assert.EqualValues(model.SplunkLogSender, tc.taskConfig.Project.Loggers.System[0].Type)
@@ -181,13 +180,12 @@ func TestDefaultSender(t *testing.T) {
 			ID:     taskID,
 			Secret: taskSecret,
 		},
-		project: &model.Project{},
 		taskConfig: &internal.TaskConfig{
 			Task:         task,
 			BuildVariant: &model.BuildVariant{Name: "bv"},
 			Timeout:      &internal.Timeout{IdleTimeoutSecs: 15, ExecTimeoutSecs: 15},
+			Project:      &model.Project{},
 		},
-		taskModel: task,
 	}
 
 	t.Run("Valid", func(t *testing.T) {
@@ -236,19 +234,18 @@ func TestTimberSender(t *testing.T) {
 			ID:     taskID,
 			Secret: taskSecret,
 		},
-		project: &model.Project{
-			Loggers: &model.LoggerConfig{
-				Agent:  []model.LogOpts{{Type: model.BuildloggerLogSender}},
-				System: []model.LogOpts{{Type: model.BuildloggerLogSender}},
-				Task:   []model.LogOpts{{Type: model.BuildloggerLogSender}},
-			},
-		},
 		taskConfig: &internal.TaskConfig{
 			Task:         task,
 			BuildVariant: &model.BuildVariant{Name: "bv"},
 			Timeout:      &internal.Timeout{IdleTimeoutSecs: 15, ExecTimeoutSecs: 15},
+			Project: &model.Project{
+				Loggers: &model.LoggerConfig{
+					Agent:  []model.LogOpts{{Type: model.BuildloggerLogSender}},
+					System: []model.LogOpts{{Type: model.BuildloggerLogSender}},
+					Task:   []model.LogOpts{{Type: model.BuildloggerLogSender}},
+				},
+			},
 		},
-		taskModel: task,
 	}
 	assert.NoError(t, agt.startLogging(ctx, tc))
 }

@@ -89,7 +89,6 @@ func (s *CommandSuite) SetupTest() {
 		task: client.TaskData{
 			Secret: "mock_task_secret",
 		},
-		taskModel:                 &task.Task{},
 		oomTracker:                &mock.OOMTracker{},
 		unsetFunctionVarsDisabled: false,
 	}
@@ -107,7 +106,6 @@ func (s *CommandSuite) TestPreErrorFailsWithSetup() {
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
 	}
 	shouldSetupGroup := !s.tc.ranSetupGroup
 	taskDirectory := s.tc.taskConfig.WorkDir
@@ -145,7 +143,6 @@ func (s *CommandSuite) TestShellExec() {
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
 	}
 	shouldSetupGroup := !s.tc.ranSetupGroup
 	taskDirectory := s.tc.taskConfig.WorkDir
@@ -190,27 +187,29 @@ func TestEndTaskSyncCommands(t *testing.T) {
 			assert.True(t, s3PushFound(cmds))
 		},
 		"ReturnsNoCommandsForNoSync": func(t *testing.T, tc *taskContext, detail *apimodels.TaskEndDetail) {
-			tc.taskModel.SyncAtEndOpts.Enabled = false
+			tc.taskConfig.Task.SyncAtEndOpts.Enabled = false
 			assert.Nil(t, endTaskSyncCommands(tc, detail))
 		},
 		"ReturnsCommandsIfMatchesTaskStatus": func(t *testing.T, tc *taskContext, detail *apimodels.TaskEndDetail) {
 			detail.Status = evergreen.TaskSucceeded
-			tc.taskModel.SyncAtEndOpts.Statuses = []string{evergreen.TaskSucceeded}
+			tc.taskConfig.Task.SyncAtEndOpts.Statuses = []string{evergreen.TaskSucceeded}
 			cmds := endTaskSyncCommands(tc, detail)
 			require.NotNil(t, cmds)
 			assert.True(t, s3PushFound(cmds))
 		},
 		"ReturnsNoCommandsIfDoesNotMatchTaskStatus": func(t *testing.T, tc *taskContext, detail *apimodels.TaskEndDetail) {
 			detail.Status = evergreen.TaskSucceeded
-			tc.taskModel.SyncAtEndOpts.Statuses = []string{evergreen.TaskFailed}
+			tc.taskConfig.Task.SyncAtEndOpts.Statuses = []string{evergreen.TaskFailed}
 			cmds := endTaskSyncCommands(tc, detail)
 			assert.Nil(t, cmds)
 		},
 	} {
 		t.Run(testName, func(t *testing.T) {
 			tc := &taskContext{
-				taskModel: &task.Task{
-					SyncAtEndOpts: task.SyncAtEndOptions{Enabled: true},
+				taskConfig: &internal.TaskConfig{
+					Task: &task.Task{
+						SyncAtEndOpts: task.SyncAtEndOptions{Enabled: true},
+					},
 				},
 			}
 			detail := &apimodels.TaskEndDetail{}

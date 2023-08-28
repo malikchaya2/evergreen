@@ -110,13 +110,13 @@ func (s *AgentSuite) SetupTest() {
 			ID:     "task_id",
 			Secret: "task_secret",
 		},
-		taskConfig:    taskConfig,
-		project:       project,
-		taskModel:     tsk,
-		ranSetupGroup: false,
-		oomTracker:    &mock.OOMTracker{},
-		expansions:    util.Expansions{},
-		taskDirectory: s.tmpDirName,
+		taskConfig: taskConfig,
+		// project:       project,
+		// taskModel:     tsk,
+		// ranSetupGroup: false,
+		oomTracker: &mock.OOMTracker{},
+		// expansions:    util.Expansions{},
+		// taskDirectory: s.tmpDirName,
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	s.canceler = cancel
@@ -667,7 +667,7 @@ func (s *AgentSuite) setupRunTask(projYml string) {
 		Version:      "my_version",
 	}
 	s.mockCommunicator.GetTaskResponse = t
-	s.tc.taskModel = t
+	// s.tc.taskModel = t
 	s.tc.taskConfig.Task = t
 }
 
@@ -694,7 +694,6 @@ post:
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
 	}
 	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
@@ -742,7 +741,6 @@ post:
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
 	}
 	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
@@ -788,7 +786,6 @@ post:
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
 	}
 	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
@@ -836,7 +833,6 @@ post:
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
 	}
 	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
@@ -879,7 +875,6 @@ post:
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
 	}
 	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
@@ -1002,7 +997,6 @@ post:
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
 	}
 	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 	s.NoError(err)
@@ -1036,10 +1030,10 @@ func (s *AgentSuite) TestPrepareNextTask() {
 	tc := &taskContext{}
 	tc.logger, err = s.a.comm.GetLoggerProducer(s.ctx, s.tc.task, nil)
 	s.Require().NoError(err)
-	tc.taskModel = &task.Task{}
 	tc.taskConfig = &internal.TaskConfig{
 		Task: &task.Task{
-			Version: "not_a_task_group_version",
+			Version:   "not_a_task_group_version",
+			TaskGroup: "foo",
 		},
 	}
 	tc.taskConfig.WorkDir = "task_directory"
@@ -1049,7 +1043,6 @@ func (s *AgentSuite) TestPrepareNextTask() {
 
 	const versionID = "task_group_version"
 	nextTask.TaskGroup = "foo"
-	tc.taskGroup = "foo"
 	nextTask.Version = versionID
 	tc.taskConfig = &internal.TaskConfig{
 		Task: &task.Task{
@@ -1078,8 +1071,9 @@ func (s *AgentSuite) TestPrepareNextTask() {
 	const newVersionID = "new_task_group_version"
 	tc.taskConfig = &internal.TaskConfig{
 		Task: &task.Task{
-			Version: newVersionID,
-			BuildId: "build_id_1",
+			Version:   newVersionID,
+			BuildId:   "build_id_1",
+			TaskGroup: "bar",
 		},
 	}
 	tc.logger, err = s.a.comm.GetLoggerProducer(s.ctx, s.tc.task, nil)
@@ -1087,9 +1081,7 @@ func (s *AgentSuite) TestPrepareNextTask() {
 	nextTask.TaskGroup = "bar"
 	nextTask.Version = newVersionID
 	nextTask.Build = "build_id_2"
-	tc.taskGroup = "bar"
 	tc.taskConfig.WorkDir = "task_directory"
-	tc.taskModel = &task.Task{}
 	shouldSetupGroup, taskDirectory = s.a.finishPrevTask(s.ctx, nextTask, tc)
 	s.True(shouldSetupGroup, "if the next task is in the same version and task group name but a different build, shouldSetupGroup should be true")
 	s.Empty(taskDirectory)
@@ -1097,7 +1089,6 @@ func (s *AgentSuite) TestPrepareNextTask() {
 
 func (s *AgentSuite) TestSetupGroupSucceeds() {
 	const taskGroup = "task_group_name"
-	s.tc.taskGroup = taskGroup
 	projYml := `
 task_groups:
   - name: task_group_name
@@ -1108,6 +1099,7 @@ task_groups:
 `
 
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
 	s.setupRunTask(projYml)
 
 	s.NoError(s.a.runPreTaskCommands(s.ctx, s.tc))
@@ -1123,7 +1115,6 @@ task_groups:
 
 func (s *AgentSuite) TestSetupGroupTimeout() {
 	const taskGroup = "task_group_name"
-	s.tc.taskGroup = taskGroup
 	projYml := `
 task_groups:
 - name: task_group_name
@@ -1138,6 +1129,7 @@ task_groups:
 	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
 	s.NoError(err)
 	s.tc.taskConfig.Project = p
+	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
 
 	err = s.a.runPreTaskCommands(s.ctx, s.tc)
@@ -1153,7 +1145,6 @@ task_groups:
 
 func (s *AgentSuite) TestSetupGroupFails() {
 	const taskGroup = "task_group_name"
-	s.tc.taskGroup = taskGroup
 	projYml := `
 task_groups:
   - name: task_group_name
@@ -1168,6 +1159,7 @@ task_groups:
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
 
 	s.Error(s.a.runPreTaskCommands(s.ctx, s.tc), "setup group command error should fail task")
 
@@ -1179,7 +1171,6 @@ task_groups:
 
 func (s *AgentSuite) TestSetupGroupTimeoutFailsTask() {
 	const taskGroup = "task_group_name"
-	s.tc.taskGroup = taskGroup
 	projYml := `
 task_groups:
   - name: task_group_name
@@ -1194,6 +1185,7 @@ task_groups:
 	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
+	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
 
 	startAt := time.Now()
@@ -1215,7 +1207,6 @@ task_groups:
 
 func (s *AgentSuite) TestSetupGroupTimeoutDoesNotFailTask() {
 	const taskGroup = "task_group_name"
-	s.tc.taskGroup = taskGroup
 	projYml := `
 task_groups:
   - name: task_group_name
@@ -1230,6 +1221,7 @@ task_groups:
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
 
 	startAt := time.Now()
 	s.NoError(s.a.runPreTaskCommands(s.ctx, s.tc), "setup group timeout should not fail task")
@@ -1249,7 +1241,6 @@ task_groups:
 
 func (s *AgentSuite) TestTeardownTaskFails() {
 	const taskGroup = "task_group_name"
-	s.tc.taskGroup = taskGroup
 	projYml := `
 task_groups:
   - name: task_group_name
@@ -1261,6 +1252,7 @@ task_groups:
 `
 	s.setupRunTask(projYml)
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
 
 	s.Error(s.a.runPostTaskCommands(s.ctx, s.tc))
 
@@ -1272,7 +1264,6 @@ task_groups:
 
 func (s *AgentSuite) TestRunPreTaskCommands() {
 	const taskGroup = "task_group_name"
-	s.tc.taskGroup = taskGroup
 	projYml := `
 task_groups:
   - name: task_group_name
@@ -1286,6 +1277,7 @@ task_groups:
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
 
 	s.NoError(s.a.runPreTaskCommands(s.ctx, s.tc))
 
@@ -1300,7 +1292,7 @@ task_groups:
 }
 
 func (s *AgentSuite) TestTeardownTaskSucceeds() {
-	s.tc.taskGroup = "task_group_name"
+	taskGroup := "task_group_name"
 	projYml := `
 task_groups:
   - name: task_group_name
@@ -1312,7 +1304,8 @@ task_groups:
 	p := &model.Project{}
 	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
 	s.Require().NoError(err)
-	s.tc.taskConfig.Task.TaskGroup = s.tc.taskGroup
+	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
 	s.tc.taskConfig.Project = p
 
 	s.NoError(s.a.runPostTaskCommands(s.ctx, s.tc))
@@ -1330,8 +1323,8 @@ task_groups:
 }
 
 func (s *AgentSuite) TestTeardownGroupSucceeds() {
-	s.tc.taskModel = &task.Task{}
-	s.tc.taskGroup = "task_group_name"
+	s.tc.taskConfig.Task = &task.Task{}
+	taskGroup := "task_group_name"
 	projYml := `
 task_groups:
   - name: task_group_name
@@ -1344,7 +1337,8 @@ task_groups:
 	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
-	s.tc.taskConfig.Task.TaskGroup = s.tc.taskGroup
+	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
 
 	s.a.runPostGroupCommands(s.ctx, s.tc)
 
@@ -1364,7 +1358,6 @@ func (s *AgentSuite) TestTaskGroupTimeout() {
 		ID:     "task_id",
 		Secret: "task_secret",
 	}
-	s.tc.taskGroup = taskGroup
 	projYml := `
 task_groups:
   - name: task_group_name
@@ -1378,6 +1371,7 @@ task_groups:
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
 
 	s.a.runTaskTimeoutCommands(s.ctx, s.tc)
 
@@ -1433,15 +1427,16 @@ func (s *AgentSuite) TestFetchProjectConfig() {
 		Identifier: "some_cool_project",
 	}
 
-	s.NoError(s.a.fetchProjectConfig(s.ctx, s.tc))
+	_, _, expansions, pv, err := s.a.fetchProjectConfig(s.ctx, s.tc)
+	s.NoError(err)
 
 	s.Require().NotZero(s.tc.taskConfig.Project)
 	s.Equal(s.mockCommunicator.GetProjectResponse.Identifier, s.tc.taskConfig.Project.Identifier)
-	s.Require().NotZero(s.tc.expansions)
-	s.Equal("bar", s.tc.expansions["foo"], "should include mock communicator expansions")
-	s.Equal("new-parameter-value", s.tc.expansions["overwrite-this-parameter"], "user-specified parameter should overwrite any other conflicting expansion")
-	s.Require().NotZero(s.tc.privateVars)
-	s.True(s.tc.privateVars["some_private_var"], "should include mock communicator private variables")
+	s.Require().NotZero(s.tc.taskConfig.Expansions)
+	s.Equal("bar", expansions["foo"], "should include mock communicator expansions")
+	s.Equal("new-parameter-value", expansions["overwrite-this-parameter"], "user-specified parameter should overwrite any other conflicting expansion")
+	s.Require().NotZero(pv)
+	s.True(pv["some_private_var"], "should include mock communicator private variables")
 }
 
 func (s *AgentSuite) TestAbortExitsMainAndRunsPost() {
@@ -1474,7 +1469,7 @@ timeout:
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
+		// TaskGroup:  s.tc.taskGroup,
 	}
 	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 	s.NoError(err)
@@ -1525,12 +1520,12 @@ timeout:
       script: exit 0
 `
 	s.setupRunTask(projYml)
-	s.tc.taskGroup = "some_task_group"
+	taskGroup := "some_task_group"
 	start := time.Now()
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
+		TaskGroup:  taskGroup,
 	}
 	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 	s.NoError(err)

@@ -24,13 +24,14 @@ import (
 // stuff usefule for individual command
 // most use the taskConfig not task context
 type TaskConfig struct {
-	Distro             *apimodels.DistroView
-	ProjectRef         *model.ProjectRef
-	Project            *model.Project
-	Task               *task.Task
-	BuildVariant       *model.BuildVariant
-	Expansions         *util.Expansions
-	DynamicExpansions  util.Expansions
+	Distro            *apimodels.DistroView
+	ProjectRef        *model.ProjectRef
+	Project           *model.Project
+	Task              *task.Task
+	BuildVariant      *model.BuildVariant
+	Expansions        *util.Expansions
+	DynamicExpansions util.Expansions
+	// Redacted holds the private project variables
 	Redacted           map[string]bool
 	WorkDir            string
 	GithubPatchData    thirdparty.GithubPatch
@@ -139,44 +140,21 @@ func (c *TaskConfig) GetCloneMethod() string {
 	return evergreen.CloneMethodOAuth
 }
 
-func (tc *TaskConfig) GetTaskGroup(taskGroup string) (*model.TaskGroup, error) {
-	if err := tc.validateTaskConfig(); err != nil {
-		return nil, err
-	}
-
-	if taskGroup == "" {
-		return nil, nil
-	}
-	tg := tc.Project.FindTaskGroup(taskGroup)
-	if tg == nil {
-		return nil, errors.Errorf("couldn't find task group '%s' in project '%s'", taskGroup, tc.Project.Identifier)
-	}
-
-	if tg.Timeout == nil {
-		tg.Timeout = tc.Project.Timeout
-	}
-	return tg, nil
-}
-
 // GetTimeout returns the timeout defined on the taskGroup or project.
-func (tc *TaskConfig) GetTimeout(taskGroup *model.TaskGroup) (*model.YAMLCommandSet, error) {
+func (tc *TaskConfig) GetTimeout() (*model.YAMLCommandSet, error) {
 	if err := tc.validateTaskConfig(); err != nil {
 		return nil, err
 	}
 
-	if taskGroup == nil {
+	if tc.TaskGroup == nil {
 		return tc.Project.Timeout, nil
 	}
 
-	tg := tc.Project.FindTaskGroup(taskGroup.Name)
-	if tg == nil {
-		return nil, errors.Errorf("couldn't find task group '%s' in project '%s'", taskGroup, tc.Project.Identifier)
-	}
-	if tg.Timeout == nil {
+	if tc.TaskGroup.Timeout == nil {
 		return tc.Project.Timeout, nil
 	}
 
-	return tg.Timeout, nil
+	return tc.TaskGroup.Timeout, nil
 }
 
 // CommandBlock contains information for a block of commands.
@@ -186,44 +164,35 @@ type CommandBlock struct {
 }
 
 // GetPre returns a command block containing the pre task commands.
-func (tc *TaskConfig) GetPre(taskGroup string) (*CommandBlock, error) {
+func (tc *TaskConfig) GetPre() (*CommandBlock, error) {
 	if err := tc.validateTaskConfig(); err != nil {
 		return nil, err
 	}
 
-	if taskGroup == "" {
+	if tc.TaskGroup == "" {
 		return &CommandBlock{
 			Commands:    tc.Project.Pre,
 			CanFailTask: tc.Project.PreErrorFailsTask,
 		}, nil
 	}
 
-	tg := tc.Project.FindTaskGroup(taskGroup)
-	if tg == nil {
-		return nil, errors.Errorf("couldn't find task group '%s' in project '%s'", taskGroup, tc.Project.Identifier)
-	}
-
-	return &CommandBlock{Commands: tg.SetupTask, CanFailTask: tg.SetupGroupFailTask}, nil
+	return &CommandBlock{Commands: tc.TaskGroup.SetupTask, CanFailTask: tc.TaskGroup.SetupGroupFailTask}, nil
 }
 
 // GetPost returns a command block containing the post task commands.
-func (tc *TaskConfig) GetPost(taskGroup string) (*CommandBlock, error) {
+func (tc *TaskConfig) GetPost() (*CommandBlock, error) {
 	if err := tc.validateTaskConfig(); err != nil {
 		return nil, err
 	}
 
-	if taskGroup == "" {
+	if tc.TaskGroup == nil {
 		return &CommandBlock{
 			Commands:    tc.Project.Post,
 			CanFailTask: tc.Project.PostErrorFailsTask,
 		}, nil
 	}
 
-	tg := tc.Project.FindTaskGroup(taskGroup)
-	if tg == nil {
-		return nil, errors.Errorf("couldn't find task group '%s' in project '%s'", taskGroup, tc.Project.Identifier)
-	}
-	return &CommandBlock{Commands: tg.TeardownTask, CanFailTask: tg.TeardownTaskCanFailTask}, nil
+	return &CommandBlock{Commands: tc.TaskGroup.TeardownTask, CanFailTask: tc.TaskGroup.TeardownTaskCanFailTask}, nil
 
 }
 
