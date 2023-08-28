@@ -169,7 +169,7 @@ func (tc *TaskConfig) GetPre() (*CommandBlock, error) {
 		return nil, err
 	}
 
-	if tc.TaskGroup == "" {
+	if tc.TaskGroup == nil {
 		return &CommandBlock{
 			Commands:    tc.Project.Pre,
 			CanFailTask: tc.Project.PreErrorFailsTask,
