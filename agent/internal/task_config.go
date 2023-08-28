@@ -21,6 +21,8 @@ import (
 	"go.opentelemetry.io/otel/baggage"
 )
 
+// stuff usefule for individual command
+// most use the taskConfig not task context
 type TaskConfig struct {
 	Distro             *apimodels.DistroView
 	ProjectRef         *model.ProjectRef
@@ -38,6 +40,7 @@ type TaskConfig struct {
 	EC2Keys            []evergreen.EC2Key
 	ModulePaths        map[string]string
 	CedarTestResultsID string
+	TaskGroup          *model.TaskGroup
 
 	mu sync.RWMutex
 }
@@ -86,6 +89,8 @@ func NewTaskConfig(workDir string, d *apimodels.DistroView, p *model.Project, t 
 	if bv == nil {
 		return nil, errors.Errorf("cannot find build variant '%s' for task in project '%s'", t.BuildVariant, t.Project)
 	}
+
+	//fetch the task group here
 
 	taskConfig := &TaskConfig{
 		Distro:            d,
@@ -154,16 +159,16 @@ func (tc *TaskConfig) GetTaskGroup(taskGroup string) (*model.TaskGroup, error) {
 }
 
 // GetTimeout returns the timeout defined on the taskGroup or project.
-func (tc *TaskConfig) GetTimeout(taskGroup string) (*model.YAMLCommandSet, error) {
+func (tc *TaskConfig) GetTimeout(taskGroup *model.TaskGroup) (*model.YAMLCommandSet, error) {
 	if err := tc.validateTaskConfig(); err != nil {
 		return nil, err
 	}
 
-	if taskGroup == "" {
+	if taskGroup == nil {
 		return tc.Project.Timeout, nil
 	}
 
-	tg := tc.Project.FindTaskGroup(taskGroup)
+	tg := tc.Project.FindTaskGroup(taskGroup.Name)
 	if tg == nil {
 		return nil, errors.Errorf("couldn't find task group '%s' in project '%s'", taskGroup, tc.Project.Identifier)
 	}

@@ -129,7 +129,7 @@ func (s *AgentSuite) SetupTest() {
 	s.tc.setCurrentCommand(factory())
 	s.tmpDirName, err = os.MkdirTemp("", filepath.Base(s.T().Name()))
 	s.Require().NoError(err)
-	s.tc.taskDirectory = s.tmpDirName
+	s.tc.taskConfig.WorkDir = s.tmpDirName
 	sender, err := s.a.GetSender(ctx, LogOutputStdout, "agent", "task_id", 2)
 	s.Require().NoError(err)
 	s.a.SetDefaultLogger(sender)
@@ -696,7 +696,7 @@ post:
 		TaskSecret: s.tc.task.Secret,
 		TaskGroup:  s.tc.taskGroup,
 	}
-	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskDirectory)
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
 	s.NoError(err)
 	s.Equal(evergreen.TaskFailed, s.mockCommunicator.EndTaskResult.Detail.Status)
@@ -744,7 +744,7 @@ post:
 		TaskSecret: s.tc.task.Secret,
 		TaskGroup:  s.tc.taskGroup,
 	}
-	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskDirectory)
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
 	s.NoError(err)
 	s.Equal(evergreen.TaskSucceeded, s.mockCommunicator.EndTaskResult.Detail.Status)
@@ -790,7 +790,7 @@ post:
 		TaskSecret: s.tc.task.Secret,
 		TaskGroup:  s.tc.taskGroup,
 	}
-	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskDirectory)
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
 	s.NoError(err)
 	s.Equal(evergreen.TaskSucceeded, s.mockCommunicator.EndTaskResult.Detail.Status)
@@ -838,7 +838,7 @@ post:
 		TaskSecret: s.tc.task.Secret,
 		TaskGroup:  s.tc.taskGroup,
 	}
-	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskDirectory)
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
 	s.NoError(err)
 	s.Equal(evergreen.TaskFailed, s.mockCommunicator.EndTaskResult.Detail.Status)
@@ -881,7 +881,7 @@ post:
 		TaskSecret: s.tc.task.Secret,
 		TaskGroup:  s.tc.taskGroup,
 	}
-	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskDirectory)
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 
 	s.NoError(err)
 	s.Equal(evergreen.TaskFailed, s.mockCommunicator.EndTaskResult.Detail.Status)
@@ -1004,7 +1004,7 @@ post:
 		TaskSecret: s.tc.task.Secret,
 		TaskGroup:  s.tc.taskGroup,
 	}
-	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskDirectory)
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 	s.NoError(err)
 	s.Equal(evergreen.TaskSucceeded, s.mockCommunicator.EndTaskResult.Detail.Status)
 	s.True(s.mockCommunicator.EndTaskResult.Detail.OOMTracker.Detected)
@@ -1014,7 +1014,7 @@ post:
 func (s *AgentSuite) TestSetupTaskSucceeds() {
 	nextTask := &apimodels.NextTaskResponse{}
 	s.setupRunTask(defaultProjYml)
-	s.tc.taskDirectory = "task_directory"
+	s.tc.taskConfig.WorkDir = "task_directory"
 	shouldSetupGroup, taskDirectory := s.a.finishPrevTask(s.ctx, nextTask, s.tc)
 	_, shouldExit, err := s.a.setupTask(s.ctx, s.ctx, s.tc, nextTask, shouldSetupGroup, taskDirectory)
 	s.False(shouldExit)
@@ -1042,7 +1042,7 @@ func (s *AgentSuite) TestPrepareNextTask() {
 			Version: "not_a_task_group_version",
 		},
 	}
-	tc.taskDirectory = "task_directory"
+	tc.taskConfig.WorkDir = "task_directory"
 	shouldSetupGroup, taskDirectory := s.a.finishPrevTask(s.ctx, nextTask, tc)
 	s.True(shouldSetupGroup, "if the next task is not in a group, shouldSetupGroup should be true")
 	s.Empty(taskDirectory)
@@ -1058,7 +1058,7 @@ func (s *AgentSuite) TestPrepareNextTask() {
 	}
 	tc.logger, err = s.a.comm.GetLoggerProducer(s.ctx, s.tc.task, nil)
 	s.NoError(err)
-	tc.taskDirectory = "task_directory"
+	tc.taskConfig.WorkDir = "task_directory"
 	tc.ranSetupGroup = false
 	shouldSetupGroup, taskDirectory = s.a.finishPrevTask(s.ctx, nextTask, tc)
 	s.True(shouldSetupGroup, "if the next task is in the same group as the previous task but ranSetupGroup was false, ranSetupGroup should be true")
@@ -1070,7 +1070,7 @@ func (s *AgentSuite) TestPrepareNextTask() {
 		},
 	}
 	tc.ranSetupGroup = true
-	tc.taskDirectory = "task_directory"
+	tc.taskConfig.WorkDir = "task_directory"
 	shouldSetupGroup, taskDirectory = s.a.finishPrevTask(s.ctx, nextTask, tc)
 	s.False(shouldSetupGroup, "if the next task is in the same group as the previous task and we already ran the setup group, shouldSetupGroup should be false")
 	s.Equal("task_directory", taskDirectory)
@@ -1088,7 +1088,7 @@ func (s *AgentSuite) TestPrepareNextTask() {
 	nextTask.Version = newVersionID
 	nextTask.Build = "build_id_2"
 	tc.taskGroup = "bar"
-	tc.taskDirectory = "task_directory"
+	tc.taskConfig.WorkDir = "task_directory"
 	tc.taskModel = &task.Task{}
 	shouldSetupGroup, taskDirectory = s.a.finishPrevTask(s.ctx, nextTask, tc)
 	s.True(shouldSetupGroup, "if the next task is in the same version and task group name but a different build, shouldSetupGroup should be true")
@@ -1476,7 +1476,7 @@ timeout:
 		TaskSecret: s.tc.task.Secret,
 		TaskGroup:  s.tc.taskGroup,
 	}
-	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskDirectory)
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 	s.NoError(err)
 
 	s.WithinDuration(start, time.Now(), 4*time.Second, "abort should prevent commands in the main block from continuing to run")
@@ -1532,7 +1532,7 @@ timeout:
 		TaskSecret: s.tc.task.Secret,
 		TaskGroup:  s.tc.taskGroup,
 	}
-	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskDirectory)
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, !s.tc.ranSetupGroup, s.tc.taskConfig.WorkDir)
 	s.NoError(err)
 
 	s.WithinDuration(start, time.Now(), 4*time.Second, "abort should prevent commands in the main block from continuing to run")

@@ -6,19 +6,15 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/agent/command"
-	"github.com/evergreen-ci/evergreen/agent/internal"
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	agentutil "github.com/evergreen-ci/evergreen/agent/util"
 	"github.com/evergreen-ci/evergreen/apimodels"
 	"github.com/evergreen-ci/evergreen/model"
-	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/thirdparty/docker"
-	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
@@ -93,25 +89,6 @@ const (
 	// LogOutputStdout indicates that the agent will log to standard output.
 	LogOutputStdout LogOutputType = "stdout"
 )
-
-type taskContext struct {
-	currentCommand            command.Command
-	expansions                util.Expansions
-	privateVars               map[string]bool
-	logger                    client.LoggerProducer
-	task                      client.TaskData
-	taskGroup                 string
-	ranSetupGroup             bool
-	taskConfig                *internal.TaskConfig
-	taskDirectory             string
-	timeout                   timeoutInfo
-	project                   *model.Project
-	taskModel                 *task.Task
-	oomTracker                jasper.OOMTracker
-	traceID                   string
-	unsetFunctionVarsDisabled bool
-	sync.RWMutex
-}
 
 type timeoutInfo struct {
 	// idleTimeoutDuration maintains the current idle timeout in the task context;
@@ -293,7 +270,7 @@ func (a *Agent) loop(ctx context.Context) error {
 
 			a.populateEC2InstanceID(ctx)
 			nextTask, err := a.comm.GetNextTask(ctx, &apimodels.GetNextTaskDetails{
-				TaskGroup:     tc.taskGroup,
+				TaskGroup:     tc.taskConfig.TaskGroup.Name,
 				AgentRevision: evergreen.AgentVersion,
 				EC2InstanceID: a.ec2InstanceID,
 			})
@@ -406,7 +383,7 @@ func (a *Agent) processNextTask(ctx context.Context, nt *apimodels.NextTaskRespo
 // finishPrevTask finishes up the previous task and returns information needed for the next task.
 func (a *Agent) finishPrevTask(ctx context.Context, nextTask *apimodels.NextTaskResponse, tc *taskContext) (bool, string) {
 	shouldSetupGroup := false
-	taskDirectory := tc.taskDirectory
+	taskDirectory := tc.taskConfig.WorkDir
 	if shouldRunSetupGroup(nextTask, tc) {
 		shouldSetupGroup = true
 		taskDirectory = ""
@@ -428,9 +405,7 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, initialTC *taskCon
 				ID:     nt.TaskId,
 				Secret: nt.TaskSecret,
 			},
-			taskGroup:                 nt.TaskGroup,
 			ranSetupGroup:             !shouldSetupGroup,
-			taskDirectory:             taskDirectory,
 			oomTracker:                jasper.NewOOMTracker(),
 			unsetFunctionVarsDisabled: nt.UnsetFunctionVarsDisabled,
 		}
@@ -462,12 +437,12 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, initialTC *taskCon
 	}
 
 	if !tc.ranSetupGroup {
-		tc.taskDirectory, err = a.createTaskDirectory(tc)
+		tc.taskConfig.WorkDir, err = a.createTaskDirectory(tc)
 		if err != nil {
 			return a.handleSetupError(setupCtx, tc, errors.Wrap(err, "creating task directory"))
 		}
 	}
-	tc.taskConfig.WorkDir = tc.taskDirectory
+	// tc.taskConfig.WorkDir = tc.taskConfig.WorkDir
 	tc.taskConfig.Expansions.Put("workdir", tc.taskConfig.WorkDir)
 
 	// We are only calling this again to get the log for the current command after logging has been set up.
@@ -509,16 +484,6 @@ func shouldRunSetupGroup(nextTask *apimodels.NextTaskResponse, tc *taskContext) 
 	} else if tc.taskConfig == nil ||
 		nextTask.TaskGroup == "" ||
 		nextTask.Build != tc.taskConfig.Task.BuildId { // next task has a standalone task or a new build
-		return true
-	} else if nextTask.TaskGroup != tc.taskGroup { // next task has a different task group
-		if tc.logger != nil && nextTask.TaskGroup == tc.taskConfig.Task.TaskGroup {
-			tc.logger.Task().Warning(message.Fields{
-				"message":                 "programmer error: task group in task context doesn't match task",
-				"task_config_task_group":  tc.taskConfig.Task.TaskGroup,
-				"task_context_task_group": tc.taskGroup,
-				"next_task_task_group":    nextTask.TaskGroup,
-			})
-		}
 		return true
 	}
 
@@ -736,19 +701,14 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 	defer preTaskSpan.End()
 
 	if !tc.ranSetupGroup {
-		taskGroup, err := tc.taskConfig.GetTaskGroup(tc.taskGroup)
-		if err != nil {
-			tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for task setup group commands"))
-			return nil
-		}
-		if taskGroup != nil && taskGroup.SetupGroup != nil {
-			tc.logger.Task().Infof("Running setup group for task group '%s'.", taskGroup.Name)
+		if tc.taskConfig.TaskGroup != nil && tc.taskConfig.TaskGroup.SetupGroup != nil {
+			tc.logger.Task().Infof("Running setup group for task group '%s'.", tc.taskConfig.TaskGroup.Name)
 			setupGroupCtx, setupGroupCancel := context.WithCancel(ctx)
 			defer setupGroupCancel()
 
 			var timeout time.Duration
-			if taskGroup.SetupGroupTimeoutSecs > 0 {
-				timeout = time.Duration(taskGroup.SetupGroupTimeoutSecs) * time.Second
+			if tc.taskConfig.TaskGroup.SetupGroupTimeoutSecs > 0 {
+				timeout = time.Duration(tc.taskConfig.TaskGroup.SetupGroupTimeoutSecs) * time.Second
 			} else {
 				timeout = tc.getCallbackTimeout()
 			}
@@ -756,27 +716,27 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 				tc:                    tc,
 				kind:                  setupGroupTimeout,
 				getTimeout:            func() time.Duration { return timeout },
-				canMarkTimeoutFailure: taskGroup.SetupGroupFailTask,
+				canMarkTimeoutFailure: tc.taskConfig.TaskGroup.SetupGroupFailTask,
 			}
 			go a.startTimeoutWatcher(setupGroupCtx, setupGroupCancel, timeoutOpts)
 
 			opts := runCommandsOptions{
 				block:       command.SetupGroupBlock,
-				canFailTask: taskGroup.SetupGroupFailTask,
+				canFailTask: tc.taskConfig.TaskGroup.SetupGroupFailTask,
 			}
-			err = a.runCommandsInBlock(setupGroupCtx, tc, taskGroup.SetupGroup.List(), opts)
+			err := a.runCommandsInBlock(setupGroupCtx, tc, tc.taskConfig.TaskGroup.SetupGroup.List(), opts)
 			if err != nil {
 				tc.logger.Task().Error(errors.Wrap(err, "Running task setup group commands failed"))
-				if taskGroup.SetupGroupFailTask {
+				if tc.taskConfig.TaskGroup.SetupGroupFailTask {
 					return err
 				}
 			}
-			tc.logger.Task().Infof("Finished running setup group for task group '%s'.", taskGroup.Name)
+			tc.logger.Task().Infof("Finished running setup group for task group '%s'.", tc.taskConfig.TaskGroup.Name)
 		}
 		tc.ranSetupGroup = true
 	}
 
-	pre, err := tc.taskConfig.GetPre(tc.taskGroup)
+	pre, err := tc.taskConfig.GetPre(tc.taskConfig.TaskGroup.Name)
 	if err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for pre-task commands"))
 		return nil
@@ -794,7 +754,7 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 		go a.startTimeoutWatcher(ctx, preCancel, timeoutOpts)
 
 		block := command.PreBlock
-		if tc.taskGroup != "" {
+		if tc.taskConfig.TaskGroup != nil {
 			block = command.SetupTaskBlock
 		}
 		opts := runCommandsOptions{
@@ -853,7 +813,7 @@ func (a *Agent) runTaskTimeoutCommands(ctx context.Context, tc *taskContext) {
 	tc.logger.Task().Info("Running task-timeout commands.")
 	start := time.Now()
 
-	timeout, err := tc.taskConfig.GetTimeout(tc.taskGroup)
+	timeout, err := tc.taskConfig.GetTimeout(tc.taskConfig.TaskGroup)
 	if err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for task timeout commands"))
 		return
@@ -1026,14 +986,14 @@ func (a *Agent) runPostTaskCommands(ctx context.Context, tc *taskContext) error 
 	tc.logger.Task().Info("Running post-task commands.")
 
 	taskConfig := tc.getTaskConfig()
-	post, err := taskConfig.GetPost(tc.taskGroup)
+	post, err := taskConfig.GetPost(tc.taskConfig.TaskGroup.Name)
 	if err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for post-task commands"))
 		return nil
 	}
 	if post.Commands != nil {
 		block := command.PostBlock
-		if tc.taskGroup != "" {
+		if tc.taskConfig.TaskGroup != nil {
 			block = command.TeardownTaskBlock
 		}
 
@@ -1089,14 +1049,7 @@ func (a *Agent) runPostGroupCommands(ctx context.Context, tc *taskContext) {
 		logger = grip.GetDefaultJournaler()
 	}
 
-	taskGroup, err := tc.taskConfig.GetTaskGroup(tc.taskGroup)
-	if err != nil {
-		if tc.logger != nil {
-			tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for post-group commands"))
-		}
-		return
-	}
-	if taskGroup != nil && taskGroup.TeardownGroup != nil {
+	if tc.taskConfig.TaskGroup != nil && tc.taskConfig.TaskGroup.TeardownGroup != nil {
 		logger.Info("Running post-group commands")
 
 		a.killProcs(ctx, tc, true, "teardown group commands are starting")
@@ -1110,7 +1063,7 @@ func (a *Agent) runPostGroupCommands(ctx context.Context, tc *taskContext) {
 		}
 		go a.startTimeoutWatcher(teardownGroupCtx, teardownGroupCancel, timeoutOpts)
 
-		err := a.runCommandsInBlock(teardownGroupCtx, tc, taskGroup.TeardownGroup.List(), runCommandsOptions{block: command.TeardownGroupBlock})
+		err := a.runCommandsInBlock(teardownGroupCtx, tc, tc.taskConfig.TaskGroup.TeardownGroup.List(), runCommandsOptions{block: command.TeardownGroupBlock})
 		logger.Error(errors.Wrap(err, "Running post-group commands failed"))
 
 		logger.Info("Finished running post-group commands.")
@@ -1190,19 +1143,15 @@ func (a *Agent) shouldKill(tc *taskContext, ignoreTaskGroupCheck bool) bool {
 		return false
 	}
 	// kill if the task is not in a task group
-	if tc.taskGroup == "" {
+	if tc.taskConfig.TaskGroup == nil {
 		return true
 	}
 	// kill if ignoreTaskGroupCheck is true
 	if ignoreTaskGroupCheck {
 		return true
 	}
-	taskGroup, err := tc.taskConfig.GetTaskGroup(tc.taskGroup)
-	if err != nil {
-		return false
-	}
 	// do not kill if share_processes is set
-	if taskGroup != nil && taskGroup.ShareProcs {
+	if tc.taskConfig.TaskGroup != nil && tc.taskConfig.TaskGroup.ShareProcs {
 		return false
 	}
 	// return true otherwise

@@ -2,17 +2,51 @@ package agent
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/agent/command"
 	"github.com/evergreen-ci/evergreen/agent/internal"
+	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	"github.com/evergreen-ci/evergreen/apimodels"
+	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/patch"
+	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/jasper"
 	"github.com/pkg/errors"
 )
+
+// do these hae any baring on the command running
+// taskConfig is the source of truth
+// to maintian state for the task run
+// superset
+// todo: move to the task context file
+type taskContext struct {
+	currentCommand command.Command
+	// remove
+	expansions util.Expansions
+	// remove
+	privateVars map[string]bool // use Redacted
+	logger      client.LoggerProducer
+	task        client.TaskData
+	// use model instead
+	// store the model in TaskConfig
+	// taskGroup     string
+	ranSetupGroup bool
+	taskConfig    *internal.TaskConfig
+	timeout       timeoutInfo
+	project       *model.Project
+	// remove
+	taskModel                 *task.Task // use Task
+	oomTracker                jasper.OOMTracker
+	traceID                   string
+	unsetFunctionVarsDisabled bool
+	sync.RWMutex
+}
 
 func (tc *taskContext) setCurrentCommand(command command.Command) {
 	tc.Lock()
@@ -169,6 +203,10 @@ func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.
 	taskConfig.Redacted = tc.privateVars
 	taskConfig.TaskSync = a.opts.SetupData.TaskSync
 	taskConfig.EC2Keys = a.opts.SetupData.EC2Keys
+
+	if tc.taskConfig.Task.TaskGroup != "" {
+		taskConfig.TaskGroup = tc.project.FindTaskGroup(tc.taskConfig.Task.TaskGroup)
+	}
 
 	return taskConfig, nil
 }
