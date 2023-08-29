@@ -194,8 +194,8 @@ func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.
 	taskConfig.EC2Keys = a.opts.SetupData.EC2Keys
 
 	if tc.taskConfig.Task.TaskGroup != "" {
-		taskConfig.TaskGroup = project.FindTaskGroup(tc.taskConfig.Task.TaskGroup)
-		if taskConfig.TaskGroup == nil {
+		taskConfig.TaskGroup = *project.FindTaskGroup(tc.taskConfig.Task.TaskGroup)
+		if taskConfig.TaskGroup.Name == "" {
 			return nil, errors.Wrap(err, "programmatic error: task group is nil")
 		}
 

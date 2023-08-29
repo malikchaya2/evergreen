@@ -41,7 +41,7 @@ type TaskConfig struct {
 	EC2Keys            []evergreen.EC2Key
 	ModulePaths        map[string]string
 	CedarTestResultsID string
-	TaskGroup          *model.TaskGroup
+	TaskGroup          model.TaskGroup
 
 	mu sync.RWMutex
 }
@@ -146,10 +146,6 @@ func (tc *TaskConfig) GetTimeout() (*model.YAMLCommandSet, error) {
 		return nil, err
 	}
 
-	if tc.TaskGroup == nil {
-		return tc.Project.Timeout, nil
-	}
-
 	if tc.TaskGroup.Timeout == nil {
 		return tc.Project.Timeout, nil
 	}
@@ -169,7 +165,7 @@ func (tc *TaskConfig) GetPre() (*CommandBlock, error) {
 		return nil, err
 	}
 
-	if tc.TaskGroup == nil {
+	if tc.TaskGroup.Name == "" {
 		return &CommandBlock{
 			Commands:    tc.Project.Pre,
 			CanFailTask: tc.Project.PreErrorFailsTask,
@@ -185,7 +181,7 @@ func (tc *TaskConfig) GetPost() (*CommandBlock, error) {
 		return nil, err
 	}
 
-	if tc.TaskGroup == nil {
+	if tc.TaskGroup.Name == "" {
 		return &CommandBlock{
 			Commands:    tc.Project.Post,
 			CanFailTask: tc.Project.PostErrorFailsTask,

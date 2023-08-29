@@ -658,6 +658,7 @@ func (s *AgentSuite) setupRunTask(projYml string) {
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Project = p
+
 	s.mockCommunicator.GetProjectResponse = p
 
 	t := &task.Task{
@@ -1099,7 +1100,7 @@ task_groups:
 `
 
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
-	s.tc.taskConfig.TaskGroup = s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
 	s.setupRunTask(projYml)
 
 	s.NoError(s.a.runPreTaskCommands(s.ctx, s.tc))
@@ -1129,7 +1130,7 @@ task_groups:
 	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
 	s.NoError(err)
 	s.tc.taskConfig.Project = p
-	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *p.FindTaskGroup(taskGroup)
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
 
 	err = s.a.runPreTaskCommands(s.ctx, s.tc)
@@ -1159,7 +1160,7 @@ task_groups:
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
-	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *p.FindTaskGroup(taskGroup)
 
 	s.Error(s.a.runPreTaskCommands(s.ctx, s.tc), "setup group command error should fail task")
 
@@ -1185,7 +1186,7 @@ task_groups:
 	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
-	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *p.FindTaskGroup(taskGroup)
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
 
 	startAt := time.Now()
@@ -1221,7 +1222,7 @@ task_groups:
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
-	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *p.FindTaskGroup(taskGroup)
 
 	startAt := time.Now()
 	s.NoError(s.a.runPreTaskCommands(s.ctx, s.tc), "setup group timeout should not fail task")
@@ -1252,7 +1253,7 @@ task_groups:
 `
 	s.setupRunTask(projYml)
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
-	s.tc.taskConfig.TaskGroup = s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
 
 	s.Error(s.a.runPostTaskCommands(s.ctx, s.tc))
 
@@ -1277,7 +1278,7 @@ task_groups:
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
-	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *p.FindTaskGroup(taskGroup)
 
 	s.NoError(s.a.runPreTaskCommands(s.ctx, s.tc))
 
@@ -1305,7 +1306,7 @@ task_groups:
 	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
 	s.Require().NoError(err)
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
-	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *p.FindTaskGroup(taskGroup)
 	s.tc.taskConfig.Project = p
 
 	s.NoError(s.a.runPostTaskCommands(s.ctx, s.tc))
@@ -1338,7 +1339,7 @@ task_groups:
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
-	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *p.FindTaskGroup(taskGroup)
 
 	s.a.runPostGroupCommands(s.ctx, s.tc)
 
@@ -1371,7 +1372,7 @@ task_groups:
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
-	s.tc.taskConfig.TaskGroup = p.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *p.FindTaskGroup(taskGroup)
 
 	s.a.runTaskTimeoutCommands(s.ctx, s.tc)
 

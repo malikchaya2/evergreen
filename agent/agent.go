@@ -699,7 +699,7 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 	defer preTaskSpan.End()
 
 	if !tc.ranSetupGroup {
-		if tc.taskConfig.TaskGroup != nil && tc.taskConfig.TaskGroup.SetupGroup != nil {
+		if tc.taskConfig.TaskGroup.Name != "" && tc.taskConfig.TaskGroup.SetupGroup != nil {
 			tc.logger.Task().Infof("Running setup group for task group '%s'.", tc.taskConfig.TaskGroup.Name)
 			setupGroupCtx, setupGroupCancel := context.WithCancel(ctx)
 			defer setupGroupCancel()
@@ -752,7 +752,7 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 		go a.startTimeoutWatcher(ctx, preCancel, timeoutOpts)
 
 		block := command.PreBlock
-		if tc.taskConfig.TaskGroup != nil {
+		if tc.taskConfig.TaskGroup.Name != "" {
 			block = command.SetupTaskBlock
 		}
 		opts := runCommandsOptions{
@@ -991,7 +991,7 @@ func (a *Agent) runPostTaskCommands(ctx context.Context, tc *taskContext) error 
 	}
 	if post.Commands != nil {
 		block := command.PostBlock
-		if tc.taskConfig.TaskGroup != nil {
+		if tc.taskConfig.TaskGroup.Name != "" {
 			block = command.TeardownTaskBlock
 		}
 
@@ -1047,7 +1047,7 @@ func (a *Agent) runPostGroupCommands(ctx context.Context, tc *taskContext) {
 		logger = grip.GetDefaultJournaler()
 	}
 
-	if tc.taskConfig.TaskGroup != nil && tc.taskConfig.TaskGroup.TeardownGroup != nil {
+	if tc.taskConfig.TaskGroup.Name != "" && tc.taskConfig.TaskGroup.TeardownGroup != nil {
 		logger.Info("Running post-group commands")
 
 		a.killProcs(ctx, tc, true, "teardown group commands are starting")
@@ -1141,7 +1141,7 @@ func (a *Agent) shouldKill(tc *taskContext, ignoreTaskGroupCheck bool) bool {
 		return false
 	}
 	// kill if the task is not in a task group
-	if tc.taskConfig.TaskGroup == nil {
+	if tc.taskConfig.TaskGroup.Name == "" {
 		return true
 	}
 	// kill if ignoreTaskGroupCheck is true
@@ -1149,7 +1149,7 @@ func (a *Agent) shouldKill(tc *taskContext, ignoreTaskGroupCheck bool) bool {
 		return true
 	}
 	// do not kill if share_processes is set
-	if tc.taskConfig.TaskGroup != nil && tc.taskConfig.TaskGroup.ShareProcs {
+	if tc.taskConfig.TaskGroup.Name != "" && tc.taskConfig.TaskGroup.ShareProcs {
 		return false
 	}
 	// return true otherwise
