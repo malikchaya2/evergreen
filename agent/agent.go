@@ -734,7 +734,7 @@ func (a *Agent) runPreTaskCommands(ctx context.Context, tc *taskContext) error {
 		tc.ranSetupGroup = true
 	}
 
-	pre, err := tc.taskConfig.GetPre(tc.taskConfig.TaskGroup.Name)
+	pre, err := tc.taskConfig.GetPre()
 	if err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for pre-task commands"))
 		return nil
@@ -811,7 +811,7 @@ func (a *Agent) runTaskTimeoutCommands(ctx context.Context, tc *taskContext) {
 	tc.logger.Task().Info("Running task-timeout commands.")
 	start := time.Now()
 
-	timeout, err := tc.taskConfig.GetTimeout(tc.taskConfig.TaskGroup)
+	timeout, err := tc.taskConfig.GetTimeout()
 	if err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for task timeout commands"))
 		return
@@ -984,7 +984,7 @@ func (a *Agent) runPostTaskCommands(ctx context.Context, tc *taskContext) error 
 	tc.logger.Task().Info("Running post-task commands.")
 
 	taskConfig := tc.getTaskConfig()
-	post, err := taskConfig.GetPost(tc.taskConfig.TaskGroup.Name)
+	post, err := taskConfig.GetPost()
 	if err != nil {
 		tc.logger.Execution().Error(errors.Wrap(err, "fetching task group for post-task commands"))
 		return nil

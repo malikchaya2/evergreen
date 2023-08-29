@@ -194,9 +194,6 @@ func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.
 	taskConfig.EC2Keys = a.opts.SetupData.EC2Keys
 
 	if tc.taskConfig.Task.TaskGroup != "" {
-		// if it's nil, thats bad. error. this thinks it's part of a task group.
-		// error and return and call it a day.
-		// should have been validated when the project was validate
 		taskConfig.TaskGroup = project.FindTaskGroup(tc.taskConfig.Task.TaskGroup)
 		if taskConfig.TaskGroup == nil {
 			return nil, errors.Wrap(err, "programmatic error: task group is nil")

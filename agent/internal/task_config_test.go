@@ -1,12 +1,10 @@
 package internal
 
 import (
-	"context"
 	"path/filepath"
 	"testing"
 
 	"github.com/evergreen-ci/evergreen/apimodels"
-	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
@@ -42,62 +40,6 @@ func TestTaskConfigGetWorkingDirectory(t *testing.T) {
 	out, err = conf.GetWorkingDirectory("does-not-exist")
 	assert.Error(t, err)
 	assert.Equal(t, "", out)
-}
-
-func TestTaskConfigGetTaskGroup(t *testing.T) {
-	require.NoError(t, db.ClearCollections(model.VersionCollection))
-	tgName := "example_task_group"
-	projYml := `
-timeout:
-  - command: shell.exec
-    params:
-      script: "echo timeout"
-tasks:
-- name: example_task_1
-- name: example_task_2
-task_groups:
-- name: example_task_group
-  max_hosts: 2
-  setup_group:
-  - command: shell.exec
-    params:
-      script: "echo setup_group"
-  teardown_group:
-  - command: shell.exec
-    params:
-      script: "echo teardown_group"
-  setup_task:
-  - command: shell.exec
-    params:
-      script: "echo setup_group"
-  teardown_task:
-  - command: shell.exec
-    params:
-      script: "echo setup_group"
-  tasks:
-  - example_task_1
-  - example_task_2
-`
-	p := &model.Project{}
-	ctx := context.Background()
-	_, err := model.LoadProjectInto(ctx, []byte(projYml), nil, "", p)
-	require.NoError(t, err)
-	v := model.Version{
-		Id: "v1",
-	}
-	t1 := task.Task{
-		Id:        "t1",
-		TaskGroup: tgName,
-		Version:   v.Id,
-	}
-
-	tc := TaskConfig{Task: &t1, Project: p}
-	tg, err := tc.GetTaskGroup(tgName)
-	assert.NoError(t, err)
-	assert.Equal(t, tgName, tg.Name)
-	assert.Len(t, tg.Tasks, 2)
-	assert.Equal(t, 2, tg.MaxHosts)
-	assert.NotEmpty(t, tg.Timeout) // Defaults to project-level timeout if not defined.
 }
 
 func TestNewTaskConfig(t *testing.T) {
