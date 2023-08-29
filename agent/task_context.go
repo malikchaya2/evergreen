@@ -176,7 +176,13 @@ func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.
 	}
 
 	var confPatch *patch.Patch
-	if evergreen.IsGitHubPatchRequester(tc.taskConfig.Task.Requester) {
+	requester := ""
+	tg := ""
+	if tc.taskConfig != nil && tc.taskConfig.Task != nil {
+		requester = tc.taskConfig.Task.Requester
+		tg = tc.taskConfig.Task.TaskGroup
+	}
+	if evergreen.IsGitHubPatchRequester(requester) {
 		grip.Info("Fetching patch document for GitHub PR request.")
 		confPatch, err = a.comm.GetTaskPatch(ctx, tc.task, "")
 		if err != nil {
@@ -193,7 +199,7 @@ func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.
 	taskConfig.TaskSync = a.opts.SetupData.TaskSync
 	taskConfig.EC2Keys = a.opts.SetupData.EC2Keys
 
-	if tc.taskConfig.Task.TaskGroup != "" {
+	if tg != "" {
 		taskConfig.TaskGroup = *project.FindTaskGroup(tc.taskConfig.Task.TaskGroup)
 		if taskConfig.TaskGroup.Name == "" {
 			return nil, errors.Wrap(err, "programmatic error: task group is nil")

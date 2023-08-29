@@ -51,7 +51,7 @@ func (a *Agent) createTaskDirectory(tc *taskContext) (string, error) {
 // a task run, and the agent loop will start another task regardless of how this
 // exits.
 func (a *Agent) removeTaskDirectory(tc *taskContext) {
-	if tc.taskConfig.WorkDir == "" {
+	if tc.taskConfig == nil || tc.taskConfig.WorkDir == "" {
 		grip.Info("Task directory is not set, not removing.")
 		return
 	}

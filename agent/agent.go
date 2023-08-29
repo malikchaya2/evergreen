@@ -271,8 +271,13 @@ func (a *Agent) loop(ctx context.Context) error {
 			}
 
 			a.populateEC2InstanceID(ctx)
+			tg := ""
+			if tc.taskConfig != nil {
+				tg = tc.taskConfig.TaskGroup.Name
+			}
+
 			nextTask, err := a.comm.GetNextTask(ctx, &apimodels.GetNextTaskDetails{
-				TaskGroup:     tc.taskConfig.TaskGroup.Name,
+				TaskGroup:     tg,
 				AgentRevision: evergreen.AgentVersion,
 				EC2InstanceID: a.ec2InstanceID,
 			})
@@ -385,7 +390,11 @@ func (a *Agent) processNextTask(ctx context.Context, nt *apimodels.NextTaskRespo
 // finishPrevTask finishes up the previous task and returns information needed for the next task.
 func (a *Agent) finishPrevTask(ctx context.Context, nextTask *apimodels.NextTaskResponse, tc *taskContext) (bool, string) {
 	shouldSetupGroup := false
-	taskDirectory := tc.taskConfig.WorkDir
+	taskDirectory := ""
+	if tc.taskConfig != nil {
+		taskDirectory = tc.taskConfig.WorkDir
+	}
+
 	if shouldRunSetupGroup(nextTask, tc) {
 		shouldSetupGroup = true
 		taskDirectory = ""
