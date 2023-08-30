@@ -502,6 +502,7 @@ func shouldRunSetupGroup(nextTask *apimodels.NextTaskResponse, tc *taskContext) 
 }
 
 func (a *Agent) fetchProjectConfig(ctx context.Context, tc *taskContext) (*task.Task, *model.Project, util.Expansions, map[string]bool, error) {
+	// it's not getting the right project
 	project, err := a.comm.GetProject(ctx, tc.task)
 	if err != nil {
 		return nil, nil, nil, nil, errors.Wrap(err, "getting project")

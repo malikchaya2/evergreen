@@ -147,7 +147,7 @@ func (tc *taskContext) getTimeoutType() timeoutType {
 
 // makeTaskConfig fetches task configuration data required to run the task from the API server.
 func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.TaskConfig, error) {
-	if tc.taskConfig != nil {
+	if tc.taskConfig.Project.Identifier != "" {
 		return tc.taskConfig, nil
 	}
 
