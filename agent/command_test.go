@@ -100,16 +100,18 @@ func (s *CommandSuite) TestPreErrorFailsWithSetup() {
 
 	taskID := "pre_error"
 	s.tc.task.ID = taskID
+	s.tc.taskConfig.Task.Id = taskID
 	s.tc.ranSetupGroup = false
 
 	defer s.a.removeTaskDirectory(s.tc)
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
+		TaskGroup:  "",
 	}
 	shouldSetupGroup := !s.tc.ranSetupGroup
-	taskDirectory := s.tc.taskConfig.WorkDir
-	_, _, err := s.a.runTask(ctx, s.tc, nextTask, shouldSetupGroup, taskDirectory)
+	// taskDirectory := s.tc.taskConfig.WorkDir
+	_, _, err := s.a.runTask(ctx, s.tc, nextTask, shouldSetupGroup, "")
 	s.NoError(err)
 	detail := s.mockCommunicator.GetEndTaskDetail()
 	s.Equal(evergreen.TaskFailed, detail.Status)
