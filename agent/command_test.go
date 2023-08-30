@@ -61,12 +61,12 @@ func (s *CommandSuite) SetupTest() {
 	s.a.jasper, err = jasper.NewSynchronizedManager(false)
 	s.Require().NoError(err)
 
-	const bvName = "some_build_variant"
+	const bvName = "mock_build_variant"
 	tsk := &task.Task{
 		Id:           "task_id",
 		DisplayName:  "some task",
 		BuildVariant: bvName,
-		Version:      "v1",
+		Version:      "my_version",
 	}
 
 	project := &model.Project{
@@ -84,6 +84,8 @@ func (s *CommandSuite) SetupTest() {
 	}, &patch.Patch{}, util.Expansions{})
 	s.Require().NoError(err)
 
+	s.mockCommunicator.GetProjectResponse = project
+	s.mockCommunicator.GetTaskResponse = tsk
 	s.tc = &taskContext{
 		taskConfig: taskConfig,
 		task: client.TaskData{
@@ -92,7 +94,7 @@ func (s *CommandSuite) SetupTest() {
 		oomTracker:                &mock.OOMTracker{},
 		unsetFunctionVarsDisabled: false,
 	}
-	s.tc.taskConfig.Task = &task.Task{}
+	s.tc.taskConfig.Task = tsk
 }
 
 func (s *CommandSuite) TestPreErrorFailsWithSetup() {
@@ -107,10 +109,10 @@ func (s *CommandSuite) TestPreErrorFailsWithSetup() {
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  "",
 	}
 	shouldSetupGroup := !s.tc.ranSetupGroup
 	taskDirectory := ""
+
 	_, _, err := s.a.runTask(ctx, s.tc, nextTask, shouldSetupGroup, taskDirectory)
 	s.NoError(err)
 	detail := s.mockCommunicator.GetEndTaskDetail()
