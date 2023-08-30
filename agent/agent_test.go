@@ -1099,9 +1099,9 @@ task_groups:
           script: echo hi
 `
 
+	s.setupRunTask(projYml)
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
 	s.tc.taskConfig.TaskGroup = *s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
-	s.setupRunTask(projYml)
 
 	s.NoError(s.a.runPreTaskCommands(s.ctx, s.tc))
 	s.NoError(s.tc.logger.Close())
@@ -1367,12 +1367,9 @@ task_groups:
         params:
           script: echo hi
 `
-	p := &model.Project{}
-	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
-	s.Require().NoError(err)
-	s.tc.taskConfig.Project = p
+	s.setupRunTask(projYml)
 	s.tc.taskConfig.Task.TaskGroup = taskGroup
-	s.tc.taskConfig.TaskGroup = *p.FindTaskGroup(taskGroup)
+	s.tc.taskConfig.TaskGroup = *s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
 
 	s.a.runTaskTimeoutCommands(s.ctx, s.tc)
 
@@ -1428,12 +1425,12 @@ func (s *AgentSuite) TestFetchProjectConfig() {
 		Identifier: "some_cool_project",
 	}
 
-	_, _, expansions, pv, err := s.a.fetchProjectConfig(s.ctx, s.tc)
+	_, project, expansions, pv, err := s.a.fetchProjectConfig(s.ctx, s.tc)
 	s.NoError(err)
 
 	s.Require().NotZero(s.tc.taskConfig.Project)
-	s.Equal(s.mockCommunicator.GetProjectResponse.Identifier, s.tc.taskConfig.Project.Identifier)
-	s.Require().NotZero(s.tc.taskConfig.Expansions)
+	s.Equal(s.mockCommunicator.GetProjectResponse.Identifier, project.Identifier)
+	s.Require().NotZero(expansions)
 	s.Equal("bar", expansions["foo"], "should include mock communicator expansions")
 	s.Equal("new-parameter-value", expansions["overwrite-this-parameter"], "user-specified parameter should overwrite any other conflicting expansion")
 	s.Require().NotZero(pv)
@@ -1522,6 +1519,9 @@ timeout:
 `
 	s.setupRunTask(projYml)
 	taskGroup := "some_task_group"
+	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = *s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
+
 	start := time.Now()
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
