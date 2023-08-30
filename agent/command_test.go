@@ -89,10 +89,10 @@ func (s *CommandSuite) SetupTest() {
 		task: client.TaskData{
 			Secret: "mock_task_secret",
 		},
-		taskModel:                 &task.Task{},
 		oomTracker:                &mock.OOMTracker{},
 		unsetFunctionVarsDisabled: false,
 	}
+	s.tc.taskConfig.Task = &task.Task{}
 }
 
 func (s *CommandSuite) TestPreErrorFailsWithSetup() {
@@ -190,27 +190,29 @@ func TestEndTaskSyncCommands(t *testing.T) {
 			assert.True(t, s3PushFound(cmds))
 		},
 		"ReturnsNoCommandsForNoSync": func(t *testing.T, tc *taskContext, detail *apimodels.TaskEndDetail) {
-			tc.taskModel.SyncAtEndOpts.Enabled = false
+			tc.taskConfig.Task.SyncAtEndOpts.Enabled = false
 			assert.Nil(t, endTaskSyncCommands(tc, detail))
 		},
 		"ReturnsCommandsIfMatchesTaskStatus": func(t *testing.T, tc *taskContext, detail *apimodels.TaskEndDetail) {
 			detail.Status = evergreen.TaskSucceeded
-			tc.taskModel.SyncAtEndOpts.Statuses = []string{evergreen.TaskSucceeded}
+			tc.taskConfig.Task.SyncAtEndOpts.Statuses = []string{evergreen.TaskSucceeded}
 			cmds := endTaskSyncCommands(tc, detail)
 			require.NotNil(t, cmds)
 			assert.True(t, s3PushFound(cmds))
 		},
 		"ReturnsNoCommandsIfDoesNotMatchTaskStatus": func(t *testing.T, tc *taskContext, detail *apimodels.TaskEndDetail) {
 			detail.Status = evergreen.TaskSucceeded
-			tc.taskModel.SyncAtEndOpts.Statuses = []string{evergreen.TaskFailed}
+			tc.taskConfig.Task.SyncAtEndOpts.Statuses = []string{evergreen.TaskFailed}
 			cmds := endTaskSyncCommands(tc, detail)
 			assert.Nil(t, cmds)
 		},
 	} {
 		t.Run(testName, func(t *testing.T) {
 			tc := &taskContext{
-				taskModel: &task.Task{
-					SyncAtEndOpts: task.SyncAtEndOptions{Enabled: true},
+				taskConfig: &internal.TaskConfig{
+					Task: &task.Task{
+						SyncAtEndOpts: task.SyncAtEndOptions{Enabled: true},
+					},
 				},
 			}
 			detail := &apimodels.TaskEndDetail{}
@@ -241,7 +243,7 @@ func (s *CommandSuite) setUpConfigAndProject(projYml string) {
 
 	s.tc.logger, err = s.mockCommunicator.GetLoggerProducer(s.ctx, s.tc.task, nil)
 	s.NoError(err)
-	s.tc.project = p
+	// s.tc.project = p
 	s.tc.taskConfig.Project = p
 }
 
