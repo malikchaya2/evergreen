@@ -1323,7 +1323,6 @@ task_groups:
 }
 
 func (s *AgentSuite) TestTeardownGroupSucceeds() {
-	s.tc.taskConfig.Task = &task.Task{}
 	taskGroup := "task_group_name"
 	projYml := `
 task_groups:
