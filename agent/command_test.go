@@ -78,6 +78,26 @@ func (s *CommandSuite) SetupTest() {
 		BuildVariants: []model.BuildVariant{{Name: bvName}},
 	}
 
+	tc := &taskContext{
+		task: client.TaskData{
+			ID:     "logging",
+			Secret: "task_secret",
+		},
+	}
+
+	// ctx := context.Background()
+	_, _, _, pv, err := s.a.fetchProjectConfig(s.ctx, tc)
+	s.Require().NoError(err)
+	s.Require().NotNil(project)
+
+	// s.tc.taskConfig = &internal.TaskConfig{
+	// 	Task:       task,
+	// 	Project:    project,
+	// 	Expansions: &expansion,
+	// }
+	// _, err = s.a.makeTaskConfig(s.ctx, s.tc)
+	// s.Require().NoError(err)
+
 	taskConfig, err := internal.NewTaskConfig(s.tmpDirName, &apimodels.DistroView{}, project, tsk, &model.ProjectRef{
 		Id:         "project_id",
 		Identifier: "project_identifier",
@@ -92,6 +112,7 @@ func (s *CommandSuite) SetupTest() {
 		oomTracker:                &mock.OOMTracker{},
 		unsetFunctionVarsDisabled: false,
 	}
+	s.tc.taskConfig.Redacted = pv
 }
 
 func (s *CommandSuite) TestPreErrorFailsWithSetup() {
