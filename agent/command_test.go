@@ -78,26 +78,6 @@ func (s *CommandSuite) SetupTest() {
 		BuildVariants: []model.BuildVariant{{Name: bvName}},
 	}
 
-	tc := &taskContext{
-		task: client.TaskData{
-			ID:     "logging",
-			Secret: "task_secret",
-		},
-	}
-
-	// ctx := context.Background()
-	_, _, _, pv, err := s.a.fetchProjectConfig(s.ctx, tc)
-	s.Require().NoError(err)
-	s.Require().NotNil(project)
-
-	// s.tc.taskConfig = &internal.TaskConfig{
-	// 	Task:       task,
-	// 	Project:    project,
-	// 	Expansions: &expansion,
-	// }
-	// _, err = s.a.makeTaskConfig(s.ctx, s.tc)
-	// s.Require().NoError(err)
-
 	taskConfig, err := internal.NewTaskConfig(s.tmpDirName, &apimodels.DistroView{}, project, tsk, &model.ProjectRef{
 		Id:         "project_id",
 		Identifier: "project_identifier",
@@ -109,10 +89,10 @@ func (s *CommandSuite) SetupTest() {
 		task: client.TaskData{
 			Secret: "mock_task_secret",
 		},
+		taskModel:                 &task.Task{},
 		oomTracker:                &mock.OOMTracker{},
 		unsetFunctionVarsDisabled: false,
 	}
-	s.tc.taskConfig.Redacted = pv
 }
 
 func (s *CommandSuite) TestPreErrorFailsWithSetup() {
@@ -121,18 +101,17 @@ func (s *CommandSuite) TestPreErrorFailsWithSetup() {
 
 	taskID := "pre_error"
 	s.tc.task.ID = taskID
-	s.tc.taskConfig.Task.Id = taskID
 	s.tc.ranSetupGroup = false
 
 	defer s.a.removeTaskDirectory(s.tc)
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  "",
+		TaskGroup:  s.tc.taskGroup,
 	}
 	shouldSetupGroup := !s.tc.ranSetupGroup
-	// taskDirectory := s.tc.taskConfig.WorkDir
-	_, _, err := s.a.runTask(ctx, s.tc, nextTask, shouldSetupGroup, "")
+	taskDirectory := s.tc.taskDirectory
+	_, _, err := s.a.runTask(ctx, s.tc, nextTask, shouldSetupGroup, taskDirectory)
 	s.NoError(err)
 	detail := s.mockCommunicator.GetEndTaskDetail()
 	s.Equal(evergreen.TaskFailed, detail.Status)
@@ -166,9 +145,10 @@ func (s *CommandSuite) TestShellExec() {
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
+		TaskGroup:  s.tc.taskGroup,
 	}
 	shouldSetupGroup := !s.tc.ranSetupGroup
-	taskDirectory := s.tc.taskConfig.WorkDir
+	taskDirectory := s.tc.taskDirectory
 	_, _, err = s.a.runTask(ctx, s.tc, nextTask, shouldSetupGroup, taskDirectory)
 	s.NoError(err)
 
@@ -210,29 +190,27 @@ func TestEndTaskSyncCommands(t *testing.T) {
 			assert.True(t, s3PushFound(cmds))
 		},
 		"ReturnsNoCommandsForNoSync": func(t *testing.T, tc *taskContext, detail *apimodels.TaskEndDetail) {
-			tc.taskConfig.Task.SyncAtEndOpts.Enabled = false
+			tc.taskModel.SyncAtEndOpts.Enabled = false
 			assert.Nil(t, endTaskSyncCommands(tc, detail))
 		},
 		"ReturnsCommandsIfMatchesTaskStatus": func(t *testing.T, tc *taskContext, detail *apimodels.TaskEndDetail) {
 			detail.Status = evergreen.TaskSucceeded
-			tc.taskConfig.Task.SyncAtEndOpts.Statuses = []string{evergreen.TaskSucceeded}
+			tc.taskModel.SyncAtEndOpts.Statuses = []string{evergreen.TaskSucceeded}
 			cmds := endTaskSyncCommands(tc, detail)
 			require.NotNil(t, cmds)
 			assert.True(t, s3PushFound(cmds))
 		},
 		"ReturnsNoCommandsIfDoesNotMatchTaskStatus": func(t *testing.T, tc *taskContext, detail *apimodels.TaskEndDetail) {
 			detail.Status = evergreen.TaskSucceeded
-			tc.taskConfig.Task.SyncAtEndOpts.Statuses = []string{evergreen.TaskFailed}
+			tc.taskModel.SyncAtEndOpts.Statuses = []string{evergreen.TaskFailed}
 			cmds := endTaskSyncCommands(tc, detail)
 			assert.Nil(t, cmds)
 		},
 	} {
 		t.Run(testName, func(t *testing.T) {
 			tc := &taskContext{
-				taskConfig: &internal.TaskConfig{
-					Task: &task.Task{
-						SyncAtEndOpts: task.SyncAtEndOptions{Enabled: true},
-					},
+				taskModel: &task.Task{
+					SyncAtEndOpts: task.SyncAtEndOptions{Enabled: true},
 				},
 			}
 			detail := &apimodels.TaskEndDetail{}
@@ -263,6 +241,7 @@ func (s *CommandSuite) setUpConfigAndProject(projYml string) {
 
 	s.tc.logger, err = s.mockCommunicator.GetLoggerProducer(s.ctx, s.tc.task, nil)
 	s.NoError(err)
+	s.tc.project = p
 	s.tc.taskConfig.Project = p
 }
 
