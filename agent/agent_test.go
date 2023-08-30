@@ -657,7 +657,6 @@ func (s *AgentSuite) setupRunTask(projYml string) {
 	_, err := model.LoadProjectInto(s.ctx, []byte(projYml), nil, "", p)
 	s.Require().NoError(err)
 	s.tc.taskConfig.Project = p
-	s.tc.taskConfig.Project = p
 
 	s.mockCommunicator.GetProjectResponse = p
 
