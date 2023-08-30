@@ -128,18 +128,24 @@ func TestStartLogging(t *testing.T) {
 			ID:     "logging",
 			Secret: "task_secret",
 		},
-		taskConfig: &internal.TaskConfig{
-			Task: &task.Task{},
-		},
 	}
 
 	ctx := context.Background()
-	_, _, _, _, err := agt.fetchProjectConfig(ctx, tc)
+	task, project, expansion, _, err := agt.fetchProjectConfig(ctx, tc)
 	assert.NoError(err)
-	require.NotNil(t, tc.taskConfig.Project)
-	assert.EqualValues(model.EvergreenLogSender, tc.taskConfig.Project.Loggers.Agent[0].Type)
-	assert.EqualValues(model.SplunkLogSender, tc.taskConfig.Project.Loggers.System[0].Type)
-	assert.EqualValues(model.FileLogSender, tc.taskConfig.Project.Loggers.Task[0].Type)
+	require.NotNil(t, project)
+
+	tc.taskConfig = &internal.TaskConfig{
+		Task:       task,
+		Project:    project,
+		Expansions: &expansion,
+	}
+	_, err = agt.makeTaskConfig(ctx, tc)
+	assert.NoError(err)
+
+	assert.EqualValues(model.EvergreenLogSender, project.Loggers.Agent[0].Type)
+	assert.EqualValues(model.SplunkLogSender, project.Loggers.System[0].Type)
+	assert.EqualValues(model.FileLogSender, project.Loggers.Task[0].Type)
 
 	assert.NoError(agt.startLogging(ctx, tc))
 	tc.logger.Execution().Info("foo")
@@ -147,12 +153,8 @@ func TestStartLogging(t *testing.T) {
 	msgs := agt.comm.(*client.Mock).GetMockMessages()
 	assert.Equal("foo", msgs[tc.task.ID][0].Message)
 
-	config, err := agt.makeTaskConfig(ctx, tc)
-	assert.NoError(err)
-	assert.NotNil(config.Project)
-
 	// check that expansions are correctly populated
-	logConfig := agt.prepLogger(tc, tc.taskConfig.Project.Loggers, "")
+	logConfig := agt.prepLogger(tc, project.Loggers, "")
 	assert.Equal("bar", logConfig.System[0].SplunkToken)
 }
 
