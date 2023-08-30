@@ -110,7 +110,7 @@ func (s *CommandSuite) TestPreErrorFailsWithSetup() {
 		TaskGroup:  "",
 	}
 	shouldSetupGroup := !s.tc.ranSetupGroup
-	taskDirectory := s.tc.taskDirectory
+	taskDirectory := ""
 	_, _, err := s.a.runTask(ctx, s.tc, nextTask, shouldSetupGroup, taskDirectory)
 	s.NoError(err)
 	detail := s.mockCommunicator.GetEndTaskDetail()
@@ -148,7 +148,7 @@ func (s *CommandSuite) TestShellExec() {
 		TaskGroup:  "",
 	}
 	shouldSetupGroup := !s.tc.ranSetupGroup
-	taskDirectory := s.tc.taskDirectory
+	taskDirectory := ""
 	_, _, err = s.a.runTask(ctx, s.tc, nextTask, shouldSetupGroup, taskDirectory)
 	s.NoError(err)
 
