@@ -592,7 +592,8 @@ func (a *Agent) runTask(ctx context.Context, tcInput *taskContext, nt *apimodels
 	if err != nil {
 		return tc, shouldExit, errors.Wrap(err, "setting up task")
 	}
-
+	// this is it
+	// private vars are not here
 	grip.Info(message.Fields{
 		"message": "running task",
 		"task_id": tc.task.ID,
