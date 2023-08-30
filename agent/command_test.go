@@ -107,7 +107,7 @@ func (s *CommandSuite) TestPreErrorFailsWithSetup() {
 	nextTask := &apimodels.NextTaskResponse{
 		TaskId:     s.tc.task.ID,
 		TaskSecret: s.tc.task.Secret,
-		TaskGroup:  s.tc.taskGroup,
+		TaskGroup:  "",
 	}
 	shouldSetupGroup := !s.tc.ranSetupGroup
 	taskDirectory := s.tc.taskDirectory
