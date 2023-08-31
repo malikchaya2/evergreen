@@ -318,11 +318,12 @@ func (a *Agent) loop(ctx context.Context) error {
 			}
 
 			if ntr.noTaskToRun {
-				grip.Debugf("Agent found no task to run, sleeping %s.", backoffCounter.Attempt())
-				timer.Reset(backoffCounter.Duration())
+				duration := backoffCounter.Duration()
+				grip.Debugf("Agent found no task to run, sleeping %s.", duration)
+				timer.Reset(duration)
 				continue
 			}
-
+			timer.Reset(0)
 			backoffCounter.Reset()
 		}
 	}
