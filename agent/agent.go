@@ -95,15 +95,15 @@ const (
 )
 
 type taskContext struct {
-	currentCommand            command.Command
-	expansions                util.Expansions
-	privateVars               map[string]bool
-	logger                    client.LoggerProducer
-	task                      client.TaskData
-	taskGroup                 string
-	ranSetupGroup             bool
-	taskConfig                *internal.TaskConfig
-	taskDirectory             string
+	currentCommand command.Command
+	expansions     util.Expansions
+	privateVars    map[string]bool
+	logger         client.LoggerProducer
+	task           client.TaskData
+	taskGroup      string
+	ranSetupGroup  bool
+	taskConfig     *internal.TaskConfig
+	// taskDirectory             string
 	timeout                   timeoutInfo
 	project                   *model.Project
 	taskModel                 *task.Task
@@ -409,7 +409,10 @@ func (a *Agent) processNextTask(ctx context.Context, nt *apimodels.NextTaskRespo
 // finishPrevTask finishes up the previous task and returns information needed for the next task.
 func (a *Agent) finishPrevTask(ctx context.Context, nextTask *apimodels.NextTaskResponse, tc *taskContext) (bool, string) {
 	shouldSetupGroup := false
-	taskDirectory := tc.taskDirectory
+	taskDirectory := ""
+	if tc.taskConfig != nil {
+		taskDirectory = tc.taskConfig.WorkDir
+	}
 	if shouldRunSetupGroup(nextTask, tc) {
 		shouldSetupGroup = true
 		taskDirectory = ""
@@ -433,7 +436,6 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, initialTC *taskCon
 			},
 			taskGroup:                 nt.TaskGroup,
 			ranSetupGroup:             !shouldSetupGroup,
-			taskDirectory:             taskDirectory,
 			oomTracker:                jasper.NewOOMTracker(),
 			unsetFunctionVarsDisabled: nt.UnsetFunctionVarsDisabled,
 		}
@@ -466,12 +468,12 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, initialTC *taskCon
 	}
 
 	if !tc.ranSetupGroup {
-		tc.taskDirectory, err = a.createTaskDirectory(tc)
+		tc.taskConfig.WorkDir, err = a.createTaskDirectory(tc)
 		if err != nil {
 			return a.handleSetupError(setupCtx, tc, errors.Wrap(err, "creating task directory"))
 		}
 	}
-	tc.taskConfig.WorkDir = tc.taskDirectory
+
 	tc.taskConfig.Expansions.Put("workdir", tc.taskConfig.WorkDir)
 
 	// We are only calling this again to get the log for the current command after logging has been set up.
