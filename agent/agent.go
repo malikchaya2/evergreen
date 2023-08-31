@@ -20,6 +20,7 @@ import (
 	"github.com/evergreen-ci/evergreen/thirdparty/docker"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
+	"github.com/jpillora/backoff"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
 	"github.com/mongodb/grip/recovery"
@@ -257,8 +258,8 @@ func (a *Agent) populateEC2InstanceID(ctx context.Context) {
 // loop is responsible for continually polling for new tasks and processing them.
 // and then tries again.
 func (a *Agent) loop(ctx context.Context) error {
-	agentSleepInterval := minAgentSleepInterval
 
+	backoffCounter := getLoopBackoff()
 	timer := time.NewTimer(0)
 	defer timer.Stop()
 
@@ -317,19 +318,22 @@ func (a *Agent) loop(ctx context.Context) error {
 			}
 
 			if ntr.noTaskToRun {
-				jitteredSleep := utility.JitterInterval(agentSleepInterval)
-				grip.Debugf("Agent found no task to run, sleeping %s.", jitteredSleep)
-				timer.Reset(jitteredSleep)
-				agentSleepInterval = agentSleepInterval * 2
-				if agentSleepInterval > maxAgentSleepInterval {
-					agentSleepInterval = maxAgentSleepInterval
-				}
+				grip.Debugf("Agent found no task to run, sleeping %s.", backoffCounter.Attempt())
+				timer.Reset(backoffCounter.Duration())
 				continue
 			}
-			timer.Reset(0)
-			agentSleepInterval = minAgentSleepInterval
 
+			backoffCounter.Reset()
 		}
+	}
+}
+
+func getLoopBackoff() *backoff.Backoff {
+	return &backoff.Backoff{
+		Min:    minAgentSleepInterval,
+		Max:    maxAgentSleepInterval,
+		Factor: 2,
+		Jitter: true,
 	}
 }
 
