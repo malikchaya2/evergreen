@@ -129,8 +129,11 @@ func (tc *taskContext) getTimeoutType() timeoutType {
 func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.TaskConfig, error) {
 	if tc.project == nil {
 		grip.Info("Fetching project config.")
-		err := a.fetchProjectConfig(ctx, tc)
+		task, project, expansions, redacted, err := a.fetchProjectConfig(ctx, tc)
 		if err != nil {
+			if task == nil && project == nil && expansions == nil && redacted == nil {
+				grip.Info("this is just so it compiles ")
+			}
 			return nil, err
 		}
 	}

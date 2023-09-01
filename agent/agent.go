@@ -529,20 +529,20 @@ func shouldRunSetupGroup(nextTask *apimodels.NextTaskResponse, tc *taskContext) 
 	return false
 }
 
-func (a *Agent) fetchProjectConfig(ctx context.Context, tc *taskContext) error {
+func (a *Agent) fetchProjectConfig(ctx context.Context, tc *taskContext) (*task.Task, *model.Project, util.Expansions, map[string]bool, error) {
 	project, err := a.comm.GetProject(ctx, tc.task)
 	if err != nil {
-		return errors.Wrap(err, "getting project")
+		return nil, nil, nil, nil, errors.Wrap(err, "getting project")
 	}
 
 	taskModel, err := a.comm.GetTask(ctx, tc.task)
 	if err != nil {
-		return errors.Wrap(err, "getting task")
+		return nil, nil, nil, nil, errors.Wrap(err, "getting task")
 	}
 
 	expAndVars, err := a.comm.GetExpansionsAndVars(ctx, tc.task)
 	if err != nil {
-		return errors.Wrap(err, "getting expansions and variables")
+		return nil, nil, nil, nil, errors.Wrap(err, "getting expansions and variables")
 	}
 
 	// GetExpansionsAndVars does not include build variant expansions or project
@@ -570,7 +570,7 @@ func (a *Agent) fetchProjectConfig(ctx context.Context, tc *taskContext) error {
 	tc.project = project
 	tc.expansions = expAndVars.Expansions
 	tc.privateVars = expAndVars.PrivateVars
-	return nil
+	return taskModel, project, expAndVars.Expansions, expAndVars.PrivateVars, nil
 }
 
 func (a *Agent) startLogging(ctx context.Context, tc *taskContext) error {
