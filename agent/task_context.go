@@ -127,19 +127,22 @@ func (tc *taskContext) getTimeoutType() timeoutType {
 
 // makeTaskConfig fetches task configuration data required to run the task from the API server.
 func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.TaskConfig, error) {
-	if tc.project == nil {
-		grip.Info("Fetching project config.")
-		task, project, expansions, redacted, err := a.fetchProjectConfig(ctx, tc)
-		if err != nil {
-			if task == nil && project == nil && expansions == nil && redacted == nil {
-				grip.Info("this is just so it compiles ")
-			}
-			return nil, err
-		}
+	if tc.taskConfig != nil && tc.taskConfig.Project != nil && tc.taskConfig.Project.Identifier != "" {
+		return tc.taskConfig, nil
 	}
+
+	grip.Info("Fetching project config.")
+	task, project, expansions, redacted, err := a.fetchProjectConfig(ctx, tc)
+	if err != nil {
+		if task == nil && project == nil && expansions == nil && redacted == nil {
+			grip.Info("this is just so it compiles ")
+		}
+		return nil, err
+	}
+
 	grip.Info("Fetching distro configuration.")
 	var confDistro *apimodels.DistroView
-	var err error
+
 	if a.opts.Mode == HostMode {
 		confDistro, err = a.comm.GetDistroView(ctx, tc.task)
 		if err != nil {
@@ -170,7 +173,7 @@ func (a *Agent) makeTaskConfig(ctx context.Context, tc *taskContext) (*internal.
 	if err != nil {
 		return nil, err
 	}
-	taskConfig.Redacted = tc.privateVars
+	taskConfig.Redacted = redacted
 	taskConfig.TaskSync = a.opts.SetupData.TaskSync
 	taskConfig.EC2Keys = a.opts.SetupData.EC2Keys
 

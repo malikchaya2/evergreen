@@ -97,12 +97,12 @@ const (
 type taskContext struct {
 	currentCommand command.Command
 	expansions     util.Expansions
-	privateVars    map[string]bool
-	logger         client.LoggerProducer
-	task           client.TaskData
-	taskGroup      string
-	ranSetupGroup  bool
-	taskConfig     *internal.TaskConfig
+	// privateVars    map[string]bool
+	logger        client.LoggerProducer
+	task          client.TaskData
+	taskGroup     string
+	ranSetupGroup bool
+	taskConfig    *internal.TaskConfig
 	// taskDirectory             string
 	timeout                   timeoutInfo
 	project                   *model.Project
@@ -571,7 +571,7 @@ func (a *Agent) fetchProjectConfig(ctx context.Context, tc *taskContext) (*task.
 	tc.taskModel = taskModel
 	tc.project = project
 	tc.expansions = expAndVars.Expansions
-	tc.privateVars = expAndVars.PrivateVars
+
 	return taskModel, project, expAndVars.Expansions, expAndVars.PrivateVars, nil
 }
 
