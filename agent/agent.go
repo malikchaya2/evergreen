@@ -96,7 +96,7 @@ const (
 
 type taskContext struct {
 	currentCommand command.Command
-	expansions     util.Expansions
+	// expansions     util.Expansions
 	// privateVars    map[string]bool
 	logger        client.LoggerProducer
 	task          client.TaskData
@@ -570,7 +570,6 @@ func (a *Agent) fetchProjectConfig(ctx context.Context, tc *taskContext) (*task.
 
 	tc.taskModel = taskModel
 	tc.project = project
-	tc.expansions = expAndVars.Expansions
 
 	return taskModel, project, expAndVars.Expansions, expAndVars.PrivateVars, nil
 }

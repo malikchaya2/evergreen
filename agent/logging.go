@@ -147,11 +147,11 @@ func (a *Agent) prepLogger(tc *taskContext, c *model.LoggerConfig, commandName s
 }
 
 func (a *Agent) prepSingleLogger(tc *taskContext, in model.LogOpts, logDir, fileName string) client.LogOpts {
-	splunkServer, err := tc.expansions.ExpandString(in.SplunkServer)
+	splunkServer, err := tc.taskConfig.Expansions.ExpandString(in.SplunkServer)
 	if err != nil {
 		grip.Error(errors.Wrap(err, "expanding Splunk server"))
 	}
-	splunkToken, err := tc.expansions.ExpandString(in.SplunkToken)
+	splunkToken, err := tc.taskConfig.Expansions.ExpandString(in.SplunkToken)
 	if err != nil {
 		grip.Error(errors.Wrap(err, "expanding Splunk token"))
 	}
