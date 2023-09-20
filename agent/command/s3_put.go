@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -398,15 +399,17 @@ retryLoop:
 				remoteName := s3pc.RemoteFile
 				if s3pc.isMulti() {
 					if s3pc.preservePath {
-						remoteName = filepath.Join(s3pc.RemoteFile, fpath)
+						remoteName = filepath.Join(s3pc.RemoteFile, escapePath(fpath))
 					} else {
 						// put all files in the same directory
 						fname := filepath.Base(fpath)
-						remoteName = fmt.Sprintf("%s%s", s3pc.RemoteFile, fname)
+						remoteName = fmt.Sprintf("%s%s", s3pc.RemoteFile, escapePath(fname))
 					}
 				}
 
-				fpath = filepath.Join(filepath.Join(s3pc.workDir, s3pc.LocalFilesIncludeFilterPrefix), fpath)
+				escapedPath := escapePath(fpath)
+				print(escapedPath)
+				fpath = filepath.Join(filepath.Join(s3pc.workDir, s3pc.LocalFilesIncludeFilterPrefix), escapePath(fpath))
 
 				if s3pc.skipExistingBool {
 					exists, err := s3pc.remoteFileExists(remoteName)
@@ -418,6 +421,8 @@ retryLoop:
 						continue uploadLoop
 					}
 				}
+				// remoteName: remotebar#s
+				// fpath: "/var/folders/5f/x1p1jy150hbdw0qjt4_2n8680000gp/T/TestFileUploadNaming913447754/001/subDir/bar%23s"
 				err = s3pc.bucket.Upload(ctx, remoteName, fpath)
 				if err != nil {
 					// retry errors other than "file doesn't exist", which we handle differently based on what
@@ -473,6 +478,12 @@ retryLoop:
 	}
 
 	return nil
+}
+
+func escapePath(path string) string {
+	base := filepath.Base(path)
+	i := strings.LastIndex(path, base)
+	return path[:i] + strings.Replace(path[i:], base, url.QueryEscape(base), 1)
 }
 
 // attachTaskFiles is responsible for sending the
