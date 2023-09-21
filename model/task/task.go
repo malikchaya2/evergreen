@@ -448,6 +448,11 @@ func (t *Task) IsHostTask() bool {
 	return (t.ExecutionPlatform == "" || t.ExecutionPlatform == ExecutionPlatformHost) && !t.DisplayOnly
 }
 
+// IsExecutionTask returns true if the task is an execution task.
+func (t *Task) IsExecutionTask() bool {
+	return t.DisplayTaskId != nil
+}
+
 // IsContainerTask returns true if it's a task that runs on containers.
 func (t *Task) IsContainerTask() bool {
 	return t.ExecutionPlatform == ExecutionPlatformContainer

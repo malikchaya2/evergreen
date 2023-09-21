@@ -28,8 +28,8 @@ h2. [{{.Task.DisplayName}} failed on {{.Build.DisplayName}}|{{taskurl .}}]
 Project: [{{.Project.DisplayName}}|{{.UIRoot}}/waterfall/{{.Project.Id}}?redirect_spruce_users=true]
 Commit: [diff|https://github.com/{{.Project.Owner}}/{{.Project.Repo}}/commit/{{.Version.Revision}}]: {{.Version.Message}} | {{.Task.CreateTime | formatAsTimestamp}}
 Evergreen Subscription: {{.SubscriptionID}}; Evergreen Event: {{.EventID}}
-{{range .Tests}}*{{.Name}}* - [Logs|{{.URL}}] | [History|{{.HistoryURL}}]
-{{end}}
+{{if isNotExecutionTask .}}{{range .Tests}}*{{.Name}}* - [Logs|{{.URL}}] | [History|{{.HistoryURL}}]
+{{end}}{{end}}
 {{range taskLogURLs . }}[Task Logs ({{.DisplayName}}) | {{.URL}}]
 {{end}}`
 
@@ -41,13 +41,15 @@ const (
 
 // descriptionTemplate is filled to create a JIRA alert ticket. Panics at start if invalid.
 var descriptionTemplate = template.Must(template.New("Desc").Funcs(template.FuncMap{
-	"taskurl":           getTaskURL,
-	"formatAsTimestamp": formatAsTimestamp,
-	"host":              getHostMetadata,
-	"isHostTask":        getIsHostTask,
-	"pod":               getPodMetadata,
-	"isContainerTask":   getIsContainerTask,
-	"taskLogURLs":       getTaskLogURLs,
+	"taskurl":            getTaskURL,
+	"formatAsTimestamp":  formatAsTimestamp,
+	"host":               getHostMetadata,
+	"isHostTask":         getIsHostTask,
+	"isNotExecutionTask": getIsNotExecutionTask,
+	"isExecutionTask":    getIsExecutionTask,
+	"pod":                getPodMetadata,
+	"isContainerTask":    getIsContainerTask,
+	"taskLogURLs":        getTaskLogURLs,
 }).Parse(descriptionTemplateString))
 
 func formatAsTimestamp(t time.Time) string {
@@ -83,6 +85,20 @@ func getIsContainerTask(data *jiraTemplateData) string {
 // empty string if it's not a host task.
 func getIsHostTask(data *jiraTemplateData) string {
 	if data.Task.IsHostTask() {
+		return strconv.FormatBool(true)
+	}
+	return ""
+}
+
+func getIsNotExecutionTask(data *jiraTemplateData) string {
+	if !data.Task.IsExecutionTask() {
+		return strconv.FormatBool(true)
+	}
+	return ""
+}
+
+func getIsExecutionTask(data *jiraTemplateData) string {
+	if data.Task.IsExecutionTask() {
 		return strconv.FormatBool(true)
 	}
 	return ""
