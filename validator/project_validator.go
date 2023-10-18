@@ -657,7 +657,8 @@ func hasValidRunOn(runOn []string) bool {
 }
 
 // Ensures that the project has at least one buildvariant and also that all the
-// fields required for any buildvariant definition are present
+// fields required for any buildvariant definition are present. If a checkRun is
+// defined, it will check if it's valid
 func validateBVFields(project *model.Project) ValidationErrors {
 	errs := ValidationErrors{}
 	if len(project.BuildVariants) == 0 {
@@ -691,11 +692,21 @@ func validateBVFields(project *model.Project) ValidationErrors {
 				break
 			}
 		}
-		if bvHasValidDistro { // don't need to check if tasks have run_on defined since we have a variant default
-			continue
-		}
 
 		for _, task := range buildVariant.Tasks {
+			if task.CreateCheckRun != nil {
+				if task.CreateCheckRun.PathToOutputs == nil {
+					errs = append(errs,
+						ValidationError{
+							Message: fmt.Sprintf("task '%s' in buildvariant '%s' has and invalid checkrun", task.Name,
+								buildVariant.Name),
+						},
+					)
+				}
+			}
+			if bvHasValidDistro { // don't need to check if tasks have run_on defined since we have a variant default
+				continue
+			}
 			taskHasValidDistro := hasValidRunOn(task.RunOn)
 			if taskHasValidDistro {
 				break

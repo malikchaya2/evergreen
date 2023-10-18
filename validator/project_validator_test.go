@@ -3150,6 +3150,51 @@ func TestValidateBVFields(t *testing.T) {
 					{Level: Error, Message: "buildvariant 'bv1' must either specify run_on field or have every task specify run_on"},
 				})
 		})
+		Convey("no error should be thrown if the buildvariant has a "+
+			"checkrun defined with a path to outputs", func() {
+			project := &model.Project{
+				Identifier: "projectId",
+				BuildVariants: []model.BuildVariant{
+					{
+						Name:  "withCheckrun",
+						RunOn: []string{"export"},
+						Tasks: []model.BuildVariantTaskUnit{
+							{
+								Name: "a_task_with_no_special_configuration",
+								CreateCheckRun: &model.CheckRun{
+									PathToOutputs: utility.ToStringPtr("path"),
+								},
+							},
+						},
+					},
+				},
+			}
+			So(validateBVFields(project),
+				ShouldResemble, ValidationErrors{})
+		})
+		Convey("an error should be thrown if the buildvariant has a "+
+			"checkrun defined but an output path is not "+
+			"specified", func() {
+			project := &model.Project{
+				Identifier: "projectId",
+				BuildVariants: []model.BuildVariant{
+					{
+						Name:  "withCheckrun",
+						RunOn: []string{"export"},
+						Tasks: []model.BuildVariantTaskUnit{
+							{
+								Name:           "a_task_with_no_special_configuration",
+								CreateCheckRun: &model.CheckRun{},
+							},
+						},
+					},
+				},
+			}
+			So(validateBVFields(project),
+				ShouldResemble, ValidationErrors{
+					{Level: Error, Message: "task 'a_task_with_no_special_configuration' in buildvariant 'withCheckrun' has and invalid checkrun"},
+				})
+		})
 	})
 }
 func TestTaskValidation(t *testing.T) {
