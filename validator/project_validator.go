@@ -661,6 +661,11 @@ func hasValidRunOn(runOn []string) bool {
 // defined, it will check if it's valid
 func validateBVFields(project *model.Project) ValidationErrors {
 	errs := ValidationErrors{}
+	errs = append(errs,
+		ValidationError{
+			Message: fmt.Sprintf("hello it's me "),
+		},
+	)
 	if len(project.BuildVariants) == 0 {
 		return ValidationErrors{
 			{
@@ -694,6 +699,11 @@ func validateBVFields(project *model.Project) ValidationErrors {
 		}
 
 		for _, task := range buildVariant.Tasks {
+			errs = append(errs,
+				ValidationError{
+					Message: fmt.Sprintf("task.CreateCheckRun  '%s' ", task.CreateCheckRun),
+				},
+			)
 			if task.CreateCheckRun != nil {
 				if task.CreateCheckRun.PathToOutputs == nil {
 					errs = append(errs,
@@ -2205,7 +2215,7 @@ func checkTasks(project *model.Project) ValidationErrors {
 		if project.ExecTimeoutSecs == 0 && task.ExecTimeoutSecs == 0 && !execTimeoutWarningAdded {
 			errs = append(errs,
 				ValidationError{
-					Message: fmt.Sprintf("no exec_timeout_secs defined at the top-level or on one or more tasks; "+
+					Message: fmt.Sprintf("chaya no exec_timeout_secs defined at the top-level or on one or more tasks; "+
 						"these tasks will default to a timeout of %d hours",
 						int(agent.DefaultExecTimeout.Hours())),
 					Level: Warning,
@@ -2232,6 +2242,12 @@ func checkTasks(project *model.Project) ValidationErrors {
 // has tasks, valid and non-duplicate names, and appropriate batch time settings.
 func checkBuildVariants(project *model.Project) ValidationErrors {
 	errs := ValidationErrors{}
+	errs = append(errs,
+		ValidationError{
+			Message: fmt.Sprintf("hello it's me"),
+			Level:   Warning,
+		},
+	)
 	displayNames := map[string]int{}
 	for _, buildVariant := range project.BuildVariants {
 		dispName := buildVariant.DisplayName

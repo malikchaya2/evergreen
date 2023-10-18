@@ -637,6 +637,8 @@ buildvariants:
       - name: "dist-staging"
       - name: "dist-unsigned"
         activate: false
+        create_check_run:
+          github_app_id: "some_id"
       - name: ".smoke"
       - name: ".test"
       - name: ".linter"
