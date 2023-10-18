@@ -657,9 +657,15 @@ func hasValidRunOn(runOn []string) bool {
 }
 
 // Ensures that the project has at least one buildvariant and also that all the
-// fields required for any buildvariant definition are present
+// fields required for any buildvariant definition are present. If a checkRun is
+// defined, it will check if it's valid
 func validateBVFields(project *model.Project) ValidationErrors {
 	errs := ValidationErrors{}
+	errs = append(errs,
+		ValidationError{
+			Message: fmt.Sprintf("hello it's me "),
+		},
+	)
 	if len(project.BuildVariants) == 0 {
 		return ValidationErrors{
 			{
@@ -691,11 +697,19 @@ func validateBVFields(project *model.Project) ValidationErrors {
 				break
 			}
 		}
-		if bvHasValidDistro { // don't need to check if tasks have run_on defined since we have a variant default
-			continue
-		}
 
 		for _, task := range buildVariant.Tasks {
+			if task.CreateCheckRun != nil {
+				errs = append(errs,
+					ValidationError{
+						Message: fmt.Sprintf("task.CreateCheckRun  '%s' ", task.CreateCheckRun),
+					},
+				)
+
+			}
+			if bvHasValidDistro { // don't need to check if tasks have run_on defined since we have a variant default
+				continue
+			}
 			taskHasValidDistro := hasValidRunOn(task.RunOn)
 			if taskHasValidDistro {
 				break
@@ -2194,7 +2208,7 @@ func checkTasks(project *model.Project) ValidationErrors {
 		if project.ExecTimeoutSecs == 0 && task.ExecTimeoutSecs == 0 && !execTimeoutWarningAdded {
 			errs = append(errs,
 				ValidationError{
-					Message: fmt.Sprintf("no exec_timeout_secs defined at the top-level or on one or more tasks; "+
+					Message: fmt.Sprintf("chaya no exec_timeout_secs defined at the top-level or on one or more tasks; "+
 						"these tasks will default to a timeout of %d hours",
 						int(agent.DefaultExecTimeout.Hours())),
 					Level: Warning,
@@ -2221,6 +2235,12 @@ func checkTasks(project *model.Project) ValidationErrors {
 // has tasks, valid and non-duplicate names, and appropriate batch time settings.
 func checkBuildVariants(project *model.Project) ValidationErrors {
 	errs := ValidationErrors{}
+	errs = append(errs,
+		ValidationError{
+			Message: fmt.Sprintf("hello it's me"),
+			Level:   Warning,
+		},
+	)
 	displayNames := map[string]int{}
 	for _, buildVariant := range project.BuildVariants {
 		dispName := buildVariant.DisplayName
