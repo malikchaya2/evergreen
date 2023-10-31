@@ -852,10 +852,12 @@ func retrieveFileForModule(ctx context.Context, opts GetProjectOpts, modules Mod
 	if err != nil {
 		return nil, errors.Wrapf(err, "getting module for module name '%s'", moduleName)
 	}
-	repoOwner, repoName, err := thirdparty.ParseGitUrl(module.Repo)
+	repoOwner, repoName, err := module.GetOwnerAndRepo()
 	if err != nil {
-		return nil, errors.Wrapf(err, "parsing git url '%s'", module.Repo)
+		return nil, errors.Wrapf(err, "getting module owner and repo '%s'", module.Name)
+
 	}
+
 	moduleOpts := GetProjectOpts{
 		Ref: &ProjectRef{
 			Owner: repoOwner,

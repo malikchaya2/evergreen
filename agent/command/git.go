@@ -719,35 +719,30 @@ func (c *gitFetchProject) fetchModuleSource(ctx context.Context,
 			c.logModuleRevision(logger, revision, moduleName, "branch field in config file")
 		}
 	}
-	var owner, repo string
-	owner, repo, err = thirdparty.ParseGitUrl(module.Repo)
+
+	// If the module repo is using the deprecated ssh cloning method, extract the owner
+	// and repo from the string and save it to ops so that the an https cloning link
+	// can be constructed manually by opts.setLocation.
+	// This is a temporary workaround which will be removed once users have switched over.
+	owner, repo, err := module.GetOwnerAndRepo()
 	if err != nil {
-		return err
+		return errors.Wrapf(err, "getting module owner and repo '%s'", module.Name)
 	}
 
 	opts := cloneOpts{
-		location: module.Repo,
-		owner:    owner,
-		repo:     repo,
-		branch:   "",
-		dir:      moduleBase,
-		method:   cloneMethod,
+		branch: "",
+		dir:    moduleBase,
+		method: cloneMethod,
+		owner:  owner,
+		repo:   repo,
 	}
-	// If the module repo is using the deprecated ssh cloning method, extract the owner
-	// and repo from the string and construct a https cloning link manually.
-	// This is a temporary workaround which will be removed once users have switched over.
-	if strings.Contains(opts.location, "git@github.com:") {
+	if strings.Contains(module.Repo, "git@github.com:") {
 		logger.Task().Infof("ssh cloning is being deprecated. We are manually converting '%s'"+
-			" to https format. Please update your project config.", opts.location)
-		owner, repo, err := thirdparty.ParseModuleLocation(opts.location)
-		if err != nil {
-			return errors.Wrapf(err, "parsing module repo '%s' in the format git@github.com:", opts.location)
-		}
-		opts.repo = repo
-		opts.owner = owner
-		if err := opts.setLocation(); err != nil {
-			return errors.Wrap(err, "setting location to clone from")
-		}
+			" to https format. Please update your project config.", module.Repo)
+	}
+
+	if err := opts.setLocation(); err != nil {
+		return errors.Wrap(err, "setting location to clone from")
 	}
 
 	if opts.method == evergreen.CloneMethodOAuth {

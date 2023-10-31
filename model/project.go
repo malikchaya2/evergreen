@@ -453,12 +453,21 @@ type ContainerSystem struct {
 // given version at runtime. Module fields include the expand plugin tag because they
 // need to support project ref variable expansions.
 type Module struct {
-	Name       string `yaml:"name,omitempty" bson:"name" plugin:"expand"`
-	Branch     string `yaml:"branch,omitempty" bson:"branch"  plugin:"expand"`
-	Repo       string `yaml:"repo,omitempty" bson:"repo"  plugin:"expand"`
+	Name   string `yaml:"name,omitempty" bson:"name" plugin:"expand"`
+	Branch string `yaml:"branch,omitempty" bson:"branch"  plugin:"expand"`
+	Repo   string `yaml:"repo,omitempty" bson:"repo"  plugin:"expand"`
+	// todo: chaya parse the user input to this
+	Owner      string `yaml:"owner,omitempty" bson:"owner"  plugin:"expand"`
 	Prefix     string `yaml:"prefix,omitempty" bson:"prefix"  plugin:"expand"`
 	Ref        string `yaml:"ref,omitempty" bson:"ref"  plugin:"expand"`
 	AutoUpdate bool   `yaml:"auto_update,omitempty" bson:"auto_update"`
+}
+
+func (m Module) GetOwnerAndRepo() (string, string, error) {
+	if strings.Contains(m.Repo, "git@github.com:") {
+		return thirdparty.ParseGitUrl(m.Repo)
+	}
+	return m.Owner, m.Repo, nil
 }
 
 type Include struct {
@@ -479,10 +488,11 @@ func (l *ModuleList) IsIdentical(m manifest.Manifest) bool {
 	}
 	projectModules := map[string]manifest.Module{}
 	for _, module := range *l {
-		owner, repo, err := thirdparty.ParseGitUrl(module.Repo)
+		owner, repo, err := module.GetOwnerAndRepo()
 		if err != nil {
 			return false
 		}
+
 		projectModules[module.Name] = manifest.Module{
 			Branch: module.Branch,
 			Repo:   repo,
