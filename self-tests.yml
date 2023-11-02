@@ -30,7 +30,25 @@ functions:
 #######################################
 
 tasks:
-  - name: my-task
+  - name: test-ssh-clone
+    commands:
+      - func: get-project-and-modules
+      - command: shell.exec
+        params:
+          shell: "bash"
+          script: |
+            echo "Chaya I will now clone in a script"
+      - command: shell.exec
+        params:
+          shell: "bash"
+          script: |
+            git clone git@github.com:evergreen-ci/spruce.git
+      - command: shell.exec
+        params:
+          shell: "bash"
+          script: |
+            echo "Chaya I finished cloning in a script"
+  - name: test-https-clone
     commands:
       - func: get-project-and-modules
       - command: shell.exec
@@ -61,4 +79,5 @@ buildvariants:
     #   - spruce
     #   - logkeeper
     tasks:
-      - name: my-task
+      - name: test-ssh-clone
+      - name: test-https-clone
