@@ -42,7 +42,7 @@ tasks:
         params:
           shell: "bash"
           script: |
-            git clone git@github.com:evergreen-ci/spruce.git
+            git clone https://github.com/evergreen-ci/spruce.git
       - command: shell.exec
         params:
           shell: "bash"
