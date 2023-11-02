@@ -65,7 +65,7 @@ buildvariants:
       - name: test-ssh-clone
       - name: test-https-clone
   - name: ssh-module
-    display_name: ubuntu2204-small
+    display_name: with-ssh-module
     run_on:
       - ubuntu2204-small
     modules:
@@ -73,7 +73,7 @@ buildvariants:
     tasks:
       - name: just-print
   - name: https-module
-    display_name: ubuntu2204-small
+    display_name: with-https-module
     run_on:
       - ubuntu2204-small
     modules:
