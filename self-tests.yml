@@ -1,11 +1,12 @@
 #######################################
 #               Modules               #
 #######################################
+# This format is deprecated
 modules:
   - name: spruce
     repo: git@github.com:evergreen-ci/spruce.git
     branch: main
-
+  # Use this format instead
   - name: logkeeper
     owner: evergreen-ci
     repo: logkeeper
@@ -37,6 +38,7 @@ tasks:
           shell: "bash"
           script: |
             echo "hello world"
+  # This will not work anymore
   - name: test-ssh-clone
     commands:
       - func: get-project-and-modules
@@ -45,6 +47,7 @@ tasks:
           shell: "bash"
           script: |
             git clone git@github.com:evergreen-ci/spruce.git
+  # This will still work
   - name: test-https-clone
     commands:
       - func: get-project-and-modules
