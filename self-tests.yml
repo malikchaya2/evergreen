@@ -3,15 +3,15 @@
 #######################################
 # if a module is added and to be added to the manifest
 # be sure to add the module to git.get_project revisions parameter
-modules:
-  - name: spruce
-    repo: git@github.com:evergreen-ci/spruce.git
-    branch: main
+# modules:
+#   - name: spruce
+#     repo: git@github.com:evergreen-ci/spruce.git
+#     branch: main
 
-  - name: logkeeper
-    repo: git@github.com:evergreen-ci/logkeeper.git
-    branch: main
-    auto_update: true
+#   - name: logkeeper
+#     repo: git@github.com:evergreen-ci/logkeeper.git
+#     branch: main
+#     auto_update: true
 
 #######################################
 #              Functions              #
@@ -57,8 +57,8 @@ buildvariants:
     display_name: ubuntu2204-small
     run_on:
       - ubuntu2204-small
-    modules:
-      - spruce
-      - logkeeper
+    # modules:
+    #   - spruce
+    #   - logkeeper
     tasks:
       - name: my-task
