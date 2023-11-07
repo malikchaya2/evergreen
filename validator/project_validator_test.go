@@ -15,6 +15,7 @@ import (
 	_ "github.com/evergreen-ci/evergreen/plugin"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/evergreen-ci/utility"
+	"github.com/google/go-github/v29/github"
 	. "github.com/smartystreets/goconvey/convey"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -6310,4 +6311,49 @@ func TestValidationErrorsAtLevel(t *testing.T) {
 		})
 		assert.Empty(t, errs.AtLevel(Error))
 	})
+}
+
+func TestValidateCheckRuns(t *testing.T) {
+	checkRunOutput := &github.CheckRunOutput{
+		Title:   utility.ToStringPtr("My Checkrun"),
+		Summary: utility.ToStringPtr("summary"),
+		Annotations: []*github.CheckRunAnnotation{
+			{
+				Path:            utility.ToStringPtr("path"),
+				StartLine:       utility.ToIntPtr(1),
+				EndLine:         utility.ToIntPtr(1),
+				AnnotationLevel: utility.ToStringPtr("notice"),
+				Title:           utility.ToStringPtr("My Annotation"),
+				Message:         utility.ToStringPtr("message"),
+				StartColumn:     utility.ToIntPtr(1),
+				EndColumn:       utility.ToIntPtr(1),
+			},
+		},
+	}
+
+	bvtu := model.BuildVariantTaskUnit{
+		Name:    "bvTaskName",
+		Variant: "bvVariant",
+	}
+
+	errs := validateCheckRuns(bvtu, checkRunOutput)
+	assert.Len(t, errs, 0)
+
+	checkRunOutput.Annotations[0].EndLine = utility.ToIntPtr(2)
+	errs = validateCheckRuns(bvtu, checkRunOutput)
+	require.Len(t, errs, 1)
+	assert.Equal(t, Warning, errs[0].Level)
+	assert.Contains(t, errs[0].Message, "The annotation 'My Annotation' in checkRun 'My Checkrun' should not include a column when start_line and end_line have different values")
+
+	invalidOutput := &github.CheckRunOutput{Annotations: []*github.CheckRunAnnotation{{}}}
+	errs = validateCheckRuns(bvtu, invalidOutput)
+	require.Len(t, errs, 7)
+	assert.Equal(t, Warning, errs[0].Level)
+	assert.Contains(t, errs[0].Message, "task 'bvTaskName' in build variant 'bvVariant' specifies a checkRun with no title")
+	assert.Contains(t, errs[1].Message, "task 'bvTaskName' in build variant 'bvVariant' specifies a checkRun '' with no summary")
+	assert.Contains(t, errs[2].Message, "checkRun '' specifies an annotation '' with no path")
+	assert.Contains(t, errs[3].Message, "checkRun '' specifies an annotation '' with no start line")
+	assert.Contains(t, errs[4].Message, "checkRun '' specifies an annotation '' with no end line")
+	assert.Contains(t, errs[5].Message, "checkRun '' specifies an annotation '' with no annotation level")
+	assert.Contains(t, errs[6].Message, "checkRun '' specifies an annotation '' with no message")
 }

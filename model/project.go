@@ -21,6 +21,7 @@ import (
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
+	"github.com/google/go-github/v29/github"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
@@ -2295,4 +2296,13 @@ func GetVariantsAndTasksFromPatchProject(ctx context.Context, settings *evergree
 		Project:  *project,
 	}
 	return &variantsAndTasksFromProject, nil
+}
+
+// ReadOutputPath reads the content of a file and parses it into a github.CheckRunOutput struct
+func ReadOutputPath(file string) (*github.CheckRunOutput, error) {
+	checkRunOutput := &github.CheckRunOutput{}
+	if err := utility.ReadJSONFile(file, &checkRunOutput); err != nil {
+		return nil, err
+	}
+	return checkRunOutput, nil
 }
