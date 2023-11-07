@@ -123,6 +123,7 @@ func (c *attachArtifacts) Execute(ctx context.Context,
 	return nil
 }
 
+// chaya reads a file
 func readArtifactsFile(wd, fn string) ([]*artifact.File, error) {
 	if !filepath.IsAbs(fn) {
 		fn = filepath.Join(wd, fn)

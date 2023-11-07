@@ -21,6 +21,7 @@ import (
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
+	"github.com/google/go-github/v29/github"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
@@ -41,6 +42,7 @@ const (
 // the ParserProject.
 type Project struct {
 	Stepback           bool                       `yaml:"stepback,omitempty" bson:"stepback"`
+	UnsetFunctionVars  bool                       `yaml:"unset_function_vars,omitempty" bson:"unset_function_vars,omitempty"`
 	PreTimeoutSecs     int                        `yaml:"pre_timeout_secs,omitempty" bson:"pre_timeout_secs,omitempty"`
 	PostTimeoutSecs    int                        `yaml:"post_timeout_secs,omitempty" bson:"post_timeout_secs,omitempty"`
 	PreErrorFailsTask  bool                       `yaml:"pre_error_fails_task,omitempty" bson:"pre_error_fails_task,omitempty"`
@@ -2284,4 +2286,23 @@ func GetVariantsAndTasksFromPatchProject(ctx context.Context, settings *evergree
 		Project:  *project,
 	}
 	return &variantsAndTasksFromProject, nil
+}
+
+// readOutputPath reads the content of the file specified as the checkRun.PathToOutputs and adds validation according to design and return an object with output parameters
+// Failing validation logs a warning but does not error
+// it'll be passed into the github function later
+// the output struct is specified here:https://docs.github.com/en/rest/checks/runs?apiVersion=2022-11-28#update-a-check-run
+// see if there's a github struct we can use here, uses github.CheckRunOutput from github/checks.go
+
+func ReadOutputPath(file string) (*github.CheckRunOutput, error) {
+	if file == "" {
+		return nil, nil
+	}
+	// read the file and parse it into a github.CheckRunOutput type
+	checkRunOutput := &github.CheckRunOutput{}
+
+	if err := utility.ReadJSONFile(file, &checkRunOutput); err != nil {
+		return nil, err
+	}
+	return checkRunOutput, nil
 }

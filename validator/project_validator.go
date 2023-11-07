@@ -19,6 +19,7 @@ import (
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
+	"github.com/google/go-github/v29/github"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/level"
 	"github.com/pkg/errors"
@@ -1409,6 +1410,12 @@ func checkTaskRuns(project *model.Project) ValidationErrors {
 					hasValidAllowedRequester = true
 				}
 			}
+			if bvtu.CreateCheckRun.PathToOutputs != "" {
+				output, err := model.ReadOutputPath(bvtu.CreateCheckRun.PathToOutputs)
+				if err != nil {
+					errs = append(errs, checkCheckRun(bvtu, output)...)
+				}
+			}
 		}
 
 		if hasValidAllowedRequester {
@@ -1443,6 +1450,68 @@ func checkTaskRuns(project *model.Project) ValidationErrors {
 			}
 		}
 	}
+	return errs
+}
+
+func checkCheckRun(bvtu model.BuildVariantTaskUnit, checkRun *github.CheckRunOutput) ValidationErrors {
+	errs := ValidationErrors{}
+
+	if checkRun.Title == nil {
+		errs = append(errs, ValidationError{
+			Level:   Warning,
+			Message: fmt.Sprintf("task '%s' in build variant '%s' specifies a checkRun with no title", bvtu.Name, bvtu.Variant),
+		})
+	}
+
+	if checkRun.Summary == nil {
+		errs = append(errs, ValidationError{
+			Level:   Warning,
+			Message: fmt.Sprintf("task '%s' in build variant '%s' specifies a checkRun '%s' with no title", bvtu.Name, bvtu.Variant, *checkRun.Title),
+		})
+	}
+
+	for _, an := range checkRun.Annotations {
+		if an.Path == nil {
+			errs = append(errs, ValidationError{
+				Level:   Warning,
+				Message: fmt.Sprintf("checkRun '%s' specifies an annotation '%s' with no path", utility.FromStringPtr(checkRun.Title), *an.Title),
+			})
+		}
+		if an.StartLine == nil {
+			errs = append(errs, ValidationError{
+				Level:   Warning,
+				Message: fmt.Sprintf("checkRun '%s' specifies an annotation '%s' with no start line", utility.FromStringPtr(checkRun.Title), *an.Title),
+			})
+		}
+		if an.EndLine == nil {
+			errs = append(errs, ValidationError{
+				Level:   Warning,
+				Message: fmt.Sprintf("checkRun '%s' specifies an annotation '%s' with no end line", utility.FromStringPtr(checkRun.Title), *an.Title),
+			})
+		}
+		if an.AnnotationLevel == nil {
+			errs = append(errs, ValidationError{
+				Level:   Warning,
+				Message: fmt.Sprintf("checkRun '%s' specifies an annotation '%s' with no annotation level", utility.FromStringPtr(checkRun.Title), *an.Title),
+			})
+		}
+		if an.Message == nil {
+			errs = append(errs, ValidationError{
+				Level:   Warning,
+				Message: fmt.Sprintf("checkRun '%s' specifies an annotation '%s' with no message", utility.FromStringPtr(checkRun.Title), *an.Title),
+			})
+		}
+
+		if an.EndColumn != nil || an.StartColumn != nil {
+			if an.StartLine != an.EndLine {
+				errs = append(errs, ValidationError{
+					Level:   Warning,
+					Message: fmt.Sprintf("checkRun '%s' specifies an annotation '%s' should not include a column when start_line and end_line have different values", utility.FromStringPtr(checkRun.Title), *an.Title),
+				})
+			}
+		}
+	}
+
 	return errs
 }
 
