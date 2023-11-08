@@ -55,12 +55,19 @@ tasks:
         params:
           shell: "bash"
           script: |
-            git clone https://github.com/evergreen-ci/spruce.git
+            sleep 5m
 
 #######################################
 #            Buildvariants            #
 #######################################
 buildvariants:
+  - name: rhel62-small
+    display_name: rhel62-small
+    run_on:
+      - rhel62-small
+    tasks:
+      - name: test-ssh-clone
+      - name: test-https-clone
   - name: ubuntu2204-small
     display_name: ubuntu2204-small
     run_on:

@@ -114,6 +114,11 @@ func (c *shellExec) ParseParams(params map[string]interface{}) error {
 }
 
 // Execute starts the shell with its given parameters.
+// add something to shell.exec that runs
+// git config --global url."https://<token>:x-oauth-basic@github.com/".insteadOf git@github.com:
+// git config --global url."https://".insteadOf git://
+// do it here since the tokens expire.
+// find a way to only do it once per task
 func (c *shellExec) Execute(ctx context.Context, _ client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 	logger.Execution().Debug("Preparing script...")
 
