@@ -33,9 +33,9 @@ func TestGitPush(t *testing.T) {
 	}
 	comm := client.NewMock("http://localhost.com")
 	conf := &internal.TaskConfig{
-		Task:       &task.Task{},
-		ProjectRef: &model.ProjectRef{Branch: "main"},
-		Expansions: &util.Expansions{},
+		Task:       task.Task{},
+		ProjectRef: model.ProjectRef{Branch: "main"},
+		Expansions: util.Expansions{},
 	}
 	logger, err := comm.GetLoggerProducer(context.Background(), client.TaskData{}, nil)
 	require.NoError(t, err)
@@ -70,9 +70,9 @@ func TestGitPush(t *testing.T) {
 				Githash:     "abcdef01345",
 				Description: "testing 123",
 			}
+			comm.GetTaskPatchResponse = patch
 
 			ctx := context.Background()
-			ctx = context.WithValue(ctx, "patch", patch)
 			assert.NoError(t, c.Execute(ctx, comm, logger, conf))
 
 			commands := []string{
@@ -163,8 +163,8 @@ func TestGitPush(t *testing.T) {
 			}
 
 			assert.NoError(t, logger.Close())
-			msgs := comm.GetMockMessages()[""]
-			assert.Equal(t, "The key: [redacted oauth token]", msgs[len(msgs)-1].Message)
+			lines := comm.GetTaskLogs("")
+			assert.Equal(t, "The key: [redacted oauth token]", lines[len(lines)-1].Data)
 		},
 		"RevParse": func(*testing.T) {
 			manager := &mock.Manager{}

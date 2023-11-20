@@ -21,6 +21,7 @@ import (
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
+	"github.com/google/go-github/v53/github"
 	"github.com/mongodb/anser/bsonutil"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
@@ -40,13 +41,7 @@ const (
 // Project represents the fully hydrated project configuration after translating
 // the ParserProject.
 type Project struct {
-	Enabled            bool                       `yaml:"enabled,omitempty" bson:"enabled"`         // deprecated
-	Owner              string                     `yaml:"owner,omitempty" bson:"owner_name"`        // deprecated
-	Repo               string                     `yaml:"repo,omitempty" bson:"repo_name"`          // deprecated
-	RemotePath         string                     `yaml:"remote_path,omitempty" bson:"remote_path"` // deprecated
-	Branch             string                     `yaml:"branch,omitempty" bson:"branch_name"`      // deprecated
 	Stepback           bool                       `yaml:"stepback,omitempty" bson:"stepback"`
-	UnsetFunctionVars  bool                       `yaml:"unset_function_vars,omitempty" bson:"unset_function_vars,omitempty"`
 	PreTimeoutSecs     int                        `yaml:"pre_timeout_secs,omitempty" bson:"pre_timeout_secs,omitempty"`
 	PostTimeoutSecs    int                        `yaml:"post_timeout_secs,omitempty" bson:"post_timeout_secs,omitempty"`
 	PreErrorFailsTask  bool                       `yaml:"pre_error_fails_task,omitempty" bson:"pre_error_fails_task,omitempty"`
@@ -61,7 +56,6 @@ type Project struct {
 	Pre                *YAMLCommandSet            `yaml:"pre,omitempty" bson:"pre"`
 	Post               *YAMLCommandSet            `yaml:"post,omitempty" bson:"post"`
 	Timeout            *YAMLCommandSet            `yaml:"timeout,omitempty" bson:"timeout"`
-	EarlyTermination   *YAMLCommandSet            `yaml:"early_termination,omitempty" bson:"early_termination,omitempty"`
 	CallbackTimeout    int                        `yaml:"callback_timeout_secs,omitempty" bson:"callback_timeout_secs"`
 	Modules            ModuleList                 `yaml:"modules,omitempty" bson:"modules"`
 	Containers         []Container                `yaml:"containers,omitempty" bson:"containers"`
@@ -98,27 +92,38 @@ type BuildVariantTaskUnit struct {
 	// Name has to match the name field of one of the tasks or groups specified at
 	// the project level, or an error will be thrown
 	Name string `yaml:"name,omitempty" bson:"name"`
-	// IsGroup indicates that it is a task group or a task within a task group.
-	// This is always populated after translating the parser project to the
-	// project.
+	// IsGroup indicates that it is a task group. This is always populated for
+	// task groups after project translation.
 	IsGroup bool `yaml:"-" bson:"-"`
-	// GroupName is the task group name if this is a task in a task group. If
-	// it is the task group itself, it is not populated (Name is the task group
-	// name).
+	// IsPartOfGroup indicates that this unit is a task within a task group. If
+	// this is set, then GroupName is also set.
+	// Note that project translation does not expand task groups into their
+	// individual tasks, so this is only set for special functions that
+	// explicitly expand task groups into individual task units (such as
+	// FindAllBuildVariantTasks).
+	IsPartOfGroup bool `yaml:"-" bson:"-"`
+	// GroupName is the task group name if this is a task in a task group. This
+	// is only set if the task unit is a task within a task group (i.e.
+	// IsPartOfGroup is set). If the task unit is the task group itself, it is
+	// not populated (Name is the task group name).
+	// Note that project translation does not expand task groups into their
+	// individual tasks, so this is only set for special functions that
+	// explicitly expand task groups into individual task units (such as
+	// FindAllBuildVariantTasks).
 	GroupName string `yaml:"-" bson:"-"`
 	// Variant is the build variant that the task unit is part of. This is
 	// always populated after translating the parser project to the project.
 	Variant string `yaml:"-" bson:"-"`
 
 	// fields to overwrite ProjectTask settings.
-	Patchable         *bool                `yaml:"patchable,omitempty" bson:"patchable,omitempty"`
-	PatchOnly         *bool                `yaml:"patch_only,omitempty" bson:"patch_only,omitempty"`
-	Disable           *bool                `yaml:"disable,omitempty" bson:"disable,omitempty"`
-	AllowForGitTag    *bool                `yaml:"allow_for_git_tag,omitempty" bson:"allow_for_git_tag,omitempty"`
-	GitTagOnly        *bool                `yaml:"git_tag_only,omitempty" bson:"git_tag_only,omitempty"`
-	AllowedRequesters []string             `yaml:"allowed_requesters,omitempty" bson:"allowed_requesters,omitempty"`
-	Priority          int64                `yaml:"priority,omitempty" bson:"priority"`
-	DependsOn         []TaskUnitDependency `yaml:"depends_on,omitempty" bson:"depends_on"`
+	Patchable         *bool                     `yaml:"patchable,omitempty" bson:"patchable,omitempty"`
+	PatchOnly         *bool                     `yaml:"patch_only,omitempty" bson:"patch_only,omitempty"`
+	Disable           *bool                     `yaml:"disable,omitempty" bson:"disable,omitempty"`
+	AllowForGitTag    *bool                     `yaml:"allow_for_git_tag,omitempty" bson:"allow_for_git_tag,omitempty"`
+	GitTagOnly        *bool                     `yaml:"git_tag_only,omitempty" bson:"git_tag_only,omitempty"`
+	AllowedRequesters []evergreen.UserRequester `yaml:"allowed_requesters,omitempty" bson:"allowed_requesters,omitempty"`
+	Priority          int64                     `yaml:"priority,omitempty" bson:"priority"`
+	DependsOn         []TaskUnitDependency      `yaml:"depends_on,omitempty" bson:"depends_on"`
 
 	// the distros that the task can be run on
 	RunOn []string `yaml:"run_on,omitempty" bson:"run_on"`
@@ -139,6 +144,9 @@ type BuildVariantTaskUnit struct {
 	Activate *bool `yaml:"activate,omitempty" bson:"activate,omitempty"`
 	// TaskGroup is set if an inline task group is defined on the build variant.
 	TaskGroup *TaskGroup `yaml:"task_group,omitempty" bson:"task_group,omitempty"`
+
+	// CreateCheckRun will create a check run on GitHub if set.
+	CreateCheckRun *CheckRun `yaml:"create_check_run,omitempty" bson:"create_check_run,omitempty"`
 }
 
 func (b BuildVariant) Get(name string) (BuildVariantTaskUnit, error) {
@@ -290,7 +298,7 @@ func (bvt *BuildVariantTaskUnit) UnmarshalYAML(unmarshal func(interface{}) error
 
 func (bvt *BuildVariantTaskUnit) SkipOnRequester(requester string) bool {
 	if len(bvt.AllowedRequesters) != 0 {
-		return !utility.StringSliceContains(bvt.AllowedRequesters, requester)
+		return !utility.StringSliceContains(evaluateRequesters(bvt.AllowedRequesters), requester)
 	}
 
 	return evergreen.IsPatchRequester(requester) && bvt.SkipOnPatchBuild() ||
@@ -301,7 +309,7 @@ func (bvt *BuildVariantTaskUnit) SkipOnRequester(requester string) bool {
 
 func (bvt *BuildVariantTaskUnit) SkipOnPatchBuild() bool {
 	if len(bvt.AllowedRequesters) != 0 {
-		allowed := utility.StringSliceIntersection(bvt.AllowedRequesters, evergreen.PatchRequesters)
+		allowed := utility.StringSliceIntersection(evaluateRequesters(bvt.AllowedRequesters), evergreen.PatchRequesters)
 		return len(allowed) == 0
 	}
 
@@ -310,7 +318,7 @@ func (bvt *BuildVariantTaskUnit) SkipOnPatchBuild() bool {
 
 func (bvt *BuildVariantTaskUnit) SkipOnNonPatchBuild() bool {
 	if len(bvt.AllowedRequesters) != 0 {
-		allowed, _ := utility.StringSliceSymmetricDifference(bvt.AllowedRequesters, evergreen.PatchRequesters)
+		allowed, _ := utility.StringSliceSymmetricDifference(evaluateRequesters(bvt.AllowedRequesters), evergreen.PatchRequesters)
 		return len(allowed) == 0
 	}
 
@@ -319,7 +327,7 @@ func (bvt *BuildVariantTaskUnit) SkipOnNonPatchBuild() bool {
 
 func (bvt *BuildVariantTaskUnit) SkipOnGitTagBuild() bool {
 	if len(bvt.AllowedRequesters) != 0 {
-		return !utility.StringSliceContains(bvt.AllowedRequesters, evergreen.GitTagRequester)
+		return !utility.StringSliceContains(evaluateRequesters(bvt.AllowedRequesters), evergreen.GitTagRequester)
 	}
 
 	return !utility.FromBoolTPtr(bvt.AllowForGitTag)
@@ -327,7 +335,7 @@ func (bvt *BuildVariantTaskUnit) SkipOnGitTagBuild() bool {
 
 func (bvt *BuildVariantTaskUnit) SkipOnNonGitTagBuild() bool {
 	if len(bvt.AllowedRequesters) != 0 {
-		allowed, _ := utility.StringSliceSymmetricDifference(bvt.AllowedRequesters, []string{evergreen.GitTagRequester})
+		allowed, _ := utility.StringSliceSymmetricDifference(evaluateRequesters(bvt.AllowedRequesters), []string{evergreen.GitTagRequester})
 		return len(allowed) == 0
 	}
 
@@ -393,7 +401,7 @@ type BuildVariant struct {
 	// task. If set, the allowed requesters take precedence over other
 	// requester-related filters such as Patchable, PatchOnly, AllowForGitTag,
 	// and GitTagOnly. By default, all requesters are allowed to run the task.
-	AllowedRequesters []string `yaml:"allowed_requesters,omitempty" bson:"allowed_requesters,omitempty"`
+	AllowedRequesters []evergreen.UserRequester `yaml:"allowed_requesters,omitempty" bson:"allowed_requesters,omitempty"`
 
 	// Use a *bool so that there are 3 possible states:
 	//   1. nil   = not overriding the project setting (default)
@@ -408,6 +416,12 @@ type BuildVariant struct {
 	// all of the tasks/groups to be run on the build variant, compile through tests.
 	Tasks        []BuildVariantTaskUnit `yaml:"tasks,omitempty" bson:"tasks"`
 	DisplayTasks []patch.DisplayTask    `yaml:"display_tasks,omitempty" bson:"display_tasks,omitempty"`
+}
+
+// CheckRun is used to provide information about a github check run.
+type CheckRun struct {
+	// PathToOutputs is a local file path to an output json file for the checkrun.
+	PathToOutputs string `yaml:"path_to_outputs" bson:"path_to_outputs"`
 }
 
 // ParameterInfo is used to provide extra information about a parameter.
@@ -435,13 +449,27 @@ type ContainerSystem struct {
 	WindowsVersion  evergreen.WindowsVersion `yaml:"windows_version,omitempty" bson:"windows_version"`
 }
 
+// Module specifies the git details of another git project to be included within a
+// given version at runtime. Module fields include the expand plugin tag because they
+// need to support project ref variable expansions.
 type Module struct {
-	Name       string `yaml:"name,omitempty" bson:"name"`
-	Branch     string `yaml:"branch,omitempty" bson:"branch"`
-	Repo       string `yaml:"repo,omitempty" bson:"repo"`
-	Prefix     string `yaml:"prefix,omitempty" bson:"prefix"`
-	Ref        string `yaml:"ref,omitempty" bson:"ref"`
+	Name       string `yaml:"name,omitempty" bson:"name" plugin:"expand"`
+	Branch     string `yaml:"branch,omitempty" bson:"branch"  plugin:"expand"`
+	Repo       string `yaml:"repo,omitempty" bson:"repo"  plugin:"expand"`
+	Owner      string `yaml:"owner,omitempty" bson:"owner"  plugin:"expand"`
+	Prefix     string `yaml:"prefix,omitempty" bson:"prefix"  plugin:"expand"`
+	Ref        string `yaml:"ref,omitempty" bson:"ref"  plugin:"expand"`
 	AutoUpdate bool   `yaml:"auto_update,omitempty" bson:"auto_update"`
+}
+
+// GetOwnerAndRepo returns the owner and repo for a module
+// If the owner is not set, it will attempt to parse the repo URL to get the owner
+// and repo.
+func (m Module) GetOwnerAndRepo() (string, string, error) {
+	if m.Owner == "" {
+		return thirdparty.ParseGitUrl(m.Repo)
+	}
+	return m.Owner, m.Repo, nil
 }
 
 type Include struct {
@@ -462,7 +490,7 @@ func (l *ModuleList) IsIdentical(m manifest.Manifest) bool {
 	}
 	projectModules := map[string]manifest.Module{}
 	for _, module := range *l {
-		owner, repo, err := thirdparty.ParseGitUrl(module.Repo)
+		owner, repo, err := module.GetOwnerAndRepo()
 		if err != nil {
 			return false
 		}
@@ -704,14 +732,14 @@ type ProjectTask struct {
 	//   1. nil   = not overriding the project setting (default)
 	//   2. true  = overriding the project setting with true
 	//   3. false = overriding the project setting with false
-	Patchable         *bool    `yaml:"patchable,omitempty" bson:"patchable,omitempty"`
-	PatchOnly         *bool    `yaml:"patch_only,omitempty" bson:"patch_only,omitempty"`
-	Disable           *bool    `yaml:"disable,omitempty" bson:"disable,omitempty"`
-	AllowForGitTag    *bool    `yaml:"allow_for_git_tag,omitempty" bson:"allow_for_git_tag,omitempty"`
-	GitTagOnly        *bool    `yaml:"git_tag_only,omitempty" bson:"git_tag_only,omitempty"`
-	AllowedRequesters []string `yaml:"allowed_requesters,omitempty" bson:"allowed_requesters,omitempty"`
-	Stepback          *bool    `yaml:"stepback,omitempty" bson:"stepback,omitempty"`
-	MustHaveResults   *bool    `yaml:"must_have_test_results,omitempty" bson:"must_have_test_results,omitempty"`
+	Patchable         *bool                     `yaml:"patchable,omitempty" bson:"patchable,omitempty"`
+	PatchOnly         *bool                     `yaml:"patch_only,omitempty" bson:"patch_only,omitempty"`
+	Disable           *bool                     `yaml:"disable,omitempty" bson:"disable,omitempty"`
+	AllowForGitTag    *bool                     `yaml:"allow_for_git_tag,omitempty" bson:"allow_for_git_tag,omitempty"`
+	GitTagOnly        *bool                     `yaml:"git_tag_only,omitempty" bson:"git_tag_only,omitempty"`
+	AllowedRequesters []evergreen.UserRequester `yaml:"allowed_requesters,omitempty" bson:"allowed_requesters,omitempty"`
+	Stepback          *bool                     `yaml:"stepback,omitempty" bson:"stepback,omitempty"`
+	MustHaveResults   *bool                     `yaml:"must_have_test_results,omitempty" bson:"must_have_test_results,omitempty"`
 }
 
 type LoggerConfig struct {
@@ -811,6 +839,7 @@ var ValidLogSenders = []string{
 // TaskIdTable is a map of [variant, task display name]->[task id].
 type TaskIdTable map[TVPair]string
 
+// TaskIdConfig stores TaskIdTables split by execution and display tasks.
 type TaskIdConfig struct {
 	ExecutionTasks TaskIdTable
 	DisplayTasks   TaskIdTable
@@ -908,8 +937,9 @@ func (tt TaskIdTable) GetIdsForAllTasks() []string {
 	return ids
 }
 
-// TaskIdTable builds a TaskIdTable for the given version and project
-func NewTaskIdTable(p *Project, v *Version, sourceRev, defID string) TaskIdConfig {
+// NewTaskIdConfigForRepotrackerVersion creates a special TaskIdTable for a
+// repotracker version.
+func NewTaskIdConfigForRepotrackerVersion(p *Project, v *Version, sourceRev, defID string) TaskIdConfig {
 	// init the variant map
 	execTable := TaskIdTable{}
 	displayTable := TaskIdTable{}
@@ -961,8 +991,9 @@ func NewTaskIdTable(p *Project, v *Version, sourceRev, defID string) TaskIdConfi
 	return TaskIdConfig{ExecutionTasks: execTable, DisplayTasks: displayTable}
 }
 
-// NewPatchTaskIdTable constructs a new TaskIdTable (map of [variant, task display name]->[task  id])
-func NewPatchTaskIdTable(proj *Project, v *Version, tasks TaskVariantPairs, projectIdentifier string) (TaskIdConfig, error) {
+// NewTaskIdConfig constructs a new set of TaskIdTables (map of [variant, task display name]->[task  id])
+// split by display and execution tasks.
+func NewTaskIdConfig(proj *Project, v *Version, tasks TaskVariantPairs, projectIdentifier string) (TaskIdConfig, error) {
 	config := TaskIdConfig{ExecutionTasks: TaskIdTable{}, DisplayTasks: TaskIdTable{}}
 	processedVariants := map[string]bool{}
 
@@ -1069,18 +1100,6 @@ func generateId(name string, projectIdentifier string, projBV *BuildVariant, rev
 		rev,
 		v.CreateTime.Format(build.IdTimeLayout))
 }
-
-var (
-	// bson fields for the project struct
-	ProjectIdentifierKey    = bsonutil.MustHaveTag(Project{}, "Identifier")
-	ProjectPreKey           = bsonutil.MustHaveTag(Project{}, "Pre")
-	ProjectPostKey          = bsonutil.MustHaveTag(Project{}, "Post")
-	ProjectModulesKey       = bsonutil.MustHaveTag(Project{}, "Modules")
-	ProjectBuildVariantsKey = bsonutil.MustHaveTag(Project{}, "BuildVariants")
-	ProjectFunctionsKey     = bsonutil.MustHaveTag(Project{}, "Functions")
-	ProjectStepbackKey      = bsonutil.MustHaveTag(Project{}, "Stepback")
-	ProjectTasksKey         = bsonutil.MustHaveTag(Project{}, "Tasks")
-)
 
 // PopulateExpansions returns expansions for a task, excluding build variant
 // expansions, project variables, and project/version parameters.
@@ -1205,6 +1224,12 @@ func PopulateExpansions(t *task.Task, h *host.Host, oauthToken, appToken string)
 			expansions.Put("github_repo", p.GithubPatchData.BaseRepo)
 			expansions.Put("github_author", p.GithubPatchData.Author)
 			expansions.Put("github_commit", p.GithubPatchData.HeadHash)
+		}
+		if p.IsGithubMergePatch() {
+			expansions.Put("github_org", p.GithubMergeData.Org)
+			expansions.Put("github_repo", p.GithubMergeData.Repo)
+			// this looks like "gh-readonly-queue/main/pr-515-9cd8a2532bcddf58369aa82eb66ba88e2323c056"
+			expansions.Put("github_head_branch", p.GithubMergeData.HeadBranch)
 		}
 	} else {
 		expansions.Put("is_patch", "")
@@ -1458,7 +1483,7 @@ func (p *Project) findBuildVariantsWithTag(tags []string) []string {
 // GetTaskNameAndTags checks the project for a task or task group matching the
 // build variant task unit, and returns the name and tags
 func (p *Project) GetTaskNameAndTags(bvt BuildVariantTaskUnit) (string, []string, bool) {
-	if bvt.IsGroup {
+	if bvt.IsGroup || bvt.IsPartOfGroup {
 		ptg := bvt.TaskGroup
 		if ptg == nil {
 			ptg = p.FindTaskGroup(bvt.Name)
@@ -1550,7 +1575,9 @@ func (p *Project) FindAllVariants() []string {
 }
 
 // FindAllBuildVariantTasks returns every BuildVariantTaskUnit, fully populated,
-// for all variants of a project.
+// for all variants of a project. Note that task groups, although they are
+// considered build variant task units, are not preserved. Instead, each task in
+// the task group is expanded into its own individual tasks units.
 func (p *Project) FindAllBuildVariantTasks() []BuildVariantTaskUnit {
 	tasksByName := map[string]ProjectTask{}
 	for _, t := range p.Tasks {
@@ -1603,9 +1630,10 @@ func (p *Project) tasksFromGroup(bvTaskGroup BuildVariantTaskUnit) []BuildVarian
 	for _, t := range tg.Tasks {
 		bvt := BuildVariantTaskUnit{
 			Name: t,
-			// IsGroup is not persisted, and indicates here that the
-			// task is a member of a task group.
-			IsGroup:           true,
+			// IsPartOfGroup and GroupName are used to indicate that the task
+			// unit is a task within the task group, not the task group itself.
+			// These are not persisted.
+			IsPartOfGroup:     true,
 			TaskGroup:         bvTaskGroup.TaskGroup,
 			GroupName:         bvTaskGroup.Name,
 			Variant:           bvTaskGroup.Variant,
@@ -1884,7 +1912,7 @@ func findAliasesForPatch(projectId, alias string, patchDoc *patch.Patch) ([]Proj
 			return nil, errors.Wrapf(err, "retrieving alias '%s' from project config", alias)
 		}
 	} else if patchDoc.Version != "" {
-		aliases, err = getMatchingAliasForVersion(patchDoc.Version, alias)
+		aliases, err = getMatchingAliasesForProjectConfig(projectId, patchDoc.Version, alias)
 		if err != nil {
 			return nil, errors.Wrapf(err, "retrieving alias '%s' from project config", alias)
 		}
@@ -2241,7 +2269,7 @@ func GetVariantsAndTasksFromPatchProject(ctx context.Context, settings *evergree
 		// Note that this can return the incorrect set of tasks based on
 		// requester settings because requester settings may be overridden at
 		// the build variant task level.
-		if len(task.AllowedRequesters) != 0 && !utility.StringSliceContains(task.AllowedRequesters, p.GetRequester()) {
+		if len(task.AllowedRequesters) != 0 && !utility.StringSliceContains(evaluateRequesters(task.AllowedRequesters), p.GetRequester()) {
 			continue
 		}
 		if utility.FromBoolPtr(task.Disable) || !utility.FromBoolTPtr(task.Patchable) || utility.FromBoolPtr(task.GitTagOnly) {
@@ -2256,4 +2284,56 @@ func GetVariantsAndTasksFromPatchProject(ctx context.Context, settings *evergree
 		Project:  *project,
 	}
 	return &variantsAndTasksFromProject, nil
+}
+
+// ReadOutputPath reads the content of a file and parses it into a github.CheckRunOutput struct
+// if it fails validation, it returns an error
+func ReadAndValidateOutputPath(file string) (*github.CheckRunOutput, error) {
+	checkRunOutput := &github.CheckRunOutput{}
+
+	if file == "" {
+		return checkRunOutput, nil
+	}
+
+	if err := utility.ReadJSONFile(file, &checkRunOutput); err != nil {
+		return nil, err
+	}
+
+	return checkRunOutput, validateCheckRuns(checkRunOutput)
+}
+
+func validateCheckRuns(checkRun *github.CheckRunOutput) error {
+	if checkRun == nil {
+		return errors.New("checkRun Output is nil")
+	}
+
+	catcher := grip.NewBasicCatcher()
+
+	catcher.NewWhen(checkRun.Title == nil, "checkRun has no title")
+	summaryErrMsg := fmt.Sprintf("the checkRun '%s' has no summary", utility.FromStringPtr(checkRun.Title))
+	catcher.NewWhen(checkRun.Summary == nil, summaryErrMsg)
+
+	for _, an := range checkRun.Annotations {
+		annotationErrorMessage := fmt.Sprintf("checkRun '%s' specifies an annotation '%s' with no ", utility.FromStringPtr(checkRun.Title), utility.FromStringPtr(an.Title))
+
+		catcher.NewWhen(an.Path == nil, annotationErrorMessage+"path")
+		invalidStart := an.StartLine == nil || utility.FromIntPtr(an.StartLine) < 1
+		catcher.NewWhen(invalidStart, annotationErrorMessage+"start line or a start line < 1")
+
+		invalidEnd := an.EndLine == nil || utility.FromIntPtr(an.EndLine) < 1
+		catcher.NewWhen(invalidEnd, annotationErrorMessage+"end line or an end line < 1")
+
+		catcher.NewWhen(an.AnnotationLevel == nil, annotationErrorMessage+"annotation level")
+
+		catcher.NewWhen(an.Message == nil, annotationErrorMessage+"message")
+
+		if an.EndColumn != nil || an.StartColumn != nil {
+			if utility.FromIntPtr(an.StartLine) != utility.FromIntPtr(an.EndLine) {
+				errMessage := fmt.Sprintf("The annotation '%s' in checkRun '%s' should not include a start or end column when start_line and end_line have different values", utility.FromStringPtr(an.Title), utility.FromStringPtr(checkRun.Title))
+				catcher.New(errMessage)
+			}
+		}
+	}
+
+	return catcher.Resolve()
 }

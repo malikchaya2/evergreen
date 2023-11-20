@@ -1140,6 +1140,7 @@ func TestCreateManifest(t *testing.T) {
 	assert := assert.New(t)
 	settings := testutil.TestConfig()
 	testutil.ConfigureIntegrationTest(t, settings, t.Name())
+	require.NoError(t, db.ClearCollections(model.VersionCollection, model.ProjectRefCollection, model.ProjectVarsCollection))
 	// with a revision from 5/31/15
 	v := model.Version{
 		Id:         "aaaaaaaaaaff001122334455",
@@ -1161,17 +1162,27 @@ func TestCreateManifest(t *testing.T) {
 		Modules: []model.Module{
 			{
 				Name:   "module1",
-				Repo:   "git@github.com:evergreen-ci/sample.git",
-				Branch: "main",
+				Owner:  "evergreen-ci",
+				Repo:   "sample",
+				Branch: "${var1}",
 			},
 		},
 	}
-
 	projRef := &model.ProjectRef{
 		Owner:  "evergreen-ci",
 		Repo:   "evergreen",
 		Branch: "main",
+		Id:     "project1",
 	}
+	require.NoError(t, projRef.Insert())
+
+	projVars := model.ProjectVars{
+		Id: "project1",
+		Vars: map[string]string{
+			"var1": "main",
+		},
+	}
+	require.NoError(t, projVars.Insert())
 
 	manifest, err := model.CreateManifest(&v, &proj, projRef, settings)
 	assert.NoError(err)
@@ -1206,7 +1217,8 @@ func TestCreateManifest(t *testing.T) {
 		Modules: []model.Module{
 			{
 				Name:   "module1",
-				Repo:   "git@github.com:evergreen-ci/sample.git",
+				Owner:  "evergreen-ci",
+				Repo:   "sample",
 				Branch: "main",
 				Ref:    hash,
 			},

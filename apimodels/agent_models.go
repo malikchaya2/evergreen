@@ -59,15 +59,15 @@ type TaskTestResultsInfo struct {
 // This should be used to store data relating to what happened when the task ran
 type TaskEndDetail struct {
 	Status          string          `bson:"status,omitempty" json:"status,omitempty"`
-	Message         string          `bson:"message,omitempty" json:"message,omitempty"`
 	Type            string          `bson:"type,omitempty" json:"type,omitempty"`
 	Description     string          `bson:"desc,omitempty" json:"desc,omitempty"`
 	TimedOut        bool            `bson:"timed_out,omitempty" json:"timed_out,omitempty"`
 	TimeoutType     string          `bson:"timeout_type,omitempty" json:"timeout_type,omitempty"`
-	TimeoutDuration time.Duration   `bson:"timeout_duration,omitempty" json:"timeout_duration,omitempty"`
+	TimeoutDuration time.Duration   `bson:"timeout_duration,omitempty" json:"timeout_duration,omitempty" swaggertype:"primitive,integer"`
 	OOMTracker      *OOMTrackerInfo `bson:"oom_killer,omitempty" json:"oom_killer,omitempty"`
 	Modules         ModuleCloneInfo `bson:"modules,omitempty" json:"modules,omitempty"`
 	TraceID         string          `bson:"trace_id,omitempty" json:"trace_id,omitempty"`
+	DiskDevices     []string        `bson:"data_disk,omitempty" json:"data_disk,omitempty"`
 }
 
 type OOMTrackerInfo struct {
@@ -105,7 +105,6 @@ type AgentSetupData struct {
 	SplunkServerURL        string                  `json:"splunk_server_url"`
 	SplunkClientToken      string                  `json:"splunk_client_token"`
 	SplunkChannel          string                  `json:"splunk_channel"`
-	Buckets                evergreen.BucketConfig  `json:"buckets"`
 	TaskSync               evergreen.S3Credentials `json:"task_sync"`
 	EC2Keys                []evergreen.EC2Key      `json:"ec2_keys"`
 	TraceCollectorEndpoint string                  `json:"trace_collector_endpoint"`
@@ -113,14 +112,13 @@ type AgentSetupData struct {
 
 // NextTaskResponse represents the response sent back when an agent asks for a next task
 type NextTaskResponse struct {
-	TaskId                    string `json:"task_id,omitempty"`
-	TaskSecret                string `json:"task_secret,omitempty"`
-	TaskGroup                 string `json:"task_group,omitempty"`
-	Version                   string `json:"version,omitempty"`
-	Build                     string `json:"build,omitempty"`
-	ShouldExit                bool   `json:"should_exit,omitempty"`
-	ShouldTeardownGroup       bool   `json:"should_teardown_group,omitempty"`
-	UnsetFunctionVarsDisabled bool   `json:"unset_function_vars_disabled"`
+	TaskId              string `json:"task_id,omitempty"`
+	TaskSecret          string `json:"task_secret,omitempty"`
+	TaskGroup           string `json:"task_group,omitempty"`
+	Version             string `json:"version,omitempty"`
+	Build               string `json:"build,omitempty"`
+	ShouldExit          bool   `json:"should_exit,omitempty"`
+	ShouldTeardownGroup bool   `json:"should_teardown_group,omitempty"`
 }
 
 // EndTaskResponse is what is returned when the task ends
@@ -182,6 +180,10 @@ type RegistrySettings struct {
 	Name     string `mapstructure:"registry_name" json:"registry_name" yaml:"registry_name"`
 	Username string `mapstructure:"registry_username" json:"registry_username" yaml:"registry_username"`
 	Password string `mapstructure:"registry_password" json:"registry_password" yaml:"registry_password"`
+}
+
+type InstallationToken struct {
+	Token string `json:"token"`
 }
 
 func (ted *TaskEndDetail) IsEmpty() bool {
@@ -336,8 +338,9 @@ type GeneratePollResponse struct {
 // DistroView represents the view of data that the agent uses from the distro
 // it is running on.
 type DistroView struct {
-	CloneMethod         string `json:"clone_method"`
-	DisableShallowClone bool   `json:"disable_shallow_clone"`
+	CloneMethod         string   `json:"clone_method"`
+	DisableShallowClone bool     `json:"disable_shallow_clone"`
+	Mountpoints         []string `json:"mountpoints"`
 }
 
 // ExpansionsAndVars represents expansions, project variables, and parameters

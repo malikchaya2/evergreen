@@ -86,6 +86,13 @@ func TestFindMergedProjectRef(t *testing.T) {
 		CommitQueue:       CommitQueueParams{Enabled: nil, Message: "using repo commit queue"},
 		WorkstationConfig: WorkstationConfig{GitClone: utility.TruePtr()},
 		TaskSync:          TaskSyncOptions{ConfigEnabled: utility.FalsePtr()},
+		ParsleyFilters: []ParsleyFilter{
+			{
+				Expression:    "project-filter",
+				CaseSensitive: true,
+				ExactMatch:    false,
+			},
+		},
 	}
 	assert.NoError(t, projectRef.Insert())
 	repoRef := &RepoRef{ProjectRef{
@@ -105,6 +112,13 @@ func TestFindMergedProjectRef(t *testing.T) {
 		TaskSync:          TaskSyncOptions{ConfigEnabled: utility.TruePtr(), PatchEnabled: utility.TruePtr()},
 		CommitQueue:       CommitQueueParams{Enabled: utility.TruePtr()},
 		WorkstationConfig: WorkstationConfig{SetupCommands: []WorkstationSetupCommand{{Command: "my-command"}}},
+		ParsleyFilters: []ParsleyFilter{
+			{
+				Expression:    "repo-filter",
+				CaseSensitive: false,
+				ExactMatch:    true,
+			},
+		},
 	}}
 	assert.NoError(t, repoRef.Upsert())
 
@@ -138,6 +152,21 @@ func TestFindMergedProjectRef(t *testing.T) {
 	assert.True(t, mergedProject.WorkstationConfig.ShouldGitClone())
 	assert.Len(t, mergedProject.WorkstationConfig.SetupCommands, 1)
 	assert.Equal(t, "random2", mergedProject.TaskAnnotationSettings.FileTicketWebhook.Endpoint)
+	assert.Len(t, mergedProject.ParsleyFilters, 2)
+
+	// Assert that mergeParsleyFilters correctly handles projects with repo filters but not project filters.
+	projectRef.ParsleyFilters = []ParsleyFilter{}
+
+	assert.NoError(t, projectRef.Upsert())
+	mergedProject, err = FindMergedProjectRef("ident", "ident", true)
+	assert.NoError(t, err)
+	assert.Len(t, mergedProject.ParsleyFilters, 1)
+
+	projectRef.ParsleyFilters = nil
+	assert.NoError(t, projectRef.Upsert())
+	mergedProject, err = FindMergedProjectRef("ident", "ident", true)
+	assert.NoError(t, err)
+	assert.Len(t, mergedProject.ParsleyFilters, 1)
 }
 
 func TestGetNumberOfEnabledProjects(t *testing.T) {
@@ -394,11 +423,11 @@ func TestGetActivationTimeForTask(t *testing.T) {
 	assert.NoError(t, versionWithoutTask.Insert())
 	assert.NoError(t, versionWithTask.Insert())
 
-	activationTime, err := projectRef.GetActivationTimeForTask(bvt)
+	activationTime, err := projectRef.GetActivationTimeForTask(bvt, "t0")
 	assert.NoError(t, err)
 	assert.True(t, activationTime.Equal(prevTime.Add(time.Hour)))
 
-	activationTime, err = projectRef.GetActivationTimeForTask(bvt2)
+	activationTime, err = projectRef.GetActivationTimeForTask(bvt2, "t0")
 	assert.NoError(t, err)
 	assert.True(t, activationTime.Equal(utility.ZeroTime))
 }
@@ -458,11 +487,19 @@ func TestAttachToNewRepo(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, db.ClearCollections(ProjectRefCollection, RepoRefCollection, evergreen.ScopeCollection,
-		evergreen.RoleCollection, user.Collection, evergreen.ConfigCollection, GithubHooksCollection))
+		evergreen.RoleCollection, user.Collection, evergreen.ConfigCollection, evergreen.GitHubAppCollection))
 	require.NoError(t, db.CreateCollections(evergreen.ScopeCollection))
 
 	settings := evergreen.Settings{
 		GithubOrgs: []string{"newOwner", "evergreen-ci"},
+		AuthConfig: evergreen.AuthConfig{
+			Github: &evergreen.GithubAuthConfig{
+				AppId: 1234,
+			},
+		},
+		Expansions: map[string]string{
+			"github_app_key": "test",
+		},
 	}
 	assert.NoError(t, settings.Set(ctx))
 	pRef := ProjectRef{
@@ -488,6 +525,12 @@ func TestAttachToNewRepo(t *testing.T) {
 		SystemRoles: []string{GetViewRepoRole("myRepo")},
 	}
 	assert.NoError(t, u.Insert())
+	installation := evergreen.GitHubAppInstallation{
+		Owner:          pRef.Owner,
+		Repo:           pRef.Repo,
+		InstallationID: 1234,
+	}
+	assert.NoError(t, installation.Upsert(ctx))
 
 	// Can't attach to repo with an invalid owner
 	pRef.Owner = "invalid"
@@ -495,12 +538,12 @@ func TestAttachToNewRepo(t *testing.T) {
 
 	pRef.Owner = "newOwner"
 	pRef.Repo = "newRepo"
-	hook := GithubHook{
-		HookID: 12,
-		Owner:  pRef.Owner,
-		Repo:   pRef.Repo,
+	newInstallation := evergreen.GitHubAppInstallation{
+		Owner:          pRef.Owner,
+		Repo:           pRef.Repo,
+		InstallationID: 1234,
 	}
-	assert.NoError(t, hook.Insert())
+	assert.NoError(t, newInstallation.Upsert(ctx))
 	assert.NoError(t, pRef.AttachToNewRepo(u))
 
 	pRefFromDB, err := FindBranchProjectRef(pRef.Id)
@@ -574,7 +617,7 @@ func TestAttachToRepo(t *testing.T) {
 	defer cancel()
 
 	require.NoError(t, db.ClearCollections(ProjectRefCollection, RepoRefCollection, evergreen.ScopeCollection,
-		evergreen.RoleCollection, user.Collection, GithubHooksCollection, event.EventCollection, evergreen.ConfigCollection))
+		evergreen.RoleCollection, user.Collection, event.EventCollection, evergreen.ConfigCollection))
 	require.NoError(t, db.CreateCollections(evergreen.ScopeCollection))
 	settings := evergreen.Settings{
 		GithubOrgs: []string{"newOwner", "evergreen-ci"},
@@ -595,12 +638,13 @@ func TestAttachToRepo(t *testing.T) {
 	}
 	assert.NoError(t, pRef.Insert())
 
-	hook := GithubHook{
-		HookID: 12,
-		Owner:  pRef.Owner,
-		Repo:   pRef.Repo,
+	installation := evergreen.GitHubAppInstallation{
+		Owner:          pRef.Owner,
+		Repo:           pRef.Repo,
+		InstallationID: 1234,
 	}
-	assert.NoError(t, hook.Insert())
+	assert.NoError(t, installation.Upsert(ctx))
+
 	u := &user.DBUser{Id: "me"}
 	assert.NoError(t, u.Insert())
 	// No repo exists, but one should be created.
@@ -1121,6 +1165,158 @@ func TestDefaultRepoBySection(t *testing.T) {
 	}
 }
 
+func TestGetGitHubProjectConflicts(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
+	require.NoError(db.ClearCollections(ProjectRefCollection, RepoRefCollection))
+
+	// Two project refs that are from different repos should never conflict.
+	p1 := &ProjectRef{
+		Owner:   "mongodb",
+		Repo:    "mci1",
+		Branch:  "main",
+		Id:      "p1",
+		Enabled: true,
+	}
+	require.NoError(p1.Insert())
+	p2 := &ProjectRef{
+		Owner:   "mongodb",
+		Repo:    "not-mci1",
+		Branch:  "main",
+		Id:      "p2",
+		Enabled: true,
+	}
+	require.NoError(p2.Insert())
+	conflicts, err := p1.GetGithubProjectConflicts()
+	require.NoError(err)
+	assert.Len(conflicts.PRTestingIdentifiers, 0)
+	assert.Len(conflicts.CommitQueueIdentifiers, 0)
+	assert.Len(conflicts.CommitCheckIdentifiers, 0)
+
+	// Two project refs that are from the same repo but do not have potential conflicting settings.
+	p3 := &ProjectRef{
+		Owner:   "mongodb",
+		Repo:    "mci2",
+		Branch:  "main",
+		Id:      "p3",
+		Enabled: true,
+	}
+	require.NoError(p3.Insert())
+	p4 := &ProjectRef{
+		Owner:   "mongodb",
+		Repo:    "mci2",
+		Branch:  "main",
+		Id:      "p4",
+		Enabled: true,
+	}
+	require.NoError(p4.Insert())
+	conflicts, err = p3.GetGithubProjectConflicts()
+	require.NoError(err)
+	assert.Len(conflicts.PRTestingIdentifiers, 0)
+	assert.Len(conflicts.CommitQueueIdentifiers, 0)
+	assert.Len(conflicts.CommitCheckIdentifiers, 0)
+
+	// Three project refs that do have potential conflicting settings.
+	p5 := &ProjectRef{
+		Owner:            "mongodb",
+		Repo:             "mci3",
+		Branch:           "main",
+		Id:               "p5",
+		Enabled:          true,
+		PRTestingEnabled: utility.TruePtr(),
+	}
+	require.NoError(p5.Insert())
+	p6 := &ProjectRef{
+		Owner:       "mongodb",
+		Repo:        "mci3",
+		Branch:      "main",
+		Id:          "p6",
+		Enabled:     true,
+		CommitQueue: CommitQueueParams{Enabled: utility.TruePtr()},
+	}
+	require.NoError(p6.Insert())
+	p7 := &ProjectRef{
+		Owner:               "mongodb",
+		Repo:                "mci3",
+		Branch:              "main",
+		Id:                  "p7",
+		Enabled:             true,
+		GithubChecksEnabled: utility.TruePtr(),
+	}
+	require.NoError(p7.Insert())
+	p8 := &ProjectRef{
+		Owner:   "mongodb",
+		Repo:    "mci3",
+		Branch:  "main",
+		Id:      "p8",
+		Enabled: true,
+	}
+	require.NoError(p8.Insert())
+	// p5 should have conflicting with commit queue and commit check.
+	conflicts, err = p5.GetGithubProjectConflicts()
+	require.NoError(err)
+	assert.Len(conflicts.PRTestingIdentifiers, 0)
+	assert.Len(conflicts.CommitQueueIdentifiers, 1)
+	assert.Len(conflicts.CommitCheckIdentifiers, 1)
+	// p6 should have conflicting with pr testing and commit check.
+	conflicts, err = p6.GetGithubProjectConflicts()
+	require.NoError(err)
+	assert.Len(conflicts.PRTestingIdentifiers, 1)
+	assert.Len(conflicts.CommitQueueIdentifiers, 0)
+	assert.Len(conflicts.CommitCheckIdentifiers, 1)
+	// p7 should have conflicting with pr testing and commit queue.
+	conflicts, err = p7.GetGithubProjectConflicts()
+	require.NoError(err)
+	assert.Len(conflicts.PRTestingIdentifiers, 1)
+	assert.Len(conflicts.CommitQueueIdentifiers, 1)
+	assert.Len(conflicts.CommitCheckIdentifiers, 0)
+	// p8 should have conflicting with all
+	conflicts, err = p8.GetGithubProjectConflicts()
+	require.NoError(err)
+	assert.Len(conflicts.PRTestingIdentifiers, 1)
+	assert.Len(conflicts.CommitQueueIdentifiers, 1)
+	assert.Len(conflicts.CommitCheckIdentifiers, 1)
+
+	// Two project refs in which one is the 'parent' or repo tracking project while the other is
+	// a branch tracking project that has their RepoRefId set to the 'parent'. And because
+	// the branch tracking project inherits the settings, it should not conflict.
+	p9 := &ProjectRef{
+		Owner:            "mongodb",
+		Repo:             "mci4",
+		Branch:           "main",
+		Id:               "p9",
+		Enabled:          true,
+		PRTestingEnabled: utility.TruePtr(),
+	}
+	require.NoError(p9.Insert())
+	r9 := &RepoRef{
+		ProjectRef: *p9,
+	}
+	require.NoError(r9.Upsert())
+	p10 := &ProjectRef{
+		Owner:     "mongodb",
+		Repo:      "mci4",
+		Branch:    "main",
+		Id:        "p10",
+		Enabled:   true,
+		RepoRefId: p9.Id,
+	}
+	require.NoError(p10.Insert())
+	// p9 should not have any potential conflicts.
+	conflicts, err = p9.GetGithubProjectConflicts()
+	require.NoError(err)
+	assert.Len(conflicts.PRTestingIdentifiers, 0)
+	assert.Len(conflicts.CommitQueueIdentifiers, 0)
+	assert.Len(conflicts.CommitCheckIdentifiers, 0)
+	// p10 should have a potential conflict because p9 has something enabled.
+	conflicts, err = p10.GetGithubProjectConflicts()
+	require.NoError(err)
+	assert.Len(conflicts.PRTestingIdentifiers, 1)
+	assert.Len(conflicts.CommitQueueIdentifiers, 0)
+	assert.Len(conflicts.CommitCheckIdentifiers, 0)
+}
+
 func TestFindProjectRefsByRepoAndBranch(t *testing.T) {
 	assert := assert.New(t)
 	require := require.New(t)
@@ -1163,7 +1359,7 @@ func TestFindProjectRefsByRepoAndBranch(t *testing.T) {
 
 func TestCreateNewRepoRef(t *testing.T) {
 	assert.NoError(t, db.ClearCollections(ProjectRefCollection, RepoRefCollection, user.Collection,
-		evergreen.ScopeCollection, ProjectVarsCollection, ProjectAliasCollection, GithubHooksCollection))
+		evergreen.ScopeCollection, ProjectVarsCollection, ProjectAliasCollection, evergreen.GitHubAppCollection))
 	require.NoError(t, db.CreateCollections(evergreen.ScopeCollection))
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -1207,12 +1403,13 @@ func TestCreateNewRepoRef(t *testing.T) {
 	}
 	assert.NoError(t, doc3.Insert())
 
-	hook := GithubHook{
-		HookID: 12,
-		Owner:  "mongodb",
-		Repo:   "mongo",
+	installation := evergreen.GitHubAppInstallation{
+		Owner:          "mongodb",
+		Repo:           "mongo",
+		InstallationID: 1234,
 	}
-	assert.NoError(t, hook.Insert())
+	assert.NoError(t, installation.Upsert(ctx))
+
 	projectVariables := []ProjectVars{
 		{
 			Id: doc1.Id,
@@ -1411,9 +1608,10 @@ func TestFindOneProjectRefByRepoAndBranchWithPRTesting(t *testing.T) {
 	assert.NotNil(projectRef)
 
 	repoDoc := RepoRef{ProjectRef{
-		Id:    "my_repo",
-		Owner: "mongodb",
-		Repo:  "mci",
+		Id:         "my_repo",
+		Owner:      "mongodb",
+		Repo:       "mci",
+		RemotePath: "",
 	}}
 	assert.NoError(repoDoc.Upsert())
 	doc = &ProjectRef{
@@ -1492,6 +1690,8 @@ func TestFindOneProjectRefByRepoAndBranchWithPRTesting(t *testing.T) {
 	assert.NotNil(projectRef)
 
 	// project explicitly disabled
+	repoDoc.RemotePath = "my_path"
+	assert.NoError(repoDoc.Upsert())
 	doc.Enabled = false
 	doc.PRTestingEnabled = utility.TruePtr()
 	assert.NoError(doc.Upsert())
@@ -1499,9 +1699,11 @@ func TestFindOneProjectRefByRepoAndBranchWithPRTesting(t *testing.T) {
 	assert.NoError(err)
 	assert.Nil(projectRef)
 
-	// branch with no project doesn't work if repo not configured right
+	// branch with no project doesn't work and returns an error if repo not configured with a remote path
+	repoDoc.RemotePath = ""
+	assert.NoError(repoDoc.Upsert())
 	projectRef, err = FindOneProjectRefByRepoAndBranchWithPRTesting("mongodb", "mci", "yours", "")
-	assert.NoError(err)
+	assert.Error(err)
 	assert.Nil(projectRef)
 
 	repoDoc.RemotePath = "my_path"
@@ -1557,6 +1759,59 @@ func TestFindOneProjectRefWithCommitQueueByOwnerRepoAndBranch(t *testing.T) {
 	projectRef, err = FindOneProjectRefWithCommitQueueByOwnerRepoAndBranch("mongodb", "mci", "not_main")
 	assert.NoError(err)
 	assert.Nil(projectRef)
+}
+
+func TestValidateEnabledRepotracker(t *testing.T) {
+	assert := assert.New(t)
+	require := require.New(t)
+
+	require.NoError(db.Clear(ProjectRefCollection))
+	// A project that doesn't have repotracker enabled and an invalid config.
+	p1 := &ProjectRef{
+		Owner:               "mongodb",
+		Repo:                "mci",
+		Branch:              "main",
+		Id:                  "p1",
+		Enabled:             true,
+		RepotrackerDisabled: utility.TruePtr(),
+	}
+	require.NoError(p1.Insert())
+	assert.NoError(p1.ValidateEnabledRepotracker())
+	// A project that doesn't have repotracker enabled and a valid config.
+	p2 := &ProjectRef{
+		Owner:               "mongodb",
+		Repo:                "mci",
+		Branch:              "main",
+		Id:                  "p2",
+		Enabled:             true,
+		RepotrackerDisabled: utility.TruePtr(),
+		RemotePath:          "valid!",
+	}
+	require.NoError(p2.Insert())
+	assert.NoError(p2.ValidateEnabledRepotracker())
+	// A project that does have repotracker enabled and a invalid config.
+	p3 := &ProjectRef{
+		Owner:               "mongodb",
+		Repo:                "mci",
+		Branch:              "main",
+		Id:                  "p3",
+		Enabled:             true,
+		RepotrackerDisabled: utility.FalsePtr(),
+	}
+	require.NoError(p3.Insert())
+	assert.Error(p3.ValidateEnabledRepotracker())
+	// A project that does have repotracker enabled and a valid config.
+	p4 := &ProjectRef{
+		Owner:               "mongodb",
+		Repo:                "mci",
+		Branch:              "main",
+		Id:                  "p4",
+		Enabled:             true,
+		RepotrackerDisabled: utility.FalsePtr(),
+		RemotePath:          "valid!",
+	}
+	require.NoError(p4.Insert())
+	assert.NoError(p4.ValidateEnabledRepotracker())
 }
 
 func TestCanEnableCommitQueue(t *testing.T) {
@@ -1658,22 +1913,22 @@ func TestFindProjectRefIdsWithCommitQueueEnabled(t *testing.T) {
 func TestValidatePeriodicBuildDefinition(t *testing.T) {
 	assert := assert.New(t)
 	testCases := map[PeriodicBuildDefinition]bool{
-		PeriodicBuildDefinition{
+		{
 			IntervalHours: 24,
 			ConfigFile:    "foo.yml",
 			Alias:         "myAlias",
 		}: true,
-		PeriodicBuildDefinition{
+		{
 			IntervalHours: 0,
 			ConfigFile:    "foo.yml",
 			Alias:         "myAlias",
 		}: false,
-		PeriodicBuildDefinition{
+		{
 			IntervalHours: 24,
 			ConfigFile:    "",
 			Alias:         "myAlias",
 		}: false,
-		PeriodicBuildDefinition{
+		{
 			IntervalHours: 24,
 			ConfigFile:    "foo.yml",
 			Alias:         "",
@@ -2818,6 +3073,7 @@ func TestMergeWithProjectConfig(t *testing.T) {
 			},
 			BuildBaronSettings: &evergreen.BuildBaronSettings{
 				TicketCreateProject:     "BFG",
+				TicketCreateIssueType:   "Bug",
 				TicketSearchProjects:    []string{"BF", "BFG"},
 				BFSuggestionServer:      "https://evergreen.mongodb.com",
 				BFSuggestionTimeoutSecs: 10,
@@ -2840,6 +3096,8 @@ func TestMergeWithProjectConfig(t *testing.T) {
 	assert.Equal(t, "https://evergreen.mongodb.com", projectRef.BuildBaronSettings.BFSuggestionServer)
 	assert.Equal(t, 10, projectRef.BuildBaronSettings.BFSuggestionTimeoutSecs)
 	assert.Equal(t, "EVG", projectRef.BuildBaronSettings.TicketCreateProject)
+	assert.Equal(t, "Bug", projectRef.BuildBaronSettings.TicketCreateIssueType)
+	assert.Equal(t, []string{"BF", "BFG"}, projectRef.BuildBaronSettings.TicketSearchProjects)
 	assert.Equal(t, []string{"one", "two"}, projectRef.GithubTriggerAliases)
 	assert.Equal(t, "p1", projectRef.PeriodicBuilds[0].ID)
 	assert.Equal(t, 1, projectRef.ContainerSizeDefinitions[0].CPU)
@@ -2924,6 +3182,27 @@ func TestSaveProjectPageForSection(t *testing.T) {
 		ProjectHealthView: ProjectHealthViewAll,
 	}
 	_, err = SaveProjectPageForSection("iden_", update, ProjectPageViewsAndFiltersSection, false)
+	assert.NoError(err)
+
+	// Test performance plugin updates errors when id and identifier are different.
+	update = &ProjectRef{
+		PerfEnabled: utility.ToBoolPtr(true),
+	}
+	_, err = SaveProjectPageForSection("iden_", update, ProjectPagePluginSection, false)
+	assert.Error(err)
+
+	// Test performance plugin updates correctly when id and identifier are the same.
+	// Set the id and identifier to the same value.
+	update = &ProjectRef{
+		Identifier: "iden_",
+	}
+	_, err = SaveProjectPageForSection("iden_", update, ProjectPageGeneralSection, false)
+	assert.NoError(err)
+	// Attempt to enable the performance plugin.
+	update = &ProjectRef{
+		PerfEnabled: utility.ToBoolPtr(true),
+	}
+	_, err = SaveProjectPageForSection("iden_", update, ProjectPagePluginSection, false)
 	assert.NoError(err)
 
 	// Test private field does not get updated

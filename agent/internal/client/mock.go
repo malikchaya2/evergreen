@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -15,14 +17,19 @@ import (
 	"github.com/evergreen-ci/evergreen/cloud"
 	serviceModel "github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/artifact"
+	"github.com/evergreen-ci/evergreen/model/log"
 	"github.com/evergreen-ci/evergreen/model/manifest"
+	"github.com/evergreen-ci/evergreen/model/patch"
 	patchmodel "github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testlog"
 	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/evergreen-ci/evergreen/rest/model"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
+	"github.com/mongodb/grip/send"
 	"github.com/pkg/errors"
 	"google.golang.org/grpc"
 )
@@ -35,27 +42,31 @@ type Mock struct {
 	serverURL    string
 
 	// mock behavior
-	NextTaskShouldFail          bool
-	GetPatchFileShouldFail      bool
-	loggingShouldFail           bool
-	NextTaskResponse            *apimodels.NextTaskResponse
-	NextTaskIsNil               bool
-	StartTaskShouldFail         bool
-	GetTaskResponse             *task.Task
-	GetProjectResponse          *serviceModel.Project
-	EndTaskResponse             *apimodels.EndTaskResponse
-	EndTaskShouldFail           bool
-	EndTaskResult               EndTaskResult
-	ShellExecFilename           string
-	TimeoutFilename             string
-	GenerateTasksShouldFail     bool
-	HeartbeatShouldAbort        bool
-	HeartbeatShouldConflict     bool
-	HeartbeatShouldErr          bool
-	HeartbeatShouldSometimesErr bool
-	HeartbeatCount              int
-	TaskExecution               int
-	CreatedHost                 apimodels.CreateHost
+	NextTaskShouldFail            bool
+	GetPatchFileShouldFail        bool
+	loggingShouldFail             bool
+	NextTaskResponse              *apimodels.NextTaskResponse
+	NextTaskIsNil                 bool
+	StartTaskShouldFail           bool
+	GetTaskResponse               *task.Task
+	GetProjectResponse            *serviceModel.Project
+	EndTaskResponse               *apimodels.EndTaskResponse
+	EndTaskShouldFail             bool
+	EndTaskResult                 EndTaskResult
+	ShellExecFilename             string
+	TimeoutFilename               string
+	GenerateTasksShouldFail       bool
+	HeartbeatShouldAbort          bool
+	HeartbeatShouldConflict       bool
+	HeartbeatShouldErr            bool
+	HeartbeatShouldSometimesErr   bool
+	HeartbeatCount                int
+	TaskExecution                 int
+	CreatedHost                   apimodels.CreateHost
+	GetTaskPatchResponse          *patchmodel.Patch
+	GetLoggerProducerShouldFail   bool
+	CreateInstallationTokenFail   bool
+	CreateInstallationTokenResult string
 
 	CedarGRPCConn *grpc.ClientConn
 
@@ -64,12 +75,12 @@ type Mock struct {
 	LocalTestResults []testresult.TestResult
 	ResultsService   string
 	ResultsFailed    bool
-	TestLogs         []*serviceModel.TestLog
+	TestLogs         []*testlog.TestLog
 	TestLogCount     int
 
-	logMessages map[string][]apimodels.LogMessage
-	PatchFiles  map[string]string
-	keyVal      map[string]*serviceModel.KeyVal
+	taskLogs   map[string][]log.LogLine
+	PatchFiles map[string]string
+	keyVal     map[string]*serviceModel.KeyVal
 
 	// Mock data returned from methods
 	LastMessageSent  time.Time
@@ -89,7 +100,7 @@ func NewMock(serverURL string) *Mock {
 		maxAttempts:   defaultMaxAttempts,
 		timeoutStart:  defaultTimeoutStart,
 		timeoutMax:    defaultTimeoutMax,
-		logMessages:   make(map[string][]apimodels.LogMessage),
+		taskLogs:      make(map[string][]log.LogLine),
 		PatchFiles:    make(map[string]string),
 		keyVal:        make(map[string]*serviceModel.KeyVal),
 		AttachedFiles: make(map[string][]*artifact.File),
@@ -319,8 +330,21 @@ func (c *Mock) GetDataPipesConfig(ctx context.Context) (*apimodels.DataPipesConf
 	}, nil
 }
 
-// SendTaskLogMessages posts tasks messages to the api server
-func (c *Mock) SendLogMessages(ctx context.Context, td TaskData, msgs []apimodels.LogMessage) error {
+// GetLoggerProducer constructs a single channel log producer.
+func (c *Mock) GetLoggerProducer(ctx context.Context, td TaskData, _ *LoggerConfig) (LoggerProducer, error) {
+	if c.GetLoggerProducerShouldFail {
+		return nil, errors.New("operation run in fail mode.")
+	}
+
+	appendLine := func(line log.LogLine) error {
+		return c.sendTaskLogLine(td, line)
+	}
+
+	return NewSingleChannelLogHarness(td.ID, newMockSender("mock", appendLine)), nil
+}
+
+// sendTaskLogLine appends a new log line to the task log cache.
+func (c *Mock) sendTaskLogLine(td TaskData, line log.LogLine) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
@@ -328,37 +352,16 @@ func (c *Mock) SendLogMessages(ctx context.Context, td TaskData, msgs []apimodel
 		return errors.New("logging failed")
 	}
 
-	c.logMessages[td.ID] = append(c.logMessages[td.ID], msgs...)
+	c.taskLogs[td.ID] = append(c.taskLogs[td.ID], line)
 
 	return nil
 }
 
-// GetMockMessages returns the mock's logs.
-func (c *Mock) GetMockMessages() map[string][]apimodels.LogMessage {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
+func (c *Mock) GetTaskLogs(taskID string) []log.LogLine {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 
-	out := map[string][]apimodels.LogMessage{}
-	for k, v := range c.logMessages {
-		out[k] = []apimodels.LogMessage{}
-		for _, i := range v {
-			new := apimodels.LogMessage{
-				Type:      i.Type,
-				Severity:  i.Severity,
-				Message:   i.Message,
-				Timestamp: i.Timestamp,
-				Version:   i.Version,
-			}
-			out[k] = append(out[k], new)
-		}
-	}
-
-	return out
-}
-
-// GetLoggerProducer constructs a single channel log producer.
-func (c *Mock) GetLoggerProducer(ctx context.Context, td TaskData, config *LoggerConfig) (LoggerProducer, error) {
-	return NewSingleChannelLogHarness(td.ID, newEvergreenLogSender(ctx, c, apimodels.AgentLogPrefix, td, defaultLogBufferSize, defaultLogBufferTime)), nil
+	return c.taskLogs[taskID]
 }
 
 func (c *Mock) GetPatchFile(ctx context.Context, td TaskData, patchFileID string) (string, error) {
@@ -376,12 +379,11 @@ func (c *Mock) GetPatchFile(ctx context.Context, td TaskData, patchFileID string
 }
 
 func (c *Mock) GetTaskPatch(ctx context.Context, td TaskData, patchId string) (*patchmodel.Patch, error) {
-	patch, ok := ctx.Value("patch").(*patchmodel.Patch)
-	if !ok {
-		return &patchmodel.Patch{}, nil
+	if c.GetTaskPatchResponse != nil {
+		return c.GetTaskPatchResponse, nil
 	}
 
-	return patch, nil
+	return &patch.Patch{}, nil
 }
 
 // CreateSpawnHost will return a mock host that would have been intended
@@ -404,7 +406,7 @@ func (*Mock) CreateSpawnHost(ctx context.Context, spawnRequest *model.HostReques
 	return mockHost, nil
 }
 
-func (c *Mock) SetResultsInfo(ctx context.Context, td TaskData, service string, failed bool) error {
+func (c *Mock) SetResultsInfo(ctx context.Context, _ TaskData, service string, failed bool) error {
 	c.ResultsService = service
 	if failed {
 		c.ResultsFailed = true
@@ -422,7 +424,6 @@ func (c *Mock) AttachFiles(ctx context.Context, td TaskData, taskFiles []*artifa
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	grip.Info("attaching files")
 	c.AttachedFiles[td.ID] = append(c.AttachedFiles[td.ID], taskFiles...)
 
 	return nil
@@ -443,7 +444,7 @@ func (c *Mock) UpdatePushStatus(ctx context.Context, td TaskData, pushLog *servi
 
 // SendTestLog posts a test log for a communicator's task. Is a
 // noop if the test Log is nil.
-func (c *Mock) SendTestLog(ctx context.Context, td TaskData, log *serviceModel.TestLog) (string, error) {
+func (c *Mock) SendTestLog(ctx context.Context, td TaskData, log *testlog.TestLog) (string, error) {
 	c.TestLogs = append(c.TestLogs, log)
 	c.TestLogs[len(c.TestLogs)-1].Id = c.LogID
 	c.TestLogCount += 1
@@ -521,4 +522,55 @@ func (c *Mock) GetPullRequestInfo(ctx context.Context, taskData TaskData, prNum 
 	return &apimodels.PullRequestInfo{
 		Mergeable: utility.TruePtr(),
 	}, nil
+}
+
+func (c *Mock) CreateInstallationToken(ctx context.Context, td TaskData, owner, repo string) (string, error) {
+	if c.CreateInstallationTokenFail {
+		return "", errors.New("failed to create token")
+	}
+	return c.CreateInstallationTokenResult, nil
+}
+
+type mockSender struct {
+	appendLine func(log.LogLine) error
+	lastErr    error
+	*send.Base
+}
+
+func newMockSender(name string, appendLine func(log.LogLine) error) *mockSender {
+	return &mockSender{
+		appendLine: appendLine,
+		Base:       send.NewBase(name),
+	}
+}
+
+func (s *mockSender) Send(m message.Composer) {
+	ts := time.Now().UnixNano()
+
+	if !s.Level().ShouldLog(m) {
+		return
+	}
+
+	if err := s.appendLine(log.LogLine{
+		Priority:  m.Priority(),
+		Timestamp: ts,
+		Data:      m.String(),
+	}); err != nil {
+		s.lastErr = err
+	}
+}
+
+func (s *mockSender) Flush(_ context.Context) error { return nil }
+
+type mockHandler struct {
+	serve func(http.ResponseWriter, *http.Request)
+}
+
+func (h *mockHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) { h.serve(w, r) }
+
+func newMockServer(serve func(http.ResponseWriter, *http.Request)) (*httptest.Server, *mockHandler) {
+	h := &mockHandler{
+		serve: serve,
+	}
+	return httptest.NewServer(h), h
 }

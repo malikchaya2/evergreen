@@ -11,6 +11,7 @@ import (
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testlog"
 	"github.com/evergreen-ci/evergreen/model/testresult"
 	serviceutil "github.com/evergreen-ci/evergreen/service/testutil"
 	"github.com/evergreen-ci/timber/buildlogger"
@@ -39,7 +40,7 @@ func TestSendTestResults(t *testing.T) {
 		},
 	}
 	conf := &internal.TaskConfig{
-		Task: &task.Task{
+		Task: task.Task{
 			Id:           "id",
 			Secret:       "secret",
 			CreateTime:   time.Now().Add(-time.Hour),
@@ -188,7 +189,7 @@ func TestSendTestResults(t *testing.T) {
 func TestSendTestLog(t *testing.T) {
 	ctx := context.TODO()
 	conf := &internal.TaskConfig{
-		Task: &task.Task{
+		Task: task.Task{
 			Id:           "id",
 			Project:      "project",
 			Version:      "version",
@@ -196,9 +197,9 @@ func TestSendTestLog(t *testing.T) {
 			Execution:    5,
 			Requester:    evergreen.GithubPRRequester,
 		},
-		ProjectRef: &model.ProjectRef{},
+		ProjectRef: model.ProjectRef{},
 	}
-	log := &model.TestLog{
+	log := &testlog.TestLog{
 		Id:            "id",
 		Name:          "test",
 		Task:          "task",

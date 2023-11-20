@@ -8,7 +8,7 @@ import (
 	"github.com/evergreen-ci/evergreen/agent/internal"
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	"github.com/evergreen-ci/evergreen/util"
-	"github.com/mholt/archiver"
+	"github.com/mholt/archiver/v3"
 	"github.com/mitchellh/mapstructure"
 	"github.com/pkg/errors"
 )
@@ -45,7 +45,7 @@ func (e *zipExtract) ParseParams(params map[string]interface{}) error {
 func (e *zipExtract) Execute(ctx context.Context,
 	client client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 
-	if err := util.ExpandValues(e, conf.Expansions); err != nil {
+	if err := util.ExpandValues(e, &conf.Expansions); err != nil {
 		return errors.Wrap(err, "applying expansions")
 	}
 
@@ -62,7 +62,7 @@ func (e *zipExtract) Execute(ctx context.Context,
 		return errors.Errorf("archive '%s' does not exist", e.ArchivePath)
 	}
 
-	if err := archiver.Zip.Open(e.ArchivePath, e.TargetDirectory); err != nil {
+	if err := archiver.NewZip().Unarchive(e.ArchivePath, e.TargetDirectory); err != nil {
 		return errors.Wrapf(err, "extracting archive '%s' to directory '%s'", e.ArchivePath, e.TargetDirectory)
 	}
 

@@ -124,12 +124,6 @@ func (pp *ParserProject) mergeOrderedUnique(toMerge *ParserProject) error {
 		pp.Timeout = toMerge.Timeout
 	}
 
-	if pp.EarlyTermination != nil && toMerge.EarlyTermination != nil {
-		catcher.New("early termination can only be defined in one YAML")
-	} else if toMerge.EarlyTermination != nil {
-		pp.EarlyTermination = toMerge.EarlyTermination
-	}
-
 	return catcher.Resolve()
 }
 
@@ -174,12 +168,6 @@ func (pp *ParserProject) mergeUnique(toMerge *ParserProject) error {
 		catcher.New("post error fails task can only be defined in one YAML")
 	} else if toMerge.PostErrorFailsTask != nil {
 		pp.PostErrorFailsTask = toMerge.PostErrorFailsTask
-	}
-
-	if pp.UnsetFunctionVars != nil && toMerge.UnsetFunctionVars != nil {
-		catcher.New("unset function vars can only be defined in one YAML")
-	} else if toMerge.UnsetFunctionVars != nil {
-		pp.UnsetFunctionVars = toMerge.UnsetFunctionVars
 	}
 
 	if pp.OomTracker != nil && toMerge.OomTracker != nil {

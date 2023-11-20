@@ -36,18 +36,6 @@ type s3copy struct {
 	// An array of file copy configurations
 	S3CopyFiles []*s3CopyFile `mapstructure:"s3_copy_files" plugin:"expand"`
 
-	// Bucket is the s3 bucket to use when storing the desired file
-	Bucket string `mapstructure:"bucket" plugin:"expand"`
-
-	// Permissions is the ACL to apply to the uploaded file. See:
-	//  http://docs.aws.amazon.com/AmazonS3/latest/dev/acl-overview.html#canned-acl
-	// for some examples.
-	Permissions string `mapstructure:"permissions"`
-
-	// ContentType is the MIME type of the uploaded file.
-	//  E.g. text/html, application/pdf, image/jpeg, ...
-	ContentType string `mapstructure:"content_type" plugin:"expand"`
-
 	base
 }
 
@@ -162,7 +150,7 @@ func (c *s3copy) validate() error {
 func (c *s3copy) Execute(ctx context.Context,
 	comm client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 
-	if err := util.ExpandValues(c, conf.Expansions); err != nil {
+	if err := util.ExpandValues(c, &conf.Expansions); err != nil {
 		return errors.Wrap(err, "applying expansions")
 	}
 	// Re-validate the command here, in case an expansion is not defined.

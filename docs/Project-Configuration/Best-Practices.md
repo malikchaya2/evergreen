@@ -1,5 +1,12 @@
 # Best Practices
 
+## Secrets
+
+Note that you should not pass secrets as command-line arguments but instead as
+environment variables or from a file, as Evergreen runs `ps` periodically, which
+will log command-line arguments. You can use the `silent` parameter in
+`shell.exec` or `subprocess.exec` to avoid logging output.
+
 ## Task Directory
 
 Evergreen creates a temporary task directory for each task. Commands by default execute in that directory. Evergreen will clean up that directory in between tasks unless explicit configured not to. Please don't write outside this directory, as Evergreen won't be able to delete the data your task has written.
@@ -41,4 +48,4 @@ echo $foo
 
 ## Distro Choice
 
-Tasks on more popular distros are often run quicker than tasks on less popular ones. Prefer more popular distros where possible.
+Tasks on more popular distros are often run quicker than tasks on less popular ones. Prefer more popular distros where possible. For more information about available distro choices see [Guidelines around Evergreen distros](https://wiki.corp.mongodb.com/x/CZ7yBg)

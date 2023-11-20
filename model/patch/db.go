@@ -45,7 +45,6 @@ var (
 	ParametersKey           = bsonutil.MustHaveTag(Patch{}, "Parameters")
 	ActivatedKey            = bsonutil.MustHaveTag(Patch{}, "Activated")
 	ProjectStorageMethodKey = bsonutil.MustHaveTag(Patch{}, "ProjectStorageMethod")
-	PatchedParserProjectKey = bsonutil.MustHaveTag(Patch{}, "PatchedParserProject")
 	PatchedProjectConfigKey = bsonutil.MustHaveTag(Patch{}, "PatchedProjectConfig")
 	AliasKey                = bsonutil.MustHaveTag(Patch{}, "Alias")
 	githubPatchDataKey      = bsonutil.MustHaveTag(Patch{}, "GithubPatchData")
@@ -141,8 +140,8 @@ type ByPatchNameStatusesCommitQueuePaginatedOptions struct {
 	Page               int
 	Limit              int
 	IncludeCommitQueue *bool
+	IncludeHidden      *bool
 	OnlyCommitQueue    *bool
-	IncludeHidden      bool
 }
 
 func ByPatchNameStatusesCommitQueuePaginated(ctx context.Context, opts ByPatchNameStatusesCommitQueuePaginatedOptions) ([]Patch, int, error) {
@@ -160,17 +159,23 @@ func ByPatchNameStatusesCommitQueuePaginated(ctx context.Context, opts ByPatchNa
 		match[AliasKey] = evergreen.CommitQueueAlias
 	}
 
-	if !opts.IncludeHidden {
-		match[HiddenKey] = bson.M{"$ne": true}
-	}
 	// This is only used on the user patches page when we want to filter out the commit queue
 	if opts.IncludeCommitQueue != nil && !utility.FromBoolPtr(opts.IncludeCommitQueue) {
 		match[AliasKey] = commitQueueFilter
 	}
+
+	if !utility.FromBoolTPtr(opts.IncludeHidden) {
+		match[HiddenKey] = bson.M{"$ne": true}
+	}
+
 	if opts.PatchName != "" {
 		match[DescriptionKey] = bson.M{"$regex": opts.PatchName, "$options": "i"}
 	}
 	if len(opts.Statuses) > 0 {
+		// Verify that we're considering the legacy patch status as well; we'll remove this logic in EVG-20032.
+		if len(utility.StringSliceIntersection(opts.Statuses, evergreen.VersionSucceededStatuses)) > 0 {
+			opts.Statuses = utility.UniqueStrings(append(opts.Statuses, evergreen.VersionSucceededStatuses...))
+		}
 		match[StatusKey] = bson.M{"$in": opts.Statuses}
 	}
 	if opts.Author != nil {
@@ -327,7 +332,7 @@ func PatchesByProject(projectId string, ts time.Time, limit int) db.Q {
 func FindFailedCommitQueuePatchesInTimeRange(projectID string, startTime, endTime time.Time) ([]Patch, error) {
 	query := bson.M{
 		ProjectKey: projectID,
-		StatusKey:  evergreen.PatchFailed,
+		StatusKey:  evergreen.VersionFailed,
 		AliasKey:   evergreen.CommitQueueAlias,
 		"$or": []bson.M{
 			{"$and": []bson.M{

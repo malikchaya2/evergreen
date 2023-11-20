@@ -740,7 +740,9 @@ func (e *envState) initSenders(ctx context.Context) error {
 	if err == nil && len(githubToken) > 0 {
 		// Github Status
 		sender, err = send.NewGithubStatusLogger("evergreen", &send.GithubOptions{
-			Token: githubToken,
+			Token:       githubToken,
+			MinDelay:    GithubRetryMinDelay,
+			MaxAttempts: GitHubRetryAttempts,
 		}, "")
 		if err != nil {
 			return errors.Wrap(err, "setting up GitHub status logger")
@@ -999,8 +1001,10 @@ func (e *envState) ClientConfig() *ClientConfig {
 type BuildBaronSettings struct {
 	// todo: reconfigure the BuildBaronConfigured check to use TicketSearchProjects instead
 
-	TicketCreateProject  string   `mapstructure:"ticket_create_project" bson:"ticket_create_project" json:"ticket_create_project" yaml:"ticket_create_project"`
-	TicketSearchProjects []string `mapstructure:"ticket_search_projects" bson:"ticket_search_projects" json:"ticket_search_projects" yaml:"ticket_search_projects"`
+	TicketCreateProject   string   `mapstructure:"ticket_create_project" bson:"ticket_create_project" json:"ticket_create_project" yaml:"ticket_create_project"`
+	TicketCreateIssueType string   `mapstructure:"ticket_create_issue_type" bson:"ticket_create_issue_type" json:"ticket_create_issue_type" yaml:"ticket_create_issue_type"`
+	TicketSearchProjects  []string `mapstructure:"ticket_search_projects" bson:"ticket_search_projects" json:"ticket_search_projects" yaml:"ticket_search_projects"`
+
 	// The BF Suggestion server as a source of suggestions is only enabled for projects where BFSuggestionServer isn't the empty string.
 	BFSuggestionServer      string `mapstructure:"bf_suggestion_server" bson:"bf_suggestion_server" json:"bf_suggestion_server" yaml:"bf_suggestion_server"`
 	BFSuggestionUsername    string `mapstructure:"bf_suggestion_username" bson:"bf_suggestion_username" json:"bf_suggestion_username" yaml:"bf_suggestion_username"`
@@ -1097,7 +1101,9 @@ func (e *envState) GetGitHubSender(owner, repo string) (send.Sender, error) {
 		return legacySender, nil
 	}
 	sender, err := send.NewGithubStatusLogger("evergreen", &send.GithubOptions{
-		Token: token,
+		Token:       token,
+		MinDelay:    GithubRetryMinDelay,
+		MaxAttempts: GitHubRetryAttempts,
 	}, "")
 	if err != nil {
 		// TODO EVG-19966: Delete fallback to legacy GitHub sender

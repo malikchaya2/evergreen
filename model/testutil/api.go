@@ -15,7 +15,6 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/pkg/errors"
-	"go.mongodb.org/mongo-driver/bson"
 )
 
 type TestModelData struct {
@@ -82,10 +81,10 @@ func SetupAPITestData(testConfig *evergreen.Settings, taskDisplayName string, va
 	// Create the ref for the project
 	projectRef := &model.ProjectRef{
 		Id:        project.DisplayName,
-		Owner:     project.Owner,
-		Repo:      project.Repo,
-		Branch:    project.Branch,
-		Enabled:   project.Enabled,
+		Owner:     "evergreen-ci",
+		Repo:      "sample",
+		Branch:    "main",
+		Enabled:   true,
 		BatchTime: project.BatchTime,
 	}
 	if err = projectRef.Insert(); err != nil {
@@ -232,18 +231,6 @@ func SetupAPITestData(testConfig *evergreen.Settings, taskDisplayName string, va
 		return nil, errors.Wrap(err, "inserting host")
 	}
 	modelData.Host = testHost
-
-	session, _, err := db.GetGlobalSessionFactory().GetSession()
-	if err != nil {
-		return nil, errors.Wrap(err, "getting DB session")
-	}
-
-	// Remove any logs for our test task from previous runs.
-	_, err = session.DB(model.TaskLogDB).C(model.TaskLogCollection).
-		RemoveAll(bson.M{"t_id": bson.M{"$in": []string{taskOne.Id, taskTwo.Id}}})
-	if err != nil {
-		return nil, errors.Wrap(err, "removing logs")
-	}
 
 	return modelData, nil
 }

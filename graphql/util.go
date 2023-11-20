@@ -10,6 +10,7 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/api"
+	"github.com/evergreen-ci/evergreen/apimodels"
 	"github.com/evergreen-ci/evergreen/cloud"
 	"github.com/evergreen-ci/evergreen/db"
 	"github.com/evergreen-ci/evergreen/db/mgo/bson"
@@ -24,6 +25,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/user"
 	"github.com/evergreen-ci/evergreen/rest/data"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
+	"github.com/evergreen-ci/evergreen/taskoutput"
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
@@ -37,6 +39,11 @@ import (
 
 // This file should consist only of private utility functions that are specific to graphql resolver use cases.
 
+const (
+	minRevisionLength = 7
+	gitHashLength     = 40 // A git hash contains 40 characters.
+)
+
 // getGroupedFiles returns the files of a Task inside a GroupedFile struct
 func getGroupedFiles(ctx context.Context, name string, taskID string, execution int) (*GroupedFiles, error) {
 	taskFiles, err := artifact.GetAllArtifacts([]artifact.TaskIDAndExecution{{TaskID: taskID, Execution: execution}})
@@ -49,13 +56,15 @@ func getGroupedFiles(ctx context.Context, name string, taskID string, execution 
 		return nil, err
 	}
 
+	env := evergreen.GetEnvironment()
 	apiFileList := []*restModel.APIFile{}
 	for _, file := range strippedFiles {
 		apiFile := restModel.APIFile{}
 		apiFile.BuildFromService(file)
+		apiFile.GetLogURL(env, taskID, execution)
 		apiFileList = append(apiFileList, &apiFile)
 	}
-	return &GroupedFiles{TaskName: &name, Files: apiFileList}, nil
+	return &GroupedFiles{TaskName: &name, Files: apiFileList, TaskID: taskID, Execution: execution}, nil
 }
 
 func findAllTasksByIds(ctx context.Context, taskIDs ...string) ([]task.Task, error) {
@@ -134,19 +143,14 @@ func getFormattedDate(t *time.Time, timezone string) (*string, error) {
 }
 
 // GetDisplayStatus considers both child patch statuses and
-// aborted status, and returns an overall patch status
-// (this is because success is different for version/patches,
-// and for display we rely on the patch status. Will address this in EVG-19914).
+// aborted status, and returns an overall status.
 func getDisplayStatus(v *model.Version) (string, error) {
-	patchStatus, err := evergreen.VersionStatusToPatchStatus(v.Status)
-	if err != nil {
-		return "", errors.Wrapf(err, "getting version status for patch '%s'", v.Id)
-	}
+	status := v.Status
 	if v.Aborted {
-		patchStatus = evergreen.PatchAborted
+		status = evergreen.VersionAborted
 	}
 	if !evergreen.IsPatchRequester(v.Requester) || v.IsChild() {
-		return patchStatus, nil
+		return status, nil
 	}
 
 	p, err := patch.FindOneId(v.Id)
@@ -156,7 +160,7 @@ func getDisplayStatus(v *model.Version) (string, error) {
 	if p == nil {
 		return "", errors.Errorf("patch '%s' doesn't exist", v.Id)
 	}
-	allStatuses := []string{patchStatus}
+	allStatuses := []string{status}
 	for _, cp := range p.Triggers.ChildPatches {
 		cpVersion, err := model.VersionFindOneId(cp)
 		if err != nil {
@@ -168,11 +172,7 @@ func getDisplayStatus(v *model.Version) (string, error) {
 		if cpVersion.Aborted {
 			allStatuses = append(allStatuses, evergreen.VersionAborted)
 		} else {
-			cpStatus, err := evergreen.VersionStatusToPatchStatus(cpVersion.Status)
-			if err != nil {
-				return "", errors.Wrapf(err, "getting version status for child patch '%s'", cpVersion.Id)
-			}
-			allStatuses = append(allStatuses, cpStatus)
+			allStatuses = append(allStatuses, cpVersion.Status)
 		}
 	}
 	return patch.GetCollectiveStatusFromPatchStatuses(allStatuses), nil
@@ -922,6 +922,35 @@ func getProjectMetadata(ctx context.Context, projectId *string, patchId *string)
 	return &apiProjectRef, nil
 }
 
+//////////////////////////////////
+// Helper functions for task logs.
+//////////////////////////////////
+
+func getTaskLogs(ctx context.Context, obj *TaskLogs, logType taskoutput.TaskLogType) ([]*apimodels.LogMessage, error) {
+	dbTask, err := task.FindOneIdAndExecution(obj.TaskID, obj.Execution)
+	if err != nil {
+		return nil, InternalServerError.Send(ctx, fmt.Sprintf("Finding task '%s': %s", obj.TaskID, err.Error()))
+	}
+	if evergreen.IsUnstartedTaskStatus(dbTask.Status) {
+		return []*apimodels.LogMessage{}, nil
+	}
+
+	it, err := dbTask.GetTaskLogs(ctx, evergreen.GetEnvironment(), taskoutput.TaskLogGetOptions{
+		LogType: logType,
+		TailN:   100,
+	})
+	if err != nil {
+		return nil, InternalServerError.Send(ctx, fmt.Sprintf("Getting logs for task '%s': %s", dbTask.Id, err.Error()))
+	}
+
+	lines, err := apimodels.ReadLogToSlice(it)
+	if err != nil {
+		return nil, InternalServerError.Send(ctx, fmt.Sprintf("Reading logs for task '%s': %s", dbTask.Id, err.Error()))
+	}
+
+	return lines, nil
+}
+
 //////////////////////////////////////////
 // Helper functions for task test results.
 //////////////////////////////////////////
@@ -1057,6 +1086,16 @@ func userHasDistroPermission(u *user.DBUser, distroId string, requiredLevel int)
 		Resource:      distroId,
 		ResourceType:  evergreen.DistroResourceType,
 		Permission:    evergreen.PermissionDistroSettings,
+		RequiredLevel: requiredLevel,
+	}
+	return u.HasPermission(opts)
+}
+
+func userHasProjectSettingsPermission(u *user.DBUser, projectId string, requiredLevel int) bool {
+	opts := gimlet.PermissionOpts{
+		Resource:      projectId,
+		ResourceType:  evergreen.ProjectResourceType,
+		Permission:    evergreen.PermissionProjectSettings,
 		RequiredLevel: requiredLevel,
 	}
 	return u.HasPermission(opts)

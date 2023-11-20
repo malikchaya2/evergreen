@@ -155,6 +155,7 @@ var projectWarningValidators = []projectValidator{
 	checkTaskRuns,
 	checkModules,
 	checkTasks,
+	checkRequestersForTaskDependencies,
 	checkBuildVariants,
 }
 
@@ -985,19 +986,35 @@ func checkModules(project *model.Project) ValidationErrors {
 			})
 		}
 
-		// Warn if repo is empty or does not conform to Git URL format
-		owner, repo, err := thirdparty.ParseGitUrl(module.Repo)
-		if err != nil {
+		if module.Owner == "" {
+			// Warn if repo is empty or does not conform to Git URL format
+			owner, repo, err := thirdparty.ParseGitUrl(module.Repo)
+			if err != nil {
+				errs = append(errs, ValidationError{
+					Level:   Warning,
+					Message: errors.Wrapf(err, "module '%s' does not have a valid repo URL format", module.Name).Error(),
+				})
+			} else if owner == "" || repo == "" {
+				errs = append(errs, ValidationError{
+					Level:   Warning,
+					Message: fmt.Sprintf("module '%s' repo '%s' is missing an owner or repo name", module.Name, module.Repo),
+				})
+			}
+		} else if !strings.Contains(module.Repo, "git@github.com:") && module.Owner == "" {
 			errs = append(errs, ValidationError{
 				Level:   Warning,
-				Message: errors.Wrapf(err, "module '%s' does not have a valid repo URL format", module.Name).Error(),
+				Message: fmt.Sprintf("module '%s' is missing an owner", module.Name),
 			})
-		} else if owner == "" || repo == "" {
+
+		}
+
+		if module.Repo == "" {
 			errs = append(errs, ValidationError{
 				Level:   Warning,
-				Message: fmt.Sprintf("module '%s' repo '%s' is missing an owner or repo name", module.Name, module.Repo),
+				Message: fmt.Sprintf("module '%s' should have a set repo", module.Name),
 			})
 		}
+
 	}
 
 	return errs
@@ -1165,11 +1182,11 @@ func checkBVBatchTimes(buildVariant *model.BuildVariant) ValidationErrors {
 	errs := ValidationErrors{}
 	// check task batchtimes first
 	for _, t := range buildVariant.Tasks {
-		// setting explicitly to true with batchtime will use batchtime
+		// setting activate explicitly to true with batchtime will use batchtime
 		if utility.FromBoolPtr(t.Activate) && (t.CronBatchTime != "" || t.BatchTime != nil) {
 			errs = append(errs,
 				ValidationError{
-					Message: fmt.Sprintf("task '%s' for variant '%s' activation ignored since batchtime specified",
+					Message: fmt.Sprintf("task '%s' for variant '%s' activation ignored since batchtime or cron specified",
 						t.Name, buildVariant.Name),
 					Level: Warning,
 				})
@@ -1311,13 +1328,6 @@ func validatePluginCommands(project *model.Project) ValidationErrors {
 		errs = append(errs, validateCommands("timeout", project, project.Timeout.List())...)
 	}
 
-	if project.EarlyTermination != nil {
-		errs = append(errs, ValidationError{
-			Message: "early_termination block is deprecated and will be removed in the future",
-			Level:   Warning,
-		})
-	}
-
 	// validate project tasks section
 	for _, task := range project.Tasks {
 		errs = append(errs, validateCommands("tasks", project, task.Commands)...)
@@ -1374,6 +1384,7 @@ func validateProjectTaskIdsAndTags(project *model.Project) ValidationErrors {
 func checkTaskRuns(project *model.Project) ValidationErrors {
 	var errs ValidationErrors
 	for _, bvtu := range project.FindAllBuildVariantTasks() {
+		hasValidAllowedRequester := len(bvtu.AllowedRequesters) == 0
 		if len(bvtu.AllowedRequesters) != 0 {
 			if bvtu.PatchOnly != nil {
 				errs = append(errs, ValidationError{
@@ -1403,35 +1414,49 @@ func checkTaskRuns(project *model.Project) ValidationErrors {
 						bvtu.Name, bvtu.Variant),
 				})
 			}
+			for _, requester := range bvtu.AllowedRequesters {
+				if requester.Validate() != nil {
+					errs = append(errs, ValidationError{
+						Level: Warning,
+						Message: fmt.Sprintf("task '%s' in build variant '%s' specifies invalid allowed_requester '%s'",
+							bvtu.Name, bvtu.Variant, requester),
+					})
+				} else {
+					hasValidAllowedRequester = true
+				}
+			}
 		}
-		if bvtu.SkipOnPatchBuild() && bvtu.SkipOnNonPatchBuild() {
-			errs = append(errs, ValidationError{
-				Level: Warning,
-				Message: fmt.Sprintf("task '%s' in build variant '%s' will never run because it skips both patch builds and non-patch builds",
-					bvtu.Name, bvtu.Variant),
-			})
-		}
-		if bvtu.SkipOnGitTagBuild() && bvtu.SkipOnNonGitTagBuild() {
-			errs = append(errs, ValidationError{
-				Level: Warning,
-				Message: fmt.Sprintf("task '%s' in build variant '%s' will never run because it skips both git tag builds and non git tag builds",
-					bvtu.Name, bvtu.Variant),
-			})
-		}
-		// Git-tag-only builds cannot run in patches.
-		if bvtu.SkipOnNonGitTagBuild() && bvtu.SkipOnNonPatchBuild() {
-			errs = append(errs, ValidationError{
-				Level: Warning,
-				Message: fmt.Sprintf("task '%s' in build variant '%s' will never run because it only runs for git tag builds but also is patch-only",
-					bvtu.Name, bvtu.Variant),
-			})
-		}
-		if bvtu.SkipOnNonGitTagBuild() && utility.FromBoolPtr(bvtu.Patchable) {
-			errs = append(errs, ValidationError{
-				Level: Warning,
-				Message: fmt.Sprintf("task '%s' in build variant '%s' cannot be patchable if it only runs for git tag builds",
-					bvtu.Name, bvtu.Variant),
-			})
+
+		if hasValidAllowedRequester {
+			if bvtu.SkipOnPatchBuild() && bvtu.SkipOnNonPatchBuild() {
+				errs = append(errs, ValidationError{
+					Level: Warning,
+					Message: fmt.Sprintf("task '%s' in build variant '%s' will never run because it skips both patch builds and non-patch builds",
+						bvtu.Name, bvtu.Variant),
+				})
+			}
+			if bvtu.SkipOnGitTagBuild() && bvtu.SkipOnNonGitTagBuild() {
+				errs = append(errs, ValidationError{
+					Level: Warning,
+					Message: fmt.Sprintf("task '%s' in build variant '%s' will never run because it skips both git tag builds and non git tag builds",
+						bvtu.Name, bvtu.Variant),
+				})
+			}
+			// Git-tag-only builds cannot run in patches.
+			if bvtu.SkipOnNonGitTagBuild() && bvtu.SkipOnNonPatchBuild() {
+				errs = append(errs, ValidationError{
+					Level: Warning,
+					Message: fmt.Sprintf("task '%s' in build variant '%s' will never run because it only runs for git tag builds but also is patch-only",
+						bvtu.Name, bvtu.Variant),
+				})
+			}
+			if bvtu.SkipOnNonGitTagBuild() && utility.FromBoolPtr(bvtu.Patchable) {
+				errs = append(errs, ValidationError{
+					Level: Warning,
+					Message: fmt.Sprintf("task '%s' in build variant '%s' cannot be patchable if it only runs for git tag builds",
+						bvtu.Name, bvtu.Variant),
+				})
+			}
 		}
 	}
 	return errs
@@ -1525,31 +1550,48 @@ func validateTaskDependencies(project *model.Project) ValidationErrors {
 // run for the same requesters. For example, a task that runs in a mainline
 // commit cannot depend on a patch only task since the dependency will only be
 // satisfiable in patches.
-func checkRequestersForTaskDependencies(task *model.ProjectTask, allTasks map[string]model.ProjectTask) ValidationErrors {
-	errs := ValidationErrors{}
+func checkRequestersForTaskDependencies(project *model.Project) ValidationErrors {
+	bvtus := map[model.TVPair]model.BuildVariantTaskUnit{}
+	bvs := map[string]struct{}{}
+	tasks := map[string]struct{}{}
+	for _, bvtu := range project.FindAllBuildVariantTasks() {
+		bvtus[model.TVPair{Variant: bvtu.Variant, TaskName: bvtu.Name}] = bvtu
+		bvs[bvtu.Variant] = struct{}{}
+		tasks[bvtu.Name] = struct{}{}
+	}
 
-	for _, dep := range task.DependsOn {
-		dependent, exists := allTasks[dep.Name]
-		if !exists {
-			continue
-		}
-		if utility.FromBoolPtr(dependent.PatchOnly) && !utility.FromBoolPtr(task.PatchOnly) {
-			errs = append(errs, ValidationError{
-				Level:   Warning,
-				Message: fmt.Sprintf("Task '%s' depends on patch-only task '%s'. Both will only run in patches", task.Name, dep.Name),
-			})
-		}
-		if !utility.FromBoolTPtr(dependent.Patchable) && utility.FromBoolTPtr(task.Patchable) {
-			errs = append(errs, ValidationError{
-				Level:   Warning,
-				Message: fmt.Sprintf("Task '%s' depends on non-patchable task '%s'. Neither will run in patches", task.Name, dep.Name),
-			})
-		}
-		if utility.FromBoolPtr(dependent.GitTagOnly) && !utility.FromBoolPtr(task.GitTagOnly) {
-			errs = append(errs, ValidationError{
-				Level:   Warning,
-				Message: fmt.Sprintf("Task '%s' depends on git-tag-only task '%s'. Both will only run when pushing git tags", task.Name, dep.Name),
-			})
+	var errs ValidationErrors
+	for _, bvtu := range bvtus {
+		for _, d := range bvtu.DependsOn {
+			dep := model.TVPair{Variant: d.Variant, TaskName: d.Name}
+			if dep.Variant == "" {
+				// Implicit build variant - if no build variant is explicitly
+				// stated, the task and dependency should both run in the same
+				// build variant.
+				dep.Variant = bvtu.Variant
+			}
+			dependent := project.FindTaskForVariant(dep.TaskName, dep.Variant)
+			if dependent == nil {
+				continue
+			}
+			if utility.FromBoolPtr(dependent.PatchOnly) && !utility.FromBoolPtr(bvtu.PatchOnly) {
+				errs = append(errs, ValidationError{
+					Level:   Warning,
+					Message: fmt.Sprintf("Task '%s' depends on patch-only task '%s'. Both will only run in patches", bvtu.Name, d.Name),
+				})
+			}
+			if !utility.FromBoolTPtr(dependent.Patchable) && utility.FromBoolTPtr(bvtu.Patchable) {
+				errs = append(errs, ValidationError{
+					Level:   Warning,
+					Message: fmt.Sprintf("Task '%s' depends on non-patchable task '%s'. Neither will run in patches", bvtu.Name, d.Name),
+				})
+			}
+			if utility.FromBoolPtr(dependent.GitTagOnly) && !utility.FromBoolPtr(bvtu.GitTagOnly) {
+				errs = append(errs, ValidationError{
+					Level:   Warning,
+					Message: fmt.Sprintf("Task '%s' depends on git-tag-only task '%s'. Both will only run when pushing git tags", bvtu.Name, d.Name),
+				})
+			}
 		}
 	}
 
@@ -1660,9 +1702,9 @@ func checkTaskGroups(p *model.Project) ValidationErrors {
 			})
 		}
 		names[tg.Name] = true
-		if tg.MaxHosts < 1 {
+		if tg.MaxHosts < -1 {
 			errs = append(errs, ValidationError{
-				Message: fmt.Sprintf("task group %s has number of hosts %d less than 1", tg.Name, tg.MaxHosts),
+				Message: fmt.Sprintf("task group '%s' has number of hosts %d less than 1", tg.Name, tg.MaxHosts),
 				Level:   Warning,
 			})
 		}
@@ -1671,7 +1713,7 @@ func checkTaskGroups(p *model.Project) ValidationErrors {
 		}
 		if tg.MaxHosts > len(tg.Tasks) {
 			errs = append(errs, ValidationError{
-				Message: fmt.Sprintf("task group %s has max number of hosts %d greater than the number of tasks %d", tg.Name, tg.MaxHosts, len(tg.Tasks)),
+				Message: fmt.Sprintf("task group '%s' has max number of hosts %d greater than the number of tasks %d", tg.Name, tg.MaxHosts, len(tg.Tasks)),
 				Level:   Warning,
 			})
 		}
@@ -2172,7 +2214,6 @@ func parseS3PullParameters(c model.PluginCommandConf) (task, bv string, err erro
 func checkTasks(project *model.Project) ValidationErrors {
 	errs := ValidationErrors{}
 	execTimeoutWarningAdded := false
-	allTasks := project.FindAllTasksMap()
 	for _, task := range project.Tasks {
 		if len(task.Commands) == 0 {
 			errs = append(errs,
@@ -2195,7 +2236,6 @@ func checkTasks(project *model.Project) ValidationErrors {
 			execTimeoutWarningAdded = true
 		}
 		errs = append(errs, checkLoggerConfig(&task)...)
-		errs = append(errs, checkRequestersForTaskDependencies(&task, allTasks)...)
 		errs = append(errs, checkTaskNames(project, &task)...)
 	}
 	if project.Loggers != nil {

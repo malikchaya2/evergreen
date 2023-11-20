@@ -297,6 +297,7 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 		},
 		"github conflicts with enabling": func(t *testing.T, ref model.ProjectRef) {
 			conflictingRef := model.ProjectRef{
+				Identifier:          "conflicting-project",
 				Owner:               ref.Owner,
 				Repo:                ref.Repo,
 				Branch:              ref.Branch,
@@ -319,11 +320,12 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 			}
 			_, err := SaveProjectSettingsForSection(ctx, ref.Id, apiChanges, model.ProjectPageGeneralSection, false, "me")
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "PR testing and commit checks")
+			assert.Contains(t, err.Error(), "PR testing (projects: conflicting-project) and commit checks (projects: conflicting-project)")
 			assert.NotContains(t, err.Error(), "the commit queue")
 		},
 		"github conflicts on Commit Queue page when defaulting to repo": func(t *testing.T, ref model.ProjectRef) {
 			conflictingRef := model.ProjectRef{
+				Identifier:          "conflicting-project",
 				Owner:               ref.Owner,
 				Repo:                ref.Repo,
 				Branch:              ref.Branch,
@@ -348,7 +350,7 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 			}
 			_, err := SaveProjectSettingsForSection(ctx, changes.Id, apiChanges, model.ProjectPageGithubAndCQSection, false, "me")
 			require.Error(t, err)
-			assert.Contains(t, err.Error(), "PR testing")
+			assert.Contains(t, err.Error(), "PR testing (projects: conflicting-project)")
 			assert.NotContains(t, err.Error(), "the commit queue")
 			assert.NotContains(t, err.Error(), "commit checks")
 		},
@@ -532,6 +534,36 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 			require.Len(t, subsFromDb, 1)
 			assert.Equal(t, subsFromDb[0].Trigger, event.TriggerSuccess)
 		},
+		model.ProjectPageTriggersSection: func(t *testing.T, ref model.ProjectRef) {
+			upstreamProject := model.ProjectRef{
+				Id:      "upstreamProject",
+				Enabled: true,
+			}
+			assert.NoError(t, upstreamProject.Insert())
+			apiProjectRef := restModel.APIProjectRef{
+				Triggers: []restModel.APITriggerDefinition{
+					{
+						Project:           utility.ToStringPtr(upstreamProject.Id),
+						Level:             utility.ToStringPtr(model.ProjectTriggerLevelTask),
+						TaskRegex:         utility.ToStringPtr(".*"),
+						BuildVariantRegex: utility.ToStringPtr(".*"),
+						ConfigFile:        utility.ToStringPtr("myConfigFile"),
+					},
+				},
+			}
+			apiChanges := &restModel.APIProjectSettings{
+				ProjectRef: apiProjectRef,
+			}
+			settings, err := SaveProjectSettingsForSection(ctx, ref.Id, apiChanges, model.ProjectPageTriggersSection, false, "me")
+			assert.Error(t, err)
+			assert.Nil(t, settings)
+
+			_, err = model.GetNewRevisionOrderNumber(ref.Id)
+			assert.NoError(t, err)
+			settings, err = SaveProjectSettingsForSection(ctx, ref.Id, apiChanges, model.ProjectPageTriggersSection, false, "me")
+			assert.NoError(t, err)
+			assert.NotNil(t, settings)
+		},
 		model.ProjectPageWorkstationsSection: func(t *testing.T, ref model.ProjectRef) {
 			assert.Nil(t, ref.WorkstationConfig.SetupCommands)
 			apiProjectRef := restModel.APIProjectRef{
@@ -642,17 +674,18 @@ func TestSaveProjectSettingsForSection(t *testing.T) {
 	} {
 		assert.NoError(t, db.ClearCollections(model.ProjectRefCollection, model.ProjectVarsCollection,
 			event.SubscriptionsCollection, event.EventCollection, evergreen.ScopeCollection, user.Collection,
-			model.GithubHooksCollection, evergreen.ConfigCollection))
+			model.RepositoriesCollection, evergreen.ConfigCollection))
 		require.NoError(t, db.CreateCollections(evergreen.ScopeCollection))
 
 		pRef := model.ProjectRef{
-			Id:         "myId",
-			Owner:      "evergreen-ci",
-			Repo:       "evergreen",
-			Branch:     "main",
-			Restricted: utility.FalsePtr(),
-			RepoRefId:  "myRepoId",
-			Admins:     []string{"oldAdmin"},
+			Id:                  "myId",
+			Owner:               "evergreen-ci",
+			Repo:                "evergreen",
+			Branch:              "main",
+			Restricted:          utility.FalsePtr(),
+			RepoRefId:           "myRepoId",
+			Admins:              []string{"oldAdmin"},
+			RepotrackerDisabled: utility.TruePtr(),
 		}
 		assert.NoError(t, pRef.Insert())
 		repoRef := model.RepoRef{ProjectRef: model.ProjectRef{

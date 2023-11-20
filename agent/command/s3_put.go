@@ -157,7 +157,7 @@ func (s3pc *s3put) validate() error {
 		catcher.New("preserve path can only be used with local files include filter")
 	}
 	if s3pc.skipMissing && s3pc.isMulti() {
-		catcher.New("cannot use optional upload with local files include filter")
+		catcher.New("cannot use optional with local files include filter as by default it is optional")
 	}
 	if s3pc.RemoteFile == "" {
 		catcher.New("remote file cannot be blank")
@@ -197,7 +197,7 @@ func (s3pc *s3put) validate() error {
 // to all appropriate fields of the s3put.
 func (s3pc *s3put) expandParams(conf *internal.TaskConfig) error {
 	var err error
-	if err = util.ExpandValues(s3pc, conf.Expansions); err != nil {
+	if err = util.ExpandValues(s3pc, &conf.Expansions); err != nil {
 		return errors.Wrap(err, "applying expansions")
 	}
 
@@ -509,13 +509,14 @@ func (s3pc *s3put) attachFiles(ctx context.Context, comm client.Communicator, lo
 		}
 
 		files = append(files, &artifact.File{
-			Name:       displayName,
-			Link:       fileLink,
-			Visibility: s3pc.Visibility,
-			AwsKey:     key,
-			AwsSecret:  secret,
-			Bucket:     bucket,
-			FileKey:    fileKey,
+			Name:        displayName,
+			Link:        fileLink,
+			Visibility:  s3pc.Visibility,
+			AwsKey:      key,
+			AwsSecret:   secret,
+			Bucket:      bucket,
+			FileKey:     fileKey,
+			ContentType: s3pc.ContentType,
 		})
 	}
 

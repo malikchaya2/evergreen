@@ -8,7 +8,7 @@ import (
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	agentutil "github.com/evergreen-ci/evergreen/agent/util"
 	"github.com/evergreen-ci/evergreen/util"
-	"github.com/mholt/archiver"
+	"github.com/mholt/archiver/v3"
 	"github.com/mitchellh/mapstructure"
 	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
@@ -58,7 +58,7 @@ func (c *zipArchiveCreate) ParseParams(params map[string]interface{}) error {
 func (c *zipArchiveCreate) Execute(ctx context.Context,
 	client client.Communicator, logger client.LoggerProducer, conf *internal.TaskConfig) error {
 
-	if err := util.ExpandValues(c, conf.Expansions); err != nil {
+	if err := util.ExpandValues(c, &conf.Expansions); err != nil {
 		return errors.Wrap(err, "applying expansions")
 	}
 
@@ -82,7 +82,7 @@ func (c *zipArchiveCreate) Execute(ctx context.Context,
 		filenames[idx] = files[idx].Path
 	}
 
-	if err := archiver.Zip.Make(c.Target, filenames); err != nil {
+	if err := archiver.NewZip().Archive(filenames, c.Target); err != nil {
 		return errors.Wrapf(err, "constructing zip archive '%s'", c.Target)
 	}
 

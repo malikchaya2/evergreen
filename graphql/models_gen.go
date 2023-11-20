@@ -127,8 +127,10 @@ type GroupedBuildVariant struct {
 }
 
 type GroupedFiles struct {
-	Files    []*model.APIFile `json:"files,omitempty"`
-	TaskName *string          `json:"taskName,omitempty"`
+	Files     []*model.APIFile `json:"files,omitempty"`
+	TaskName  *string          `json:"taskName,omitempty"`
+	TaskID    string           `json:"taskId"`
+	Execution int              `json:"execution"`
 }
 
 // GroupedProjects is the return value for the projects & viewableProjectRefs queries.
@@ -173,6 +175,7 @@ type MainlineCommitsOptions struct {
 	Limit             *int     `json:"limit,omitempty"`
 	ProjectIdentifier string   `json:"projectIdentifier"`
 	Requesters        []string `json:"requesters,omitempty"`
+	Revision          *string  `json:"revision,omitempty"`
 	ShouldCollapse    *bool    `json:"shouldCollapse,omitempty"`
 	SkipOrderNumber   *int     `json:"skipOrderNumber,omitempty"`
 }
@@ -238,16 +241,19 @@ type PatchesInput struct {
 	IncludeCommitQueue *bool    `json:"includeCommitQueue,omitempty"`
 	Limit              int      `json:"limit"`
 	OnlyCommitQueue    *bool    `json:"onlyCommitQueue,omitempty"`
+	IncludeHidden      *bool    `json:"includeHidden,omitempty"`
 	Page               int      `json:"page"`
 	PatchName          string   `json:"patchName"`
 	Statuses           []string `json:"statuses"`
 }
 
 type Permissions struct {
-	CanCreateDistro   bool               `json:"canCreateDistro"`
-	CanCreateProject  bool               `json:"canCreateProject"`
-	DistroPermissions *DistroPermissions `json:"distroPermissions"`
-	UserID            string             `json:"userId"`
+	CanCreateDistro      bool                `json:"canCreateDistro"`
+	CanCreateProject     bool                `json:"canCreateProject"`
+	CanEditAdminSettings bool                `json:"canEditAdminSettings"`
+	DistroPermissions    *DistroPermissions  `json:"distroPermissions"`
+	ProjectPermissions   *ProjectPermissions `json:"projectPermissions"`
+	UserID               string              `json:"userId"`
 }
 
 // PodEvents is the return value for the events query.
@@ -272,10 +278,24 @@ type ProjectEvents struct {
 	EventLogEntries []*model.APIProjectEvent `json:"eventLogEntries"`
 }
 
+type ProjectPermissions struct {
+	Edit bool `json:"edit"`
+	View bool `json:"view"`
+}
+
+type ProjectPermissionsOptions struct {
+	ProjectIdentifier string `json:"projectIdentifier"`
+}
+
 // PublicKeyInput is an input to the createPublicKey and updatePublicKey mutations.
 type PublicKeyInput struct {
 	Key  string `json:"key"`
 	Name string `json:"name"`
+}
+
+type SSHKey struct {
+	Location string `json:"location"`
+	Name     string `json:"name"`
 }
 
 // SaveDistroInput is the input to the saveDistro mutation.
@@ -288,6 +308,17 @@ type SaveDistroInput struct {
 type SaveDistroPayload struct {
 	Distro    *model.APIDistro `json:"distro"`
 	HostCount int              `json:"hostCount"`
+}
+
+// SetLastRevisionInput is the input to the setLastRevision mutation.
+// It contains information used to fix the repotracker error of a project.
+type SetLastRevisionInput struct {
+	ProjectIdentifier string `json:"projectIdentifier"`
+	Revision          string `json:"revision"`
+}
+
+type SetLastRevisionPayload struct {
+	MergeBaseRevision string `json:"mergeBaseRevision"`
 }
 
 // SortOrder[] is an input value for version.tasks. It is used to define whether to sort by ASC/DEC for a given sort key.

@@ -16,7 +16,9 @@ import (
 	"github.com/evergreen-ci/evergreen/model/host"
 	"github.com/evergreen-ci/evergreen/model/manifest"
 	"github.com/evergreen-ci/evergreen/model/patch"
+	"github.com/evergreen-ci/evergreen/model/pod"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testlog"
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
@@ -56,7 +58,6 @@ func (h *agentCedarConfig) Run(ctx context.Context) gimlet.Responder {
 }
 
 // GET /rest/v2/agent/data_pipes_config
-
 type agentDataPipesConfig struct {
 	config evergreen.DataPipesConfig
 }
@@ -111,7 +112,6 @@ func (h *agentSetup) Run(ctx context.Context) gimlet.Responder {
 		SplunkServerURL:   h.settings.Splunk.SplunkConnectionInfo.ServerURL,
 		SplunkClientToken: h.settings.Splunk.SplunkConnectionInfo.Token,
 		SplunkChannel:     h.settings.Splunk.SplunkConnectionInfo.Channel,
-		Buckets:           h.settings.Buckets,
 		TaskSync:          h.settings.Providers.AWS.TaskSync,
 		EC2Keys:           h.settings.Providers.AWS.EC2Keys,
 	}
@@ -594,6 +594,7 @@ func (h *getDistroViewHandler) Run(ctx context.Context) gimlet.Responder {
 	dv := apimodels.DistroView{
 		CloneMethod:         host.Distro.CloneMethod,
 		DisableShallowClone: host.Distro.DisableShallowClone,
+		Mountpoints:         host.Distro.Mountpoints,
 	}
 	return gimlet.NewJSONResponse(dv)
 }
@@ -645,7 +646,7 @@ func (h *attachFilesHandler) Run(ctx context.Context) gimlet.Responder {
 		BuildId:         t.BuildId,
 		Execution:       t.Execution,
 		CreateTime:      time.Now(),
-		Files:           h.files,
+		Files:           artifact.EscapeFiles(h.files),
 	}
 
 	if err = entry.Upsert(); err != nil {
@@ -656,11 +657,54 @@ func (h *attachFilesHandler) Run(ctx context.Context) gimlet.Responder {
 	return gimlet.NewJSONResponse(fmt.Sprintf("Artifact files for task %s successfully attached", t.Id))
 }
 
+// POST /rest/v2/task/{task_id}/set_results_info
+type setTaskResultsInfoHandler struct {
+	taskID string
+	info   apimodels.TaskTestResultsInfo
+}
+
+func makeSetTaskResultsInfoHandler() gimlet.RouteHandler {
+	return &setTaskResultsInfoHandler{}
+}
+
+func (h *setTaskResultsInfoHandler) Factory() gimlet.RouteHandler {
+	return &setTaskResultsInfoHandler{}
+}
+
+func (h *setTaskResultsInfoHandler) Parse(ctx context.Context, r *http.Request) error {
+	h.taskID = gimlet.GetVars(r)["task_id"]
+
+	if err := gimlet.GetJSON(r.Body, &h.info); err != nil {
+		return errors.Wrap(err, "reading test results info from JSON request body")
+	}
+
+	return nil
+}
+
+func (h *setTaskResultsInfoHandler) Run(ctx context.Context) gimlet.Responder {
+	t, err := task.FindOneId(h.taskID)
+	if err != nil {
+		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "finding task '%s'", h.taskID))
+	}
+	if t == nil {
+		return gimlet.MakeJSONInternalErrorResponder(gimlet.ErrorResponse{
+			StatusCode: http.StatusNotFound,
+			Message:    fmt.Sprintf("task '%s' not found", h.taskID),
+		})
+	}
+
+	if err = t.SetResultsInfo(h.info.Service, h.info.Failed); err != nil {
+		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "setting results info for task '%s'", h.taskID))
+	}
+
+	return gimlet.NewTextResponse("Results info set in task")
+}
+
 // POST /task/{task_id}/test_logs
 type attachTestLogHandler struct {
 	settings *evergreen.Settings
 	taskID   string
-	log      model.TestLog
+	log      testlog.TestLog
 }
 
 func makeAttachTestLog(settings *evergreen.Settings) gimlet.RouteHandler {
@@ -811,64 +855,6 @@ func (h *fetchTaskHandler) Run(ctx context.Context) gimlet.Responder {
 	return gimlet.NewJSONResponse(t)
 }
 
-// POST /task/{task_id}/log
-type appendTaskLogHandler struct {
-	settings *evergreen.Settings
-	taskID   string
-	taskLog  model.TaskLog
-}
-
-func makeAppendTaskLog(settings *evergreen.Settings) gimlet.RouteHandler {
-	return &appendTaskLogHandler{
-		settings: settings,
-	}
-}
-
-func (h *appendTaskLogHandler) Factory() gimlet.RouteHandler {
-	return &appendTaskLogHandler{
-		settings: h.settings,
-	}
-}
-
-func (h *appendTaskLogHandler) Parse(ctx context.Context, r *http.Request) error {
-	if h.taskID = gimlet.GetVars(r)["task_id"]; h.taskID == "" {
-		return errors.New("missing task ID")
-	}
-	if err := utility.ReadJSON(r.Body, &h.taskLog); err != nil {
-		return errors.Wrap(err, "reading task log from JSON request body")
-	}
-	return nil
-}
-
-// Run appends the received logs to the task's internal logs.
-func (h *appendTaskLogHandler) Run(ctx context.Context) gimlet.Responder {
-	if h.settings.ServiceFlags.TaskLoggingDisabled {
-		return gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
-			StatusCode: http.StatusConflict,
-			Message:    "task logging is disabled",
-		})
-	}
-	t, err := task.FindOneId(h.taskID)
-	if err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "finding task '%s'", h.taskID))
-	}
-	if t == nil {
-		return gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
-			StatusCode: http.StatusNotFound,
-			Message:    fmt.Sprintf("task '%s' not found", h.taskID),
-		})
-	}
-
-	h.taskLog.TaskId = t.Id
-	h.taskLog.Execution = t.Execution
-
-	if err = h.taskLog.Insert(); err != nil {
-		return gimlet.MakeJSONInternalErrorResponder(err)
-	}
-
-	return gimlet.NewJSONResponse("Logs added")
-}
-
 // POST /task/{task_id}/start
 type startTaskHandler struct {
 	env           evergreen.Environment
@@ -941,13 +927,15 @@ func (h *startTaskHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	var msg string
+	var foundHost *host.Host
+	var foundPod *pod.Pod
 	if h.hostID != "" {
-		host, err := host.FindOneByTaskIdAndExecution(ctx, t.Id, t.Execution)
+		foundHost, err = host.FindOneByTaskIdAndExecution(ctx, t.Id, t.Execution)
 		if err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "finding host running task %s", t.Id))
 		}
 
-		if host == nil {
+		if foundHost == nil {
 			message := fmt.Sprintf("no host found running task %s", t.Id)
 			if t.HostId != "" {
 				message = fmt.Sprintf("no host found running task %s but task is said to be running on %s",
@@ -960,28 +948,40 @@ func (h *startTaskHandler) Run(ctx context.Context) gimlet.Responder {
 			})
 		}
 
-		msg = fmt.Sprintf("task %s started on host %s", t.Id, host.Id)
+		msg = fmt.Sprintf("task %s started on host %s", t.Id, foundHost.Id)
 
-		if host.Distro.IsEphemeral() {
-			if err = host.IncTaskCount(); err != nil {
-				return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "incrementing task count for task '%s' on host '%s'", t.Id, host.Id))
+		if foundHost.Distro.IsEphemeral() {
+			if err = foundHost.IncTaskCount(); err != nil {
+				return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "incrementing task count for task '%s' on host '%s'", t.Id, foundHost.Id))
 			}
-			if err = host.IncIdleTime(host.WastedComputeTime()); err != nil {
-				return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "incrementing total idle time on host '%s'", host.Id))
+			if err = foundHost.IncIdleTime(foundHost.WastedComputeTime()); err != nil {
+				return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "incrementing total idle time on host '%s'", foundHost.Id))
 			}
-			grip.Info(host.TaskStartMessage())
+			grip.Info(foundHost.TaskStartMessage())
 		}
-
-		logTaskStartMessage(host, t)
 	} else {
-		// TODO: EVG-17647 Create job to collect data on idle pods
+		foundPod, err = pod.FindOneByID(h.podID)
+		if err != nil {
+			return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "finding pod running task %s", t.Id))
+		}
+		if foundPod == nil {
+			message := fmt.Sprintf("no pod found running task %s", t.Id)
+			if t.PodID != "" {
+				message = fmt.Sprintf("no pod found running task %s but task is said to be running on %s",
+					t.Id, t.PodID)
+			}
+			return gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{
+				StatusCode: http.StatusNotFound,
+				Message:    message,
+			})
+		}
 		msg = fmt.Sprintf("task '%s' started on pod '%s'", t.Id, h.podID)
 	}
-
+	logTaskStartMessage(foundHost, foundPod, t)
 	return gimlet.NewJSONResponse(msg)
 }
 
-func logTaskStartMessage(h *host.Host, t *task.Task) {
+func logTaskStartMessage(h *host.Host, p *pod.Pod, t *task.Task) {
 	msg := message.Fields{
 		"stat":                   "task-start-stats",
 		"task_id":                t.Id,
@@ -992,14 +992,10 @@ func logTaskStartMessage(h *host.Host, t *task.Task) {
 		"activated_latency_secs": t.StartTime.Sub(t.ActivatedTime).Seconds(),
 		"scheduled_latency_secs": t.StartTime.Sub(t.ScheduledTime).Seconds(),
 		"started_latency_secs":   t.StartTime.Sub(t.DispatchTime).Seconds(),
-		"distro":                 h.Distro.Id,
 		"generator":              t.GenerateTask,
 		"group":                  t.TaskGroup,
 		"group_max_hosts":        t.TaskGroupMaxHosts,
-		"host_id":                h.Id,
 		"project":                t.Project,
-		"provider":               h.Distro.Provider,
-		"provisioning":           h.Distro.BootstrapSettings.Method,
 		"requester":              t.Requester,
 		"priority":               t.Priority,
 		"task":                   t.DisplayName,
@@ -1011,22 +1007,29 @@ func logTaskStartMessage(h *host.Host, t *task.Task) {
 		msg["dependencies_met_time"] = t.DependenciesMetTime
 	}
 
-	if strings.HasPrefix(h.Distro.Provider, "ec2") {
-		msg["provider"] = "ec2"
-	}
-
 	if t.ActivatedBy != "" {
 		msg["activated_by"] = t.ActivatedBy
 	}
 
-	if h.Provider != evergreen.ProviderNameStatic {
-		msg["host_task_count"] = h.TaskCount
-
-		if h.TaskCount == 1 {
-			msg["host_provision_time"] = h.TotalIdleTime.Seconds()
+	if h != nil {
+		msg["distro"] = h.Distro.Id
+		msg["host_id"] = h.Id
+		msg["provider"] = h.Distro.Provider
+		msg["provisioning"] = h.Distro.BootstrapSettings.Method
+		if strings.HasPrefix(h.Distro.Provider, "ec2") {
+			msg["provider"] = "ec2"
 		}
-	}
+		if h.Provider != evergreen.ProviderNameStatic {
+			msg["host_task_count"] = h.TaskCount
 
+			if h.TaskCount == 1 {
+				msg["host_provision_time"] = h.TotalIdleTime.Seconds()
+			}
+		}
+	} else if p != nil {
+		msg["pod_id"] = p.ID
+		msg["pod_provision_time"] = time.Since(p.TimeInfo.Starting).Seconds()
+	}
 	grip.Info(msg)
 }
 
@@ -1123,7 +1126,7 @@ func (h *gitServePatchHandler) Run(ctx context.Context) gimlet.Responder {
 			return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "finding tasks for version"))
 		}
 
-		status := evergreen.PatchSucceeded
+		p.MergeStatus = evergreen.VersionSucceeded
 		for _, b := range builds {
 			if b.BuildVariant == evergreen.MergeTaskVariant {
 				continue
@@ -1133,17 +1136,15 @@ func (h *gitServePatchHandler) Run(ctx context.Context) gimlet.Responder {
 				return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "checking build tasks"))
 			}
 			if !complete {
-				status = evergreen.PatchStarted
+				p.MergeStatus = evergreen.VersionStarted
 				break
 			}
 			if buildStatus == evergreen.BuildFailed {
-				status = evergreen.PatchFailed
+				p.MergeStatus = evergreen.VersionFailed
 				break
 			}
 		}
-		p.MergeStatus = status
 	}
-	p.MergeStatus = evergreen.PatchSucceeded
 
 	return gimlet.NewJSONResponse(p)
 }
@@ -1345,4 +1346,51 @@ func (h *setDownstreamParamsHandler) Run(ctx context.Context) gimlet.Responder {
 	}
 
 	return gimlet.NewJSONResponse(fmt.Sprintf("Downstream patches for %v have successfully been set", p.Id))
+}
+
+// GET /rest/v2/task/{task_id}/installation_token/{owner}/{repo}
+
+type createInstallationToken struct {
+	owner string
+	repo  string
+
+	env evergreen.Environment
+}
+
+func makeCreateInstallationToken(env evergreen.Environment) gimlet.RouteHandler {
+	return &createInstallationToken{
+		env: env,
+	}
+}
+
+func (g *createInstallationToken) Factory() gimlet.RouteHandler {
+	return &createInstallationToken{
+		env: g.env,
+	}
+}
+
+func (g *createInstallationToken) Parse(ctx context.Context, r *http.Request) error {
+	if g.owner = gimlet.GetVars(r)["owner"]; g.owner == "" {
+		return errors.New("missing owner")
+	}
+
+	if g.repo = gimlet.GetVars(r)["repo"]; g.repo == "" {
+		return errors.New("missing repo")
+	}
+
+	return nil
+}
+
+func (g *createInstallationToken) Run(ctx context.Context) gimlet.Responder {
+	token, err := g.env.Settings().CreateInstallationToken(ctx, g.owner, g.repo, nil)
+	if err != nil {
+		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "creating installation token for '%s/%s'", g.owner, g.repo))
+	}
+	if token == "" {
+		return gimlet.MakeJSONErrorResponder(errors.Errorf("no installation token returned for '%s/%s'", g.owner, g.repo))
+	}
+
+	return gimlet.NewJSONResponse(&apimodels.InstallationToken{
+		Token: token,
+	})
 }

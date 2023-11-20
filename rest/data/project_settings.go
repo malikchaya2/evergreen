@@ -14,9 +14,12 @@ import (
 	"github.com/evergreen-ci/evergreen/model/pod"
 	"github.com/evergreen-ci/evergreen/model/user"
 	restModel "github.com/evergreen-ci/evergreen/rest/model"
+	"github.com/evergreen-ci/evergreen/units"
 	"github.com/evergreen-ci/gimlet"
 	"github.com/evergreen-ci/utility"
+	"github.com/mongodb/amboy"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -236,11 +239,14 @@ func SaveProjectSettingsForSection(ctx context.Context, projectId string, change
 	switch section {
 	case model.ProjectPageGeneralSection:
 		if mergedSection.Identifier != mergedBeforeRef.Identifier {
-			if err = handleIdentifierConflict(mergedSection); err != nil {
+			if err = validateModifiedIdentifier(mergedSection); err != nil {
 				return nil, err
 			}
 		}
 
+		if err = mergedSection.ValidateEnabledRepotracker(); err != nil {
+			return nil, err
+		}
 		// Validate owner/repo if the project is enabled or owner/repo is populated.
 		// This validation is cheap so it makes sense to be strict about this.
 		if mergedSection.Enabled || (mergedSection.Owner != "" && mergedSection.Repo != "") {
@@ -252,7 +258,7 @@ func SaveProjectSettingsForSection(ctx context.Context, projectId string, change
 				return nil, errors.Wrap(err, "validating new owner/repo")
 			}
 		}
-		// Only need to check Github conflicts once so we use else if statements to handle this.
+		// Only need to check GitHub conflicts once so we use else if statements to handle this.
 		// Handle conflicts using the ref from the DB, since only general section settings are passed in from the UI.
 		if mergedSection.Owner != mergedBeforeRef.Owner || mergedSection.Repo != mergedBeforeRef.Repo {
 			if err = handleGithubConflicts(mergedBeforeRef, "Changing owner/repo"); err != nil {
@@ -260,9 +266,9 @@ func SaveProjectSettingsForSection(ctx context.Context, projectId string, change
 			}
 			// Check if webhook is enabled if the owner/repo has changed.
 			// Using the new project ref ensures we update tracking at the end.
-			_, err = model.EnableWebhooks(ctx, newProjectRef)
+			_, err = model.SetTracksPushEvents(ctx, newProjectRef)
 			if err != nil {
-				return nil, errors.Wrapf(err, "enabling webhooks for project '%s'", projectId)
+				return nil, errors.Wrapf(err, "setting project tracks push events for project '%s' in '%s/%s'", projectId, newProjectRef.Owner, newProjectRef.Repo)
 			}
 			modified = true
 		} else if mergedSection.Enabled && !mergedBeforeRef.Enabled {
@@ -407,9 +413,18 @@ func SaveProjectSettingsForSection(ctx context.Context, projectId string, change
 			return nil, errors.Wrap(catcher.Resolve(), "invalid periodic build definition")
 		}
 	case model.ProjectPageTriggersSection:
+		if !isRepo { // Check this for project refs only, as repo projects won't have last version information stored.
+			repository, err := model.FindRepository(projectId)
+			if err != nil {
+				return nil, errors.Wrapf(err, "finding repository for project '%s'", projectId)
+			}
+			if repository == nil {
+				catcher.New("project must have existing versions in order to trigger versions")
+			}
+		}
+
 		for i := range mergedSection.Triggers {
-			err = mergedSection.Triggers[i].Validate(projectId)
-			catcher.Add(err)
+			catcher.Add(mergedSection.Triggers[i].Validate(projectId))
 		}
 		if catcher.HasErrors() {
 			return nil, errors.Wrap(catcher.Resolve(), "invalid project trigger")
@@ -438,16 +453,39 @@ func SaveProjectSettingsForSection(ctx context.Context, projectId string, change
 			}
 		}
 	}
+
+	// If we're just enabled the project, we should run the repotracker to kick things off.
+	if modifiedProjectRef && mergedSection.Enabled && !mergedBeforeRef.Enabled {
+		ts := utility.RoundPartOfHour(1).Format(units.TSFormat)
+		j := units.NewRepotrackerJob(fmt.Sprintf("project-enabled-%s", ts), projectId)
+
+		queue := evergreen.GetEnvironment().RemoteQueue()
+		if err := amboy.EnqueueUniqueJob(ctx, queue, j); err != nil {
+			grip.Warning(message.WrapError(err, message.Fields{
+				"message": "problem enqueueing repotracker job for enabled project",
+				"project": projectId,
+				"owner":   mergedSection.Owner,
+				"repo":    mergedSection.Repo,
+				"branch":  mergedSection.Branch,
+			}))
+		}
+	}
 	return &res, errors.Wrapf(catcher.Resolve(), "saving section '%s'", section)
 }
 
-func handleIdentifierConflict(pRef *model.ProjectRef) error {
+func validateModifiedIdentifier(pRef *model.ProjectRef) error {
 	conflictingRef, err := model.FindBranchProjectRef(pRef.Identifier)
 	if err != nil {
 		return errors.Wrapf(err, "checking for conflicting project ref")
 	}
 	if conflictingRef != nil && conflictingRef.Id != pRef.Id {
 		return errors.Errorf("identifier '%s' is already being used for another project", conflictingRef.Id)
+	}
+	if !projectIDRegexp.MatchString(pRef.Identifier) {
+		return gimlet.ErrorResponse{
+			StatusCode: http.StatusBadRequest,
+			Message:    fmt.Sprintf("project identifier '%s' contains invalid characters", pRef.Identifier),
+		}
 	}
 	return nil
 }
@@ -463,13 +501,16 @@ func handleGithubConflicts(pRef *model.ProjectRef, reason string) error {
 		return errors.Wrapf(err, "getting GitHub project conflicts")
 	}
 	if pRef.IsPRTestingEnabled() && len(conflicts.PRTestingIdentifiers) > 0 {
-		conflictMsgs = append(conflictMsgs, "PR testing")
+		conflictingIdentifiers := strings.Join(conflicts.PRTestingIdentifiers, ", ")
+		conflictMsgs = append(conflictMsgs, fmt.Sprintf("PR testing (projects: %s)", conflictingIdentifiers))
 	}
 	if pRef.CommitQueue.IsEnabled() && len(conflicts.CommitQueueIdentifiers) > 0 {
-		conflictMsgs = append(conflictMsgs, "the commit queue")
+		conflictingIdentifiers := strings.Join(conflicts.CommitQueueIdentifiers, ", ")
+		conflictMsgs = append(conflictMsgs, fmt.Sprintf("the commit queue (projects: %s)", conflictingIdentifiers))
 	}
 	if pRef.IsGithubChecksEnabled() && len(conflicts.CommitCheckIdentifiers) > 0 {
-		conflictMsgs = append(conflictMsgs, "commit checks")
+		conflictingIdentifiers := strings.Join(conflicts.CommitCheckIdentifiers, ", ")
+		conflictMsgs = append(conflictMsgs, fmt.Sprintf("commit checks (projects: %s)", conflictingIdentifiers))
 	}
 
 	if len(conflictMsgs) > 0 {

@@ -12,6 +12,7 @@ import (
 	"github.com/evergreen-ci/evergreen/agent/internal/client"
 	"github.com/evergreen-ci/evergreen/model"
 	"github.com/evergreen-ci/evergreen/model/task"
+	"github.com/evergreen-ci/evergreen/model/testlog"
 	"github.com/evergreen-ci/evergreen/model/testresult"
 	"github.com/evergreen-ci/evergreen/testutil"
 	"github.com/mongodb/grip/send"
@@ -223,14 +224,14 @@ func TestXMLToModelConversion(t *testing.T) {
 		So(err, ShouldBeNil)
 		So(len(res), ShouldBeGreaterThan, 0)
 		conf := &internal.TaskConfig{
-			ProjectRef: &model.ProjectRef{},
-			Task:       &task.Task{Id: "TEST", Execution: 5},
+			ProjectRef: model.ProjectRef{},
+			Task:       task.Task{Id: "TEST", Execution: 5},
 		}
 		sender := send.MakeInternalLogger()
 		logger := client.NewSingleChannelLogHarness("", sender)
 		Convey("when converting the results to model struct", func() {
 			tests := []testresult.TestResult{}
-			logs := []*model.TestLog{}
+			logs := []*testlog.TestLog{}
 			numNan := 0
 			numInf := 0
 			for _, testCase := range res[0].TestCases {

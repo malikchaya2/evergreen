@@ -649,21 +649,281 @@ buildvariants:
 }
 
 func TestCheckRequestersForTaskDependencies(t *testing.T) {
-	t.Run("DependingOnNonPatchableTaskGeneratesWarning", func(t *testing.T) {
-		p := model.Project{
-			Tasks: []model.ProjectTask{
-				{Name: "t1", DependsOn: []model.TaskUnitDependency{
-					{Name: "t2", Variant: model.AllVariants},
-				}},
-				{Name: "t2", Patchable: utility.FalsePtr()},
-			},
-		}
-		allTasks := p.FindAllTasksMap()
-		errs := checkRequestersForTaskDependencies(&p.Tasks[0], allTasks)
-		errs = append(errs, checkRequestersForTaskDependencies(&p.Tasks[1], allTasks)...)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	t.Run("SucceedsWithNilDependencySetting", func(t *testing.T) {
+		projYAML := `
+tasks:
+  - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+
+  - name: task
+    patch_only: true
+    depends_on:
+      - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+buildvariants:
+  - name: ubuntu2204
+    display_name: Ubuntu 22.04
+    run_on:
+      - localhost
+    tasks:
+      - name: "task"
+      - name: "dep"
+`
+		var p model.Project
+		_, err := model.LoadProjectInto(ctx, []byte(projYAML), nil, "", &p)
+		require.NoError(t, err)
+		errs := checkRequestersForTaskDependencies(&p)
+
+		assert.Empty(t, errs)
+	})
+	t.Run("SucceedsAtTaskLevelMatch", func(t *testing.T) {
+		projYAML := `
+tasks:
+  - name: dep
+    patch_only: true
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+
+  - name: task
+    patch_only: true
+    depends_on:
+      - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+buildvariants:
+  - name: ubuntu2204
+    display_name: Ubuntu 22.04
+    run_on:
+      - localhost
+    tasks:
+      - name: "task"
+      - name: "dep"
+`
+		var p model.Project
+		_, err := model.LoadProjectInto(ctx, []byte(projYAML), nil, "", &p)
+		require.NoError(t, err)
+		errs := checkRequestersForTaskDependencies(&p)
+
+		assert.Empty(t, errs)
+	})
+	t.Run("SucceedsAtBuildVariantLevelMatch", func(t *testing.T) {
+		projYAML := `
+tasks:
+  - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+
+  - name: task
+    patch_only: true
+    depends_on:
+      - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+buildvariants:
+  - name: ubuntu2204
+    patch_only: true
+    display_name: Ubuntu 22.04
+    run_on:
+      - localhost
+    tasks:
+      - name: "task"
+      - name: "dep"
+`
+		var p model.Project
+		_, err := model.LoadProjectInto(ctx, []byte(projYAML), nil, "", &p)
+		require.NoError(t, err)
+		errs := checkRequestersForTaskDependencies(&p)
+
+		assert.Empty(t, errs)
+	})
+	t.Run("SucceedsAtBuildVariantTaskLevelMatch", func(t *testing.T) {
+		projYAML := `
+tasks:
+  - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+
+  - name: task
+    patch_only: true
+    depends_on:
+      - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+buildvariants:
+  - name: ubuntu2204
+    display_name: Ubuntu 22.04
+    run_on:
+      - localhost
+    tasks:
+      - name: "task"
+      - name: "dep"
+        patch_only: true
+`
+		var p model.Project
+		_, err := model.LoadProjectInto(ctx, []byte(projYAML), nil, "", &p)
+		require.NoError(t, err)
+		errs := checkRequestersForTaskDependencies(&p)
+
+		assert.Empty(t, errs)
+	})
+	t.Run("WarnsWithTaskLevelConflict", func(t *testing.T) {
+		projYAML := `
+tasks:
+  - name: dep
+    patch_only: true
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+  - name: task
+    patch_only: false
+    depends_on:
+      - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+
+buildvariants:
+  - name: ubuntu2204
+    display_name: Ubuntu 22.04
+    run_on:
+      - localhost
+    tasks:
+      - name: "task"
+      - name: "dep"
+`
+		var p model.Project
+		_, err := model.LoadProjectInto(ctx, []byte(projYAML), nil, "", &p)
+		require.NoError(t, err)
+		errs := checkRequestersForTaskDependencies(&p)
+
 		require.Len(t, errs, 1)
-		assert.Equal(t, Warning, errs[0].Level)
-		assert.Contains(t, errs[0].Message, "'t1' depends on non-patchable task 't2'")
+		assert.Equal(t, errs[0].Level, Warning)
+		assert.Contains(t, errs[0].Message, "'task' depends on patch-only task 'dep'")
+	})
+	t.Run("WarnsWithVariantLevelConflict", func(t *testing.T) {
+		projYAML := `
+tasks:
+  - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+
+  - name: task
+    patch_only: false
+    depends_on:
+      - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+
+buildvariants:
+  - name: ubuntu2204
+    patch_only: true
+    display_name: Ubuntu 22.04
+    run_on:
+      - localhost
+    tasks:
+      - name: "task"
+      - name: "dep"
+`
+		var p model.Project
+		_, err := model.LoadProjectInto(ctx, []byte(projYAML), nil, "", &p)
+		require.NoError(t, err)
+		errs := checkRequestersForTaskDependencies(&p)
+
+		require.Len(t, errs, 1)
+		assert.Equal(t, errs[0].Level, Warning)
+		assert.Contains(t, errs[0].Message, "'task' depends on patch-only task 'dep'")
+	})
+	t.Run("WarnsWithBuildVariantTaskLevelConflict", func(t *testing.T) {
+		projYAML := `
+tasks:
+  - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+
+  - name: task
+    patch_only: false
+    depends_on:
+      - name: dep
+    commands:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: |
+            echo "hi"
+
+buildvariants:
+  - name: ubuntu2204
+    display_name: Ubuntu 22.04
+    run_on:
+      - localhost
+    tasks:
+      - name: "task"
+      - name: "dep"
+        patch_only: true
+`
+		var p model.Project
+		_, err := model.LoadProjectInto(ctx, []byte(projYAML), nil, "", &p)
+		require.NoError(t, err)
+		errs := checkRequestersForTaskDependencies(&p)
+
+		require.Len(t, errs, 1)
+		assert.Equal(t, errs[0].Level, Warning)
+		assert.Contains(t, errs[0].Message, "'task' depends on patch-only task 'dep'")
 	})
 }
 
@@ -1053,7 +1313,10 @@ func TestCheckTaskRuns(t *testing.T) {
 	})
 	Convey("When a task is patch-only and also has allowed requesters, a warning should be thrown", t, func() {
 		project := makeProject()
-		project.BuildVariants[0].Tasks[0].AllowedRequesters = []string{evergreen.PatchVersionRequester, evergreen.RepotrackerVersionRequester}
+		project.BuildVariants[0].Tasks[0].AllowedRequesters = []evergreen.UserRequester{
+			evergreen.PatchVersionUserRequester,
+			evergreen.RepotrackerVersionUserRequester,
+		}
 		project.BuildVariants[0].Tasks[0].PatchOnly = utility.TruePtr()
 		errs := checkTaskRuns(project)
 		So(len(errs), ShouldEqual, 1)
@@ -1061,7 +1324,10 @@ func TestCheckTaskRuns(t *testing.T) {
 	})
 	Convey("When a task is not patchable and also has allowed requesters, a warning should be thrown", t, func() {
 		project := makeProject()
-		project.BuildVariants[0].Tasks[0].AllowedRequesters = []string{evergreen.PatchVersionRequester, evergreen.RepotrackerVersionRequester}
+		project.BuildVariants[0].Tasks[0].AllowedRequesters = []evergreen.UserRequester{
+			evergreen.PatchVersionUserRequester,
+			evergreen.RepotrackerVersionUserRequester,
+		}
 		project.BuildVariants[0].Tasks[0].Patchable = utility.FalsePtr()
 		errs := checkTaskRuns(project)
 		So(len(errs), ShouldEqual, 1)
@@ -1069,7 +1335,10 @@ func TestCheckTaskRuns(t *testing.T) {
 	})
 	Convey("When a task is git-tag-only and also has allowed requesters, a warning should be thrown", t, func() {
 		project := makeProject()
-		project.BuildVariants[0].Tasks[0].AllowedRequesters = []string{evergreen.PatchVersionRequester, evergreen.RepotrackerVersionRequester}
+		project.BuildVariants[0].Tasks[0].AllowedRequesters = []evergreen.UserRequester{
+			evergreen.PatchVersionUserRequester,
+			evergreen.RepotrackerVersionUserRequester,
+		}
 		project.BuildVariants[0].Tasks[0].GitTagOnly = utility.TruePtr()
 		errs := checkTaskRuns(project)
 		So(len(errs), ShouldEqual, 1)
@@ -1077,10 +1346,29 @@ func TestCheckTaskRuns(t *testing.T) {
 	})
 	Convey("When a task is allowed for git tags and also has allowed requesters, a warning should be thrown", t, func() {
 		project := makeProject()
-		project.BuildVariants[0].Tasks[0].AllowedRequesters = []string{evergreen.GitTagRequester, evergreen.RepotrackerVersionRequester}
+		project.BuildVariants[0].Tasks[0].AllowedRequesters = []evergreen.UserRequester{
+			evergreen.GitTagUserRequester,
+			evergreen.RepotrackerVersionUserRequester,
+		}
 		project.BuildVariants[0].Tasks[0].AllowForGitTag = utility.TruePtr()
 		errs := checkTaskRuns(project)
 		So(len(errs), ShouldEqual, 1)
+		So(errs[0].Level, ShouldEqual, Warning)
+	})
+	Convey("When a task has a valid allowed requester, no warning or error should be thrown", t, func() {
+		project := makeProject()
+		for _, userRequester := range evergreen.AllUserRequesterTypes {
+			project.BuildVariants[0].Tasks[0].AllowedRequesters = []evergreen.UserRequester{userRequester}
+			errs := checkTaskRuns(project)
+			So(len(errs), ShouldEqual, 0)
+		}
+	})
+	Convey("When a task has an invalid allowed_requester, a warning should be thrown", t, func() {
+		project := makeProject()
+		project.BuildVariants[0].Tasks[0].AllowedRequesters = []evergreen.UserRequester{"foobar"}
+		errs := checkTaskRuns(project)
+		So(len(errs), ShouldEqual, 1)
+		So(errs[0].Message, ShouldContainSubstring, "invalid allowed_requester")
 		So(errs[0].Level, ShouldEqual, Warning)
 	})
 }
@@ -1193,30 +1481,27 @@ func TestCheckModules(t *testing.T) {
 					model.Module{
 						Name:   "module-0",
 						Branch: "main",
-						Repo:   "git@github.com:evergreen-ci/evergreen.git",
+						Owner:  "evergreen-ci",
+						Repo:   "evergreen",
 					},
-					model.Module{
-						Name:   "module-1",
-						Branch: "main",
-					},
-					model.Module{
+					model.Module{ // should fail
 						Name:   "module-2",
 						Branch: "main",
-						Repo:   "evergreen-ci/evergreen.git",
+						Owner:  "evergreen-ci",
 					},
-					model.Module{
+					model.Module{ // should fail
 						Name:   "module-3",
 						Branch: "main",
-						Repo:   "git@github.com:/evergreen.git",
+						Repo:   "evergreen",
 					},
 					model.Module{
 						Name:   "module-4",
 						Branch: "main",
-						Repo:   "git@github.com:evergreen-ci/.git",
+						Repo:   "git@github.com:evergreen-ci/evergreen.git",
 					},
 				},
 			}
-			So(len(checkModules(project)), ShouldEqual, 4)
+			So(len(checkModules(project)), ShouldEqual, 2)
 		})
 	})
 }
@@ -1675,12 +1960,12 @@ func TestValidatePlugins(t *testing.T) {
 
 func TestValidateAliasCoverage(t *testing.T) {
 	for testName, testCase := range map[string]func(*testing.T, *model.Project){
-		"matchesNothing": func(t *testing.T, p *model.Project) {
+		"MatchesNothing": func(t *testing.T, p *model.Project) {
 			alias1 := model.ProjectAlias{
 				ID:          mgobson.NewObjectId(),
 				Alias:       evergreen.CommitQueueAlias,
 				VariantTags: []string{"notTheVariantTag"},
-				TaskTags:    []string{"taskTag"},
+				TaskTags:    []string{"taskTag1", "taskTag2"},
 			}
 			alias2 := model.ProjectAlias{
 				ID:      mgobson.NewObjectId(),
@@ -1714,12 +1999,12 @@ func TestValidateAliasCoverage(t *testing.T) {
 			assert.Equal(t, errs[0].Level, Warning)
 			assert.Equal(t, errs[1].Level, Warning)
 		},
-		"matchesAll": func(t *testing.T, p *model.Project) {
+		"MatchesAll": func(t *testing.T, p *model.Project) {
 			alias1 := model.ProjectAlias{
 				ID:          mgobson.NewObjectId(),
 				Alias:       evergreen.CommitQueueAlias,
 				VariantTags: []string{"variantTag"},
-				TaskTags:    []string{"taskTag"},
+				TaskTags:    []string{"taskTag1"},
 			}
 			alias2 := model.ProjectAlias{
 				ID:      mgobson.NewObjectId(),
@@ -1744,7 +2029,7 @@ func TestValidateAliasCoverage(t *testing.T) {
 			errs := validateAliasCoverage(p, model.ProjectAliases{alias1, alias2})
 			assert.Len(t, errs, 0)
 		},
-		"matchesVariantTag": func(t *testing.T, p *model.Project) {
+		"MatchesVariantTag": func(t *testing.T, p *model.Project) {
 			alias1 := model.ProjectAlias{
 				ID:          mgobson.NewObjectId(),
 				Alias:       evergreen.CommitQueueAlias,
@@ -1781,7 +2066,7 @@ func TestValidateAliasCoverage(t *testing.T) {
 			assert.Equal(t, errs[0].Level, Warning)
 			assert.Equal(t, errs[1].Level, Warning)
 		},
-		"negatedTag": func(t *testing.T, p *model.Project) {
+		"NegatedTag": func(t *testing.T, p *model.Project) {
 			negatedAlias := model.ProjectAlias{
 				ID:          mgobson.NewObjectId(),
 				Alias:       evergreen.CommitQueueAlias,
@@ -1817,7 +2102,7 @@ func TestValidateAliasCoverage(t *testing.T) {
 			assert.False(t, needsVariants["negatedAlias"]) // Matches the second build variant again
 			assert.True(t, needsTasks["negatedAlias"])     // Second build variant task doesn't match
 		},
-		"matchesTaskInTaskGroupWithTaskRegexp": func(t *testing.T, p *model.Project) {
+		"MatchesTaskInTaskGroupWithTaskRegexp": func(t *testing.T, p *model.Project) {
 			a := model.ProjectAlias{
 				ID:      mgobson.NewObjectId(),
 				Alias:   "alias",
@@ -1838,12 +2123,12 @@ func TestValidateAliasCoverage(t *testing.T) {
 			errs := validateAliasCoverage(p, model.ProjectAliases{a})
 			assert.Len(t, errs, 0)
 		},
-		"matchesTaskInTaskGroupWithTaskTag": func(t *testing.T, p *model.Project) {
+		"MatchesTaskInTaskGroupWithTaskTag": func(t *testing.T, p *model.Project) {
 			a := model.ProjectAlias{
 				ID:       mgobson.NewObjectId(),
 				Alias:    "alias",
 				Variant:  "bvWithTaskGroup",
-				TaskTags: []string{"taskTag"},
+				TaskTags: []string{"taskTag1"},
 			}
 			aliases := map[string]model.ProjectAlias{a.Alias: a}
 			needsVariants, needsTasks, err := getAliasCoverage(p, aliases)
@@ -1858,6 +2143,48 @@ func TestValidateAliasCoverage(t *testing.T) {
 			}
 			errs := validateAliasCoverage(p, model.ProjectAliases{a})
 			assert.Len(t, errs, 0)
+		},
+		"MatchesTaskWithTaskTagHavingMultipleCriteria": func(t *testing.T, p *model.Project) {
+			a := model.ProjectAlias{
+				ID:       mgobson.NewObjectId(),
+				Alias:    "alias",
+				Variant:  "bvWithTag",
+				TaskTags: []string{"taskTag1 taskTag2"},
+			}
+			aliases := map[string]model.ProjectAlias{a.Alias: a}
+			needsVariants, needsTasks, err := getAliasCoverage(p, aliases)
+			require.NoError(t, err)
+			assert.Len(t, needsVariants, len(aliases))
+			assert.Len(t, needsTasks, len(aliases))
+			for _, noMatch := range needsVariants {
+				assert.False(t, noMatch)
+			}
+			for _, noMatch := range needsTasks {
+				assert.False(t, noMatch)
+			}
+			errs := validateAliasCoverage(p, model.ProjectAliases{a})
+			assert.Len(t, errs, 0)
+		},
+		"DoesNotMatchTaskWithTaskTagHavingMultipleCriteria": func(t *testing.T, p *model.Project) {
+			a := model.ProjectAlias{
+				ID:       mgobson.NewObjectId(),
+				Alias:    "alias",
+				Variant:  "bvWithTag",
+				TaskTags: []string{"taskTag1 taskTag2 nonexistent"},
+			}
+			aliases := map[string]model.ProjectAlias{a.Alias: a}
+			needsVariants, needsTasks, err := getAliasCoverage(p, aliases)
+			require.NoError(t, err)
+			assert.Len(t, needsVariants, len(aliases))
+			assert.Len(t, needsTasks, len(aliases))
+			for _, noMatch := range needsVariants {
+				assert.False(t, noMatch)
+			}
+			for _, noMatch := range needsTasks {
+				assert.True(t, noMatch)
+			}
+			errs := validateAliasCoverage(p, model.ProjectAliases{a})
+			assert.Len(t, errs, 1)
 		},
 	} {
 		t.Run(testName, func(t *testing.T) {
@@ -1896,7 +2223,7 @@ func TestValidateAliasCoverage(t *testing.T) {
 				Tasks: []model.ProjectTask{
 					{
 						Name: "taskWithTag",
-						Tags: []string{"taskTag"},
+						Tags: []string{"taskTag1", "taskTag2"},
 					},
 					{
 						Name: "taskWithoutTag",
@@ -2794,28 +3121,24 @@ func TestCheckProjectWarnings(t *testing.T) {
 	})
 }
 
-type validateProjectFieldsuite struct {
+type validateProjectFieldSuite struct {
 	suite.Suite
 	project model.Project
 }
 
-func TestValidateProjectFieldsuite(t *testing.T) {
-	suite.Run(t, new(validateProjectFieldsuite))
+func TestValidateProjectFieldSuite(t *testing.T) {
+	suite.Run(t, new(validateProjectFieldSuite))
 }
 
-func (s *validateProjectFieldsuite) SetupTest() {
+func (s *validateProjectFieldSuite) SetupTest() {
 	s.project = model.Project{
-		Enabled:     true,
 		Identifier:  "identifier",
-		Owner:       "owner",
-		Repo:        "repo",
-		Branch:      "branch",
 		DisplayName: "test",
 		BatchTime:   10,
 	}
 }
 
-func (s *validateProjectFieldsuite) TestBatchTimeValueMustNonNegative() {
+func (s *validateProjectFieldSuite) TestBatchTimeValueMustNonNegative() {
 	s.project.BatchTime = -10
 	validationError := validateProjectFields(&s.project)
 
@@ -2824,7 +3147,7 @@ func (s *validateProjectFieldsuite) TestBatchTimeValueMustNonNegative() {
 		"Project 'batchtime' must not be negative")
 }
 
-func (s *validateProjectFieldsuite) TestCommandTypes() {
+func (s *validateProjectFieldSuite) TestCommandTypes() {
 	s.project.CommandType = "system"
 	validationError := validateProjectFields(&s.project)
 	s.Empty(validationError)
@@ -2842,7 +3165,7 @@ func (s *validateProjectFieldsuite) TestCommandTypes() {
 	s.Empty(validationError)
 }
 
-func (s *validateProjectFieldsuite) TestFailOnInvalidCommandType() {
+func (s *validateProjectFieldSuite) TestFailOnInvalidCommandType() {
 	s.project.CommandType = "random"
 	validationError := validateProjectFields(&s.project)
 
@@ -2851,7 +3174,7 @@ func (s *validateProjectFieldsuite) TestFailOnInvalidCommandType() {
 		"Project 'CommandType' must be valid")
 }
 
-func (s *validateProjectFieldsuite) TestWarnOnLargeBatchTimeValue() {
+func (s *validateProjectFieldSuite) TestWarnOnLargeBatchTimeValue() {
 	s.project.BatchTime = math.MaxInt32 + 1
 	validationError := checkProjectFields(&s.project)
 
@@ -3151,7 +3474,9 @@ func TestTaskGroupValidation(t *testing.T) {
 			},
 		},
 	}
-	assert.Len(checkTaskGroups(&proj), 3)
+	validationErrs = checkTaskGroups(&proj)
+	require.Len(t, validationErrs, 1)
+	assert.Contains(validationErrs[0].Message, "task group 'tg1' is defined multiple times; only the first will be used")
 
 	// check that yml with a task group named the same as a task errors
 	duplicateTaskYml := `
@@ -3204,16 +3529,16 @@ buildvariants:
         - example_task_2
 `
 	pp, err = model.LoadProjectInto(ctx, []byte(largeMaxHostYml), nil, "", &proj)
-	assert.NotNil(proj)
+	require.NotNil(t, proj)
 	assert.NotNil(pp)
 	assert.NoError(err)
 	validationErrs = validateTaskGroups(&proj)
-	assert.Len(validationErrs, 1)
+	require.Len(t, validationErrs, 1)
 	assert.Contains(validationErrs[0].Message, "attach.results cannot be used in the group teardown stage")
 	validationErrs = checkTaskGroups(&proj)
-	assert.Len(validationErrs, 2)
-	assert.Contains(validationErrs[0].Message, "task group example_task_group has max number of hosts 4 greater than the number of tasks 3")
-	assert.Contains(validationErrs[1].Message, "task group inline_task_group has max number of hosts 3 greater than the number of tasks 2")
+	require.Len(t, validationErrs, 2)
+	assert.Contains(validationErrs[0].Message, "task group 'example_task_group' has max number of hosts 4 greater than the number of tasks 3")
+	assert.Contains(validationErrs[1].Message, "task group 'inline_task_group' has max number of hosts 3 greater than the number of tasks 2")
 	assert.Equal(validationErrs[0].Level, Warning)
 	assert.Equal(validationErrs[1].Level, Warning)
 }
@@ -4103,7 +4428,7 @@ func TestTVToTaskUnit(t *testing.T) {
 				}, {TaskName: "compile", Variant: "ubuntu"}: {
 					Name:             "compile",
 					Variant:          "ubuntu",
-					IsGroup:          true,
+					IsPartOfGroup:    true,
 					GroupName:        "compile_group",
 					ExecTimeoutSecs:  10,
 					CommitQueueMerge: true,
@@ -4116,7 +4441,7 @@ func TestTVToTaskUnit(t *testing.T) {
 				}, {TaskName: "compile", Variant: "suse"}: {
 					Name:            "compile",
 					Variant:         "suse",
-					IsGroup:         true,
+					IsPartOfGroup:   true,
 					GroupName:       "compile_group",
 					ExecTimeoutSecs: 10,
 					DependsOn: []model.TaskUnitDependency{
@@ -4192,6 +4517,7 @@ func TestTVToTaskUnit(t *testing.T) {
 				expectedTaskUnit := testCase.expectedTVToTaskUnit[expectedTV]
 				assert.Equal(t, expectedTaskUnit.Name, taskUnit.Name)
 				assert.Equal(t, expectedTaskUnit.IsGroup, taskUnit.IsGroup, fmt.Sprintf("%s/%s", expectedTaskUnit.Variant, expectedTaskUnit.Name))
+				assert.Equal(t, expectedTaskUnit.IsPartOfGroup, taskUnit.IsPartOfGroup, fmt.Sprintf("%s/%s", expectedTaskUnit.Variant, expectedTaskUnit.Name))
 				assert.Equal(t, expectedTaskUnit.GroupName, taskUnit.GroupName, fmt.Sprintf("%s/%s", expectedTaskUnit.Variant, expectedTaskUnit.Name))
 				assert.Equal(t, expectedTaskUnit.Patchable, taskUnit.Patchable, expectedTaskUnit.Name)
 				assert.Equal(t, expectedTaskUnit.PatchOnly, taskUnit.PatchOnly)
@@ -5894,7 +6220,6 @@ func TestBVsWithTasksThatCallCommand(t *testing.T) {
 							{
 								Name:    "test",
 								Variant: "ubuntu",
-								IsGroup: true,
 							},
 						},
 					},

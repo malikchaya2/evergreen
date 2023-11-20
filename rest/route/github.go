@@ -24,10 +24,11 @@ import (
 )
 
 const (
-	githubActionClosed      = "closed"
-	githubActionOpened      = "opened"
-	githubActionSynchronize = "synchronize"
-	githubActionReopened    = "reopened"
+	githubActionClosed          = "closed"
+	githubActionOpened          = "opened"
+	githubActionSynchronize     = "synchronize"
+	githubActionReopened        = "reopened"
+	githubActionChecksRequested = "checks_requested"
 
 	// pull request comments
 	retryComment            = "evergreen retry"
@@ -39,9 +40,14 @@ const (
 	resetDefinitionsComment = "evergreen reset-definitions"
 
 	refTags = "refs/tags/"
+
+	// skipCIDescriptionCharLimit is the maximum number of characters that will
+	// be scanned in the PR description for a skip CI label.
+	skipCIDescriptionCharLimit = 100
 )
 
-// skipCILabels are a set of labels which will skip creating PR patch if part of the commit description or message.
+// skipCILabels are a set of labels which will skip creating PR patch if part of
+// the PR title or description.
 var skipCILabels = []string{"[skip ci]", "[skip-ci]"}
 
 type githubHookApi struct {
@@ -101,10 +107,13 @@ func (gh *githubHookApi) Parse(ctx context.Context, r *http.Request) error {
 	return nil
 }
 
-// shouldSkipWebhook returns true if the event is from a GitHub app and the app is not set up or,
-// the event is from webhooks and app is set up.
-func (gh *githubHookApi) shouldSkipWebhook(fromApp bool) bool {
-	hasApp := gh.settings.GetGithubAppAuth() != nil
+// shouldSkipWebhook returns true if the event is from a GitHub app and the app is available for the owner/repo or,
+// the event is from webhooks and the app is not available for the owner/repo.
+func (gh *githubHookApi) shouldSkipWebhook(ctx context.Context, owner, repo string, fromApp bool) bool {
+	hasApp, err := gh.settings.HasGitHubApp(ctx, owner, repo)
+	if err != nil {
+		hasApp = false
+	}
 	return (fromApp && !hasApp) || (!fromApp && hasApp)
 }
 
@@ -112,7 +121,7 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 	switch event := gh.event.(type) {
 	case *github.PingEvent:
 		fromApp := event.GetInstallation() != nil
-		if gh.shouldSkipWebhook(fromApp) {
+		if gh.shouldSkipWebhook(ctx, event.Repo.Owner.GetLogin(), event.Repo.GetName(), fromApp) {
 			break
 		}
 		if event.HookID == nil {
@@ -130,7 +139,7 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 
 	case *github.PullRequestEvent:
 		fromApp := event.GetInstallation() != nil
-		if gh.shouldSkipWebhook(fromApp) {
+		if gh.shouldSkipWebhook(ctx, event.Repo.Owner.GetLogin(), event.Repo.GetName(), fromApp) {
 			break
 		}
 		if event.Action == nil {
@@ -147,8 +156,9 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 			return gimlet.NewJSONErrorResponse(err)
 		}
 
-		if *event.Action == githubActionOpened || *event.Action == githubActionSynchronize ||
-			*event.Action == githubActionReopened {
+		action := utility.FromStringPtr(event.Action)
+		if action == githubActionOpened || action == githubActionSynchronize ||
+			action == githubActionReopened {
 			grip.Info(message.Fields{
 				"source":    "GitHub hook",
 				"msg_id":    gh.msgID,
@@ -165,7 +175,6 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 					"source":    "GitHub hook",
 					"msg_id":    gh.msgID,
 					"event":     gh.eventType,
-					"action":    event.Action,
 					"repo":      *event.PullRequest.Base.Repo.FullName,
 					"ref":       *event.PullRequest.Base.Ref,
 					"pr_number": *event.PullRequest.Number,
@@ -174,12 +183,11 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 				}))
 				return gimlet.NewJSONInternalErrorResponse(errors.Wrap(err, "adding patch intent"))
 			}
-		} else if *event.Action == githubActionClosed {
+		} else if action == githubActionClosed {
 			grip.Info(message.Fields{
 				"source":  "GitHub hook",
 				"msg_id":  gh.msgID,
 				"event":   gh.eventType,
-				"action":  *event.Action,
 				"message": "pull request closed; aborting patch",
 			})
 
@@ -198,7 +206,7 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 		}
 	case *github.PushEvent:
 		fromApp := event.GetInstallation() != nil
-		if gh.shouldSkipWebhook(fromApp) {
+		if gh.shouldSkipWebhook(ctx, event.Repo.Owner.GetLogin(), event.Repo.GetName(), fromApp) {
 			break
 		}
 		grip.Debug(message.Fields{
@@ -223,48 +231,27 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 
 	case *github.IssueCommentEvent:
 		fromApp := event.GetInstallation() != nil
-		if gh.shouldSkipWebhook(fromApp) {
+		if gh.shouldSkipWebhook(ctx, event.Repo.Owner.GetLogin(), event.Repo.GetName(), fromApp) {
 			break
 		}
 		if err := gh.handleComment(ctx, event); err != nil {
 			return gimlet.MakeJSONInternalErrorResponder(err)
 		}
 
-	case *github.MetaEvent:
-		fromApp := event.GetInstallation() != nil
-		if gh.shouldSkipWebhook(fromApp) {
-			break
-		}
-		if event.GetAction() == "deleted" {
-			hookID := event.GetHookID()
-			if hookID == 0 {
-				err := errors.New("invalid hook ID for deleted hook")
-				grip.Error(message.WrapError(err, message.Fields{
-					"source": "GitHub hook",
-					"msg_id": gh.msgID,
-					"event":  gh.eventType,
-					"action": event.Action,
-					"hook":   event.Hook,
-				}))
-				return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "handling deleted event"))
-			}
-			if err := model.RemoveGithubHook(int(hookID)); err != nil {
-				return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "removing hook"))
-			}
-		}
-
 	case *github.MergeGroupEvent:
 		fromApp := event.GetInstallation() != nil
-		if gh.shouldSkipWebhook(fromApp) {
+		if gh.shouldSkipWebhook(ctx, event.Repo.Owner.GetLogin(), event.Repo.GetName(), fromApp) {
 			break
 		}
-		return gh.handleMergeGroupEvent(event)
+		if event.GetAction() == githubActionChecksRequested {
+			return gh.handleMergeGroupChecksRequested(event)
+		}
 	}
 
 	return gimlet.NewJSONResponse(struct{}{})
 }
 
-func (gh *githubHookApi) handleMergeGroupEvent(event *github.MergeGroupEvent) gimlet.Responder {
+func (gh *githubHookApi) handleMergeGroupChecksRequested(event *github.MergeGroupEvent) gimlet.Responder {
 	org := event.GetOrg().GetLogin()
 	repo := event.GetRepo().GetName()
 	branch := strings.TrimPrefix(event.MergeGroup.GetBaseRef(), "refs/heads/")
@@ -573,10 +560,14 @@ func (gh *githubHookApi) AddIntentForPR(pr *github.PullRequest, owner, calledBy 
 	if err != nil {
 		return errors.Wrap(err, "creating GitHub patch intent")
 	}
-	// If there are no errors with the PR, verify that we aren't skipping CI before adding the intent (and send a message).
+	// If there are no errors with the PR, verify that we aren't skipping CI before adding the intent.
 	for _, label := range skipCILabels {
-		if strings.Contains(strings.ToLower(pr.GetTitle()), label) ||
-			strings.Contains(strings.ToLower(pr.GetBody()), label) {
+		title := strings.ToLower(pr.GetTitle())
+		limitedDesc := strings.ToLower(pr.GetBody())
+		if len(limitedDesc) >= skipCIDescriptionCharLimit {
+			limitedDesc = limitedDesc[:skipCIDescriptionCharLimit]
+		}
+		if strings.Contains(title, label) || strings.Contains(limitedDesc, label) {
 			grip.Info(message.Fields{
 				"message": "skipping CI on PR",
 				"owner":   pr.Base.User.GetLogin(),

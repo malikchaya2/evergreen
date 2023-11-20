@@ -81,6 +81,9 @@ page.
     matched - ones that would be ignored by gitignore - are included.
 - `prefix`: an optional path to start processing the files, relative
     to the working directory.
+- `exact_file_names`: an optional boolean flag which, if set to true,
+    indicates to treat the files array as a list of exact filenames to
+    match, rather than an array of gitignore file globs.
 
 #### Lifecycle Policy 
 
@@ -154,7 +157,8 @@ This command parses results in the XUnit format and posts them to the
 API server. Use this when you use a library in your programming language
 to generate XUnit results from tests. Evergreen will parse these XML
 files, creating links to individual tests in the test logs in the UI and
-API.
+API. (Logs are only generated if the test case did not succeed -- this is
+ part of the XUnit XML file design.)
 
 This command will not error if there are no test results, as XML files can still
 be valid. We will error if no file paths given are valid XML files.
@@ -228,11 +232,11 @@ Parameters:
 
 ## expansions.write
 
-`expansions.write` writes the task's expansions to a file
+`expansions.write` writes the task's expansions to a file.
 
 `global_github_oauth_token`, `github_app_token`, `AWS_ACCESS_KEY_ID`,
 `AWS_SECRET_ACCESS_KEY`, `AWS_SESSION_TOKEN` are always redacted for
-security reasons
+security reasons.
 
 ``` yaml
 - command: expansions.write
@@ -244,6 +248,15 @@ Parameters:
 
 -   `file`: filename to write expansions to
 -   `redacted`: include redacted project variables, defaults to false
+
+For example, if the expansions are currently `fruit=apple`, `vegetable=spinach`,
+and `bread=cornbread`, then the output file will look like this:
+
+```yaml
+fruit: apple
+vegetable: spinach
+bread: cornbread
+```
 
 ## generate.tasks
 
@@ -344,7 +357,8 @@ by a patch submission.
 ``` yaml
 - modules: 
   - name: example
-    repo: git@github.com:10gen/mongo-example-modules.git
+    owner: 10gen
+    repo: mongo-example-modules
     prefix: src/mongo/db/modules
     ref: 12341a65256ff78b6d15ab79a1c7088443b9abcd
     branch: master
@@ -354,7 +368,9 @@ Parameters:
 
 -   `dir`: the directory to clone into
 -   `revisions`: For commit builds, each module should be passed as
-    `<module_name> : ${<module_name>_rev}`. For patch builds, the hash
+    `<module_name> : ${<module_name>_rev}` (these are loaded from the [manifest](../API/REST-V2-Usage.md#manifest) 
+    at the beginning of the command). 
+    For patch builds, the hash
     must be passed directly as `<module_name> : <hash>`. Note that this
     means that for patch builds, editing the
     ["modules"](Project-Configuration-Files.md#modules)
@@ -367,21 +383,30 @@ Parameters:
     yaml.
 -   `clone_depth`: Clone with `git clone --depth <clone_depth>`. For
     patch builds, Evergreen will `git fetch --unshallow` if the base
-    commit is older than `<clone_depth>` commits.
--   `shallow_clone`: Sets `clone_depth` to 100.
+    commit is older than `<clone_depth>` commits. `clone_depth` takes precedence over `shallow_clone`.
+-   `shallow_clone`: Sets `clone_depth` to 100, if not already set.
 -   `recurse_submodules`: automatically initialize and update each
     submodule in the repository, including any nested submodules.
 
 The parameters for each module are:
 
 -   `name`: the name of the module
+-   `owner`: the github owner of the module
 -   `repo`: the repo of the module
 -   `prefix`: the subdirectory to clone the repository in. It will be
     the repository name as a top-level directory in `dir` if omitted
 -   `ref`: must be a commit hash, takes precedence over the `branch`
-    parameter if both specified
+    parameter if both specified (for commits)
 -   `branch`: must be the name of branch, commit hashes _are not
     accepted_.
+
+#### Module Hash Hierarchy
+The hash used for a module during cloning is determined by the following hierarchy:
+* For commit queue and GitHub merge queue patches, Evergreen always uses the module branch name, to ensure accurate testing.
+* For other patches, the initial default is to the githash in set-module, if specified.
+* For both commits and patches, the next default is to the `<module_name>` set in revisions for the command.
+* For commits, if this is not available, the next default is to ref, and then to branch. *Note that this 
+doesn't work for patches -- hashes will need to be specified in the revisions section of the command.*
 
 ## gotest.parse_files
 
@@ -453,7 +478,8 @@ EC2 Parameters:
     non-default account. Must set if `aws_access_key_id` is set.
 -   `device_name` - name of EBS device
 -   `distro` - Evergreen distro to start. Must set `ami` or `distro` but
-    must not set both.
+    must not set both. Note that the distro setup script will not run for 
+    hosts spawned by this command, so any required initial setup must be done manually.
 -   `ebs_block_device` - list of the following parameters:
 -   `ebs_iops` - EBS provisioned IOPS.
 -   `ebs_size` - Size of EBS volume in GB.
@@ -530,7 +556,14 @@ permissions:
 Certain instances require more time for SSH access to become available.
 If the user plans to execute commands on the remote host, then waiting
 for SSH access to become available is mandatory. Below is an Evergreen
-function that probes for SSH connectivity:
+function that probes for SSH connectivity.
+
+Note, however, an important shell caveat! By default Evergreen implements
+shell scripting by piping the script into the shell. This means that a command
+that reads from stdin, like ssh, will read the script from stdin, and none
+of the commands after ssh will execute. To work around this, you can set
+`exec_as_string` on `shell.exec`, or in bash you can wrap curly braces around the
+script to make sure it is read entirely before executing.
 
 ``` yaml
 functions:
@@ -538,8 +571,10 @@ functions:
   ssh-ready:
     command: shell.exec
     params:
+      exec_as_string: true
       script: |
         user=${admin_user_name}
+        ## The following hosts.yml file is generated as the output of the host.list command below
         hostname=$(tr -d '"[]{}' < buildhost-configuration/hosts.yml | cut -d , -f 1 | awk -F : '{print $2}')
         identity_file=~/.ssh/mcipacker.pem
 
@@ -554,7 +589,7 @@ functions:
           -o IdentitiesOnly=yes \
           -o StrictHostKeyChecking=no \
           "$(printf "%s@%s" "$user" "$hostname")" \
-          exit 2> /dev/null
+          exit
         do
           [ "$attempts" -ge "$connection_attempts" ] && exit 1
           ((attempts++))
@@ -588,9 +623,12 @@ tasks:
       - func: ssh-ready
       - func: other-tasks
 ```
-
-The mcipacker.pem key file was created by echoing the value of the
-\${\_\_project_aws_ssh_key_value} expansion into the file. This
+Note:
+- The `${admin_user_name}` expansion should be set to the value of the
+**user** field set for the command's distro, which can be inspected [on Evergreen's distro page](https://evergreen.mongodb.com/distros).
+This is not a default expansion, so it must be set manually.
+- The mcipacker.pem key file was created by echoing the value of the
+`${__project_aws_ssh_key_value}` expansion (which gets populated automatically with the ssh public key value) into the file. This
 expansion is automatically set by Evergreen when the host is spawned.
 
 ## host.list
@@ -884,7 +922,7 @@ Example dummy content of a test results JSON file containing `test` objects:
                 ],
                 "metrics": [],
                 "sub_tests": []
-            },
+            }
         ]
     }
 ]
@@ -1017,11 +1055,12 @@ Parameters:
 -   `bucket`: the S3 bucket to use.
 -   `build_variants`: list of buildvariants to run the command for, if
     missing/empty will run for all
+-   `optional`: boolean: if set, won't error if the file isn't found or there's an error with downloading.
 
 ## s3.put
 
 This command uploads a file to Amazon s3, for use in later tasks or
-distribution.
+distribution. Files uploaded with this command will also be viewable within the Parsley log viewer if the `content_type` is set to `text/plain`, `application/json` or `text/csv`.
 
 ``` yaml
 - command: s3.put
@@ -1046,18 +1085,20 @@ Parameters:
     30, 2020 containing dots (".") are not supported.
 -   `permissions`: the S3 permissions string to upload with. See [S3 docs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/acl-overview.html#canned-acl)
     for allowed values.
--   `content_type`: the MIME type of the file
+-   `content_type`: the MIME type of the file. Note it is important that this value accurately reflects the mime type of the file or else the behavior will be unpredictable.
 -   `optional`: boolean to indicate if failure to find or upload this
-    file will result in a task failure. Not compatible with
-    local_files_include_filter.
+    file will result in a task failure. This is intended to be used
+    with `local_file`. `local_files_include_filter` be default is 
+    optional and will not work with this parameter.
 -   `skip_existing`: boolean to indicate that files that already exist
     in s3 should be skipped.
 -   `display_name`: the display string for the file in the Evergreen UI
 -   `local_files_include_filter`: used in place of local_file, an array
     of gitignore file globs. All files that are matched - ones that
-    would be ignored by gitignore - are included in the put.
+    would be ignored by gitignore - are included in the put. If no
+    files are found, the task continues execution.
 -   `local_files_include_filter_prefix`: an optional path to start
-    processing the LocalFilesIncludeFilter, relative to the working
+    processing the `local_files_include_filter`, relative to the working
     directory.
 -   `region`: AWS region for the bucket. We suggest us-east-1, since
     that is where ec2 hosts are located. If you would like to override,
@@ -1205,7 +1246,7 @@ Parameters:
 
 ## shell.exec
 
-This command runs a shell script.
+This command runs a shell script. To follow [Evergreen best practices](Best-Practices.md#subprocessexec), we recommend using [subprocess.exec](#subprocess.exec).
 
 ``` yaml
 - command: shell.exec
@@ -1243,7 +1284,10 @@ Parameters:
     If the background script exits with an error while the
     task is still running, the task will continue running.
 -   `silent`: if set to true, does not log any shell output during
-    execution; useful to avoid leaking sensitive info
+    execution; useful to avoid leaking sensitive info. Note that you should 
+    not pass secrets as command-line arguments but instead as environment
+    variables or from a file, as Evergreen runs `ps` periodically, which
+    will log command-line arguments.
 -   `continue_on_err`: by default, a task will fail if the script returns
     a non-zero exit code; for scripts that set `background`, the task will
     fail only if the script fails to start. If `continue_on_err`
@@ -1307,7 +1351,10 @@ Parameters:
     does not wait for the process to exit before running the next command. 
     If the background process exits with an error while the
     task is still running, the task will continue running.
--   `silent`: do not log output of command
+-   `silent`: do not log output of command. Note that you should
+    not pass secrets as command-line arguments but instead as environment
+    variables or from a file, as Evergreen runs `ps` periodically, which
+    will log command-line arguments.
 -   `system_log`: write output to system logs instead of task logs
 -   `working_dir`: working directory to start shell in
 -   `ignore_standard_out`: if true, do not log standard output

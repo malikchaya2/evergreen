@@ -18,11 +18,26 @@ type logServiceV0 struct {
 	bucket pail.Bucket
 }
 
-func (s *logServiceV0) GetTaskLogs(ctx context.Context, taskOpts TaskOptions, getOpts GetOptions) (LogIterator, error) {
+// NewLogServiceV0 returns a new V0 Evergreen log service.
+func NewLogServiceV0(bucket pail.Bucket) *logServiceV0 {
+	return &logServiceV0{bucket: bucket}
+}
+
+func (s *logServiceV0) Get(ctx context.Context, getOpts GetOptions) (LogIterator, error) {
 	var its []LogIterator
-	logChunks, err := s.getLogChunks(ctx, getOpts.LogNames)
+	logChunks, firstStart, firstEnd, err := s.getLogChunks(ctx, getOpts.LogNames)
 	if err != nil {
 		return nil, errors.Wrap(err, "getting log chunks")
+	}
+
+	start, end := getOpts.Start, getOpts.End
+	if getOpts.DefaultTimeRangeOfFirstLog && len(getOpts.LogNames) > 1 {
+		if start == nil {
+			start = &firstStart
+		}
+		if end == nil {
+			end = &firstEnd
+		}
 	}
 
 	for name, chunks := range logChunks {
@@ -30,8 +45,8 @@ func (s *logServiceV0) GetTaskLogs(ctx context.Context, taskOpts TaskOptions, ge
 			bucket:    s.bucket,
 			chunks:    chunks,
 			parser:    s.getParser(name),
-			start:     getOpts.Start,
-			end:       getOpts.End,
+			start:     start,
+			end:       end,
 			lineLimit: getOpts.LineLimit,
 			tailN:     getOpts.TailN,
 		}))
@@ -43,30 +58,23 @@ func (s *logServiceV0) GetTaskLogs(ctx context.Context, taskOpts TaskOptions, ge
 	return newMergingIterator(its...), nil
 }
 
-func (s *logServiceV0) WriteTaskLog(ctx context.Context, opts TaskOptions, logName string, lines []LogLine) error {
+func (s *logServiceV0) Append(ctx context.Context, logName string, lines []LogLine) error {
 	if len(lines) == 0 {
 		return nil
 	}
-
-	key := fmt.Sprintf("project_id=%s/task_id=%s/execution=%d/%s/%s",
-		opts.ProjectID,
-		opts.TaskID,
-		opts.Execution,
-		logName,
-		s.createChunkKey(lines[0].Timestamp, lines[len(lines)-1].Timestamp, len(lines)),
-	)
 
 	var rawLines []byte
 	for _, line := range lines {
 		rawLines = append(rawLines, []byte(s.formatRawLine(line))...)
 	}
 
+	key := fmt.Sprintf("%s/%s", logName, s.createChunkKey(lines[0].Timestamp, lines[len(lines)-1].Timestamp, len(lines)))
 	return errors.Wrap(s.bucket.Put(ctx, key, bytes.NewReader(rawLines)), "writing log chunk to bucket")
 }
 
 // getLogChunks maps each logical log to its chunk files stored in pail-backed
 // bucket storage for the given prefix.
-func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) (map[string][]chunkInfo, error) {
+func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) (map[string][]chunkInfo, int64, int64, error) {
 	logChunks := map[string][]chunkInfo{}
 
 	// To reduce potentially expensive list calls, use the LCP of the
@@ -85,7 +93,7 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) (map
 
 	it, err := s.bucket.List(ctx, prefix)
 	if err != nil {
-		return nil, errors.Wrap(err, "listing log chunks")
+		return nil, 0, 0, errors.Wrap(err, "listing log chunks")
 	}
 	for it.Next(ctx) {
 		logName := prefix
@@ -95,34 +103,40 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) (map
 			continue
 		}
 
-		// Strip any prefixes from the key and append it to the log's
-		// name as callers may pass in prefixes that contain multiple
-		// logical logs.
+		// Strip any prefix from the key and set it as the log's name;
+		// callers may pass in prefixes that contain multiple logical
+		// logs.
 		if lastIdx := strings.LastIndex(chunkKey, "/"); lastIdx >= 0 {
-			if logName != "" {
-				logName += "/"
-			}
-			logName += chunkKey[:lastIdx]
+			logName = chunkKey[:lastIdx]
 			chunkKey = chunkKey[lastIdx+1:]
 		}
 
 		chunk, err := s.parseChunkKey(logName, chunkKey)
 		if err != nil {
-			return nil, errors.Wrapf(err, "parsing chunk key '%s'", chunkKey)
+			return nil, 0, 0, errors.Wrapf(err, "parsing chunk key '%s'", chunkKey)
 		}
 		logChunks[logName] = append(logChunks[logName], chunk)
 	}
 	if err = it.Err(); err != nil {
-		return nil, errors.Wrap(err, "iterating log chunks")
+		return nil, 0, 0, errors.Wrap(err, "iterating log chunks")
 	}
 
-	for _, chunks := range logChunks {
+	var start, end int64
+	for key, chunks := range logChunks {
 		sort.Slice(chunks, func(i, j int) bool {
-			return chunks[i].start > chunks[j].start
+			return chunks[i].start < chunks[j].start
 		})
+		if strings.HasPrefix(key, logNames[0]) {
+			if start == 0 || (start > 0 && start > chunks[0].start) {
+				start = chunks[0].start
+			}
+			if end < chunks[len(chunks)-1].end {
+				end = chunks[len(chunks)-1].end
+			}
+		}
 	}
 
-	return logChunks, nil
+	return logChunks, start, end, nil
 }
 
 // createChunkKey returns a pail-backed bucket storage key that encodes the
@@ -192,7 +206,7 @@ func (s *logServiceV0) getParser(logName string) LineParser {
 			LogName:   logName,
 			Priority:  level.Priority(priority),
 			Timestamp: ts,
-			Data:      lineParts[2],
+			Data:      strings.TrimSuffix(lineParts[2], "\n"),
 		}, nil
 	}
 }

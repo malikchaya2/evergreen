@@ -28,6 +28,10 @@ const (
 	// heartbeat to API server.
 	defaultHeartbeatInterval = 30 * time.Second
 
+	// defaultHeartbeatTimeout is how long the agent can perform operations when
+	// there is no other applicable timeout before the heartbeat times out.
+	defaultHeartbeatTimeout = time.Hour
+
 	// defaultStatsInterval is the interval after which agent sends system stats
 	// to API server
 	defaultStatsInterval = time.Minute
@@ -56,4 +60,41 @@ const (
 	// dockerTimeout is the duration to timeout the Docker cleanup that happens
 	// after an agent completes a task
 	dockerTimeout = 1 * time.Minute
+
+	endTaskMessageLimit = 500
+)
+
+type timeoutType string
+
+const (
+	execTimeout          timeoutType = "exec"
+	idleTimeout          timeoutType = "idle"
+	callbackTimeout      timeoutType = "callback"
+	preTimeout           timeoutType = "pre"
+	postTimeout          timeoutType = "post"
+	setupGroupTimeout    timeoutType = "setup_group"
+	setupTaskTimeout     timeoutType = "setup_task"
+	teardownTaskTimeout  timeoutType = "teardown_task"
+	teardownGroupTimeout timeoutType = "teardown_group"
+	taskSyncTimeout      timeoutType = "task_sync"
+)
+
+// Mode represents a mode that the agent will run in.
+type Mode string
+
+const (
+	// HostMode indicates that the agent will run in a host.
+	HostMode Mode = "host"
+	// PodMode indicates that the agent will run in a pod's container.
+	PodMode Mode = "pod"
+)
+
+// LogOutput represents the output locations for the agent's logs.
+type LogOutputType string
+
+const (
+	// LogOutputFile indicates that the agent will log to a file.
+	LogOutputFile LogOutputType = "file"
+	// LogOutputStdout indicates that the agent will log to standard output.
+	LogOutputStdout LogOutputType = "stdout"
 )

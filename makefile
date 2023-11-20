@@ -3,10 +3,11 @@ name := evergreen
 buildDir := bin
 nodeDir := public
 packages := $(name) agent agent-command agent-util agent-internal agent-internal-client agent-internal-testutil operations cloud cloud-userdata
-packages += db util plugin units graphql thirdparty thirdparty-docker auth scheduler model validator service repotracker cmd-codegen-core mock
-packages += model-annotations model-patch model-artifact model-host model-pod model-pod-definition model-pod-dispatcher model-build model-event model-task model-user model-distro model-manifest model-testresult model-log
+packages += db util plugin units graphql thirdparty thirdparty-docker auth scheduler model validator service repotracker mock
+packages += model-annotations model-patch model-artifact model-host model-pod model-pod-definition model-pod-dispatcher model-build model-event model-task model-user model-distro model-manifest model-testresult model-log model-testlog
 packages += model-commitqueue model-cache
 packages += rest-client rest-data rest-route rest-model migrations trigger model-alertrecord model-notification model-taskstats model-reliability
+packages += taskoutput
 lintOnlyPackages := api apimodels testutil model-manifest model-testutil service-testutil service-graphql db-mgo db-mgo-bson db-mgo-internal-json rest
 lintOnlyPackages += smoke-internal smoke-internal-host smoke-internal-container smoke-internal-agentmonitor smoke-internal-endpoint
 testOnlyPackages := service-graphql smoke-internal-host smoke-internal-container smoke-internal-agentmonitor smoke-internal-endpoint # has only test files so can't undergo all operations
@@ -125,12 +126,13 @@ cli:$(localClientBinary)
 clis:$(clientBinaries)
 $(clientBuildDir)/%/$(unixBinaryBasename) $(clientBuildDir)/%/$(windowsBinaryBasename):$(buildDir)/build-cross-compile $(srcFiles) go.mod go.sum
 	./$(buildDir)/build-cross-compile -buildName=$* -ldflags="$(ldFlags)" -gcflags="$(gcFlags)" -goBinary="$(nativeGobin)" -directory=$(clientBuildDir) -source=$(clientSource) -output=$@
+sign-macos:$(foreach platform,$(macOSPlatforms),$(clientBuildDir)/$(platform)/.signed)
 # Targets to upload the CLI binaries to S3.
 $(buildDir)/upload-s3:cmd/upload-s3/upload-s3.go
 	@$(gobin) build -o $@ $<
 upload-clis:$(buildDir)/upload-s3 clis
 	$(buildDir)/upload-s3 -bucket="${BUCKET_NAME}" -local="${LOCAL_PATH}" -remote="${REMOTE_PATH}" -exclude="${EXCLUDE_PATTERN}"
-phony += cli clis upload-clis
+phony += cli clis upload-clis sign-macos
 # end client build directives
 
 
@@ -165,7 +167,7 @@ $(buildDir)/.load-smoke-data:$(buildDir)/load-smoke-data
 	./$<
 	@touch $@
 $(buildDir)/.load-local-data:$(buildDir)/load-smoke-data
-	./$< -path testdata/local -dbName evergreen_local -amboyDBName amboy_local
+	./$< -path testdata/local -dbName $(if $(DB_NAME),$(DB_NAME),evergreen_local) -amboyDBName amboy_local
 	@touch $@
 local-evergreen:$(localClientBinary) load-local-data
 	./$< service deploy start-local-evergreen
@@ -188,13 +190,15 @@ coverageOutput := $(foreach target,$(packages),$(buildDir)/output.$(target).cove
 coverageHtmlOutput := $(foreach target,$(packages),$(buildDir)/output.$(target).coverage.html)
 # end output files
 
+curlRetryOpts := --retry 10 --retry-max-time 120
+
 # lint setup targets
 $(buildDir)/.lintSetup:$(buildDir)/golangci-lint
 	@touch $@
 $(buildDir)/golangci-lint:
-	@curl --retry 10 --retry-max-time 120 -sSfL -o "$(buildDir)/install.sh" https://raw.githubusercontent.com/golangci/golangci-lint/$(goLintInstallerVersion)/install.sh
+	@curl $(curlRetryOpts) -o "$(buildDir)/install.sh" https://raw.githubusercontent.com/golangci/golangci-lint/$(goLintInstallerVersion)/install.sh
 	@echo "$(goLintInstallerChecksum) $(buildDir)/install.sh" | sha256sum --check
-	@bash $(buildDir)/install.sh -b $(buildDir) $(goLintInstallerVersion) >/dev/null 2>&1 && touch $@
+	@bash $(buildDir)/install.sh -b $(buildDir) $(goLintInstallerVersion) && touch $@
 $(buildDir)/run-linter:cmd/run-linter/run-linter.go $(buildDir)/.lintSetup
 	$(gobin) build -ldflags "-w" -o $@ $<
 # end lint setup targets
@@ -206,17 +210,6 @@ $(buildDir)/generate-lint.json:$(buildDir)/generate-lint $(srcFiles)
 $(buildDir)/generate-lint:cmd/generate-lint/generate-lint.go
 	$(gobin) build -ldflags "-w" -o  $@ $<
 # end generate lint
-
-# generate rest model
-# build-codegen is a special target to build all packages before performing code generation so that goimports can
-# properly locate package imports.
-build-codegen:
-	$(gobin) build $(subst $(name),,$(subst -,/,$(foreach target,$(packages),./$(target))))
-generate-rest-model:$(buildDir)/codegen build-codegen
-	./$(buildDir)/codegen --config "rest/model/schema/type_mapping.yml" --schema "rest/model/schema/rest_model.graphql" --model "rest/model/generated.go" --helper "rest/model/generated_converters.go"
-$(buildDir)/codegen:
-	$(gobin) build -o $(buildDir)/codegen cmd/codegen/entry.go
-# end generate rest model
 
 # parse a host.create file and set expansions
 parse-host-file:$(buildDir)/parse-host-file
@@ -252,7 +245,7 @@ dist-staging:
 dist-unsigned:
 	SIGN_MACOS= $(MAKE) dist
 dist:$(buildDir)/dist.tar.gz
-$(buildDir)/dist.tar.gz:$(buildDir)/make-tarball $(clientBinaries) $(uiFiles) $(if $(SIGN_MACOS),$(foreach platform,$(macOSPlatforms),$(clientBuildDir)/$(platform)/.signed))
+$(buildDir)/dist.tar.gz:$(buildDir)/make-tarball $(clientBinaries) $(uiFiles) $(if $(SIGN_MACOS),sign-macos)
 	./$< --name $@ --prefix $(name) $(foreach item,$(distContents),--item $(item)) --exclude "public/node_modules" --exclude "clients/.cache"
 # end main build
 
@@ -334,9 +327,6 @@ $(buildDir):
 	mkdir -p $@
 $(buildDir)/output.%.test: .FORCE
 	$(testRunEnv) $(gobin) test $(testArgs) ./$(if $(subst $(name),,$*),$(subst -,/,$*),) 2>&1 | tee $@
-# Codegen is special because it requires that the repository be compiled for goimports to resolve imports properly.
-$(buildDir)/output.cmd-codegen-core.test: build-codegen .FORCE
-	$(testRunEnv) $(gobin) test $(testArgs) ./$(if $(subst $(name),,$*),$(subst -,/,$*),) 2>&1 | tee $@
 # test-agent-command is special because it requires that the Evergreen binary be compiled to run some of the tests.
 $(buildDir)/output.agent-command.test: cli .FORCE
 	$(testRunEnv) $(gobin) test $(testArgs) ./agent/command 2>&1 | tee $@
@@ -347,7 +337,7 @@ $(buildDir)/output-dlv.%.test: .FORCE
 	$(testRunEnv) dlv test $(testArgs) ./$(if $(subst $(name),,$*),$(subst -,/,$*),) -- $(dlvArgs) 2>&1 | tee $@
 $(buildDir)/output.%.coverage: .FORCE
 	$(testRunEnv) $(gobin) test $(testArgs) ./$(if $(subst $(name),,$*),$(subst -,/,$*),) -covermode=count -coverprofile $@ | tee $(buildDir)/output.$*.test
-	@-[ -f $@ ] && go tool cover -func=$@ | sed 's%$(projectPath)/%%' | column -t
+	@-[ -f $@ ] && $(gobin) tool cover -func=$@ | sed 's%$(projectPath)/%%' | column -t
 #  targets to generate gotest output from the linter.
 ifneq (go,$(gobin))
 # We have to handle the PATH specially for linting in CI, because if the PATH has a different version of the Go
@@ -373,7 +363,24 @@ clean: clean-lobster
 phony += clean
 
 gqlgen:
-	go run github.com/99designs/gqlgen generate
+	$(gobin) run github.com/99designs/gqlgen generate
+
+swaggo: 
+	$(MAKE) swaggo-format swaggo-build swaggo-render
+
+swaggo-install:
+	$(gobin) install github.com/swaggo/swag/cmd/swag@latest
+
+swaggo-format:
+	swag fmt -g service/service.go
+
+swaggo-build:
+	swag init -g service/service.go -o $(buildDir) --outputTypes json
+
+swaggo-render:
+	npx @redocly/cli build-docs $(buildDir)/swagger.json -o $(buildDir)/redoc-static.html
+
+phony += swaggo swaggo-install swaggo-format swaggo-build swaggo-render
 
 # sanitizes a json file by hashing string values. Note that this will not work well with
 # string data that only has a subset of valid values
@@ -387,12 +394,12 @@ scramble:
 mongodb/.get-mongodb:
 	rm -rf mongodb
 	mkdir -p mongodb
-	cd mongodb && curl "$(MONGODB_URL)" -o mongodb.tgz && $(MONGODB_DECOMPRESS) mongodb.tgz && chmod +x ./mongodb-*/bin/*
+	cd mongodb && curl $(curlRetryOpts) "$(MONGODB_URL)" -o mongodb.tgz && $(MONGODB_DECOMPRESS) mongodb.tgz && chmod +x ./mongodb-*/bin/*
 	cd mongodb && mv ./mongodb-*/bin/* . && rm -rf db_files && rm -rf db_logs && mkdir -p db_files && mkdir -p db_logs
 mongodb/.get-mongosh:
 	rm -rf mongosh
 	mkdir -p mongosh
-	cd mongosh && curl "$(MONGOSH_URL)" -o mongosh.tgz && $(MONGOSH_DECOMPRESS) mongosh.tgz && chmod +x ./mongosh-*/bin/*
+	cd mongosh && curl $(curlRetryOpts) "$(MONGOSH_URL)" -o mongosh.tgz && $(MONGOSH_DECOMPRESS) mongosh.tgz && chmod +x ./mongosh-*/bin/*
 	cd mongosh && mv ./mongosh-*/bin/* .
 get-mongodb:mongodb/.get-mongodb
 	@touch $<
