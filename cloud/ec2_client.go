@@ -191,8 +191,10 @@ func (c *awsClientImpl) RunInstances(ctx context.Context, input *ec2.RunInstance
 			msg := makeAWSLogMessage("RunInstances", fmt.Sprintf("%T", c), input)
 			output, err = c.client.RunInstances(ctx, input)
 			if err != nil {
+				// "Credential must have exactly 5 slash-delimited elements, e.g. keyid/date/region/service/term, got 'aws'"
 				var apiErr smithy.APIError
 				if errors.As(err, &apiErr) {
+					// here
 					grip.Debug(message.WrapError(apiErr, msg))
 					if strings.Contains(apiErr.Error(), EC2InsufficientCapacity) {
 						return false, EC2InsufficientCapacityError

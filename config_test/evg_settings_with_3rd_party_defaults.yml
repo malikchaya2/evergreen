@@ -20,8 +20,8 @@ api_url: "https://localhost:8443"
 
 providers:
   aws:
-    aws_secret: "aws secret"
-    aws_id: "aws id"
+    aws_secret: "keyid/date/region/service/terma"
+    aws_id: "keyid/date/region/service/termb"
 auth:
   naive:
     users:

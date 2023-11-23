@@ -90,6 +90,7 @@ func TestSpawnEC2InstanceOnDemand(t *testing.T) {
 	assert.NoError(err)
 	assert.Len(foundHosts, 1)
 
+	require.NotNil(h)
 	assert.NoError(m.TerminateInstance(ctx, h, evergreen.User, ""))
 	foundHosts, err = host.Find(ctx, host.IsTerminated)
 	assert.NoError(err)

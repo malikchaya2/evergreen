@@ -332,7 +332,9 @@ func (m *ec2Manager) spawnOnDemandHost(ctx context.Context, h *host.Host, ec2Set
 		"host_provider": h.Distro.Provider,
 		"distro":        h.Distro.Id,
 	})
+	//HERE?
 	reservation, err := m.client.RunInstances(ctx, input)
+	// hangs before reaching here
 	if err != nil || reservation == nil {
 		if err == EC2InsufficientCapacityError {
 			// try again in another AZ
@@ -789,6 +791,7 @@ func (m *ec2Manager) SetPortMappings(context.Context, *host.Host, *host.Host) er
 // TerminateInstance terminates the EC2 instance.
 func (m *ec2Manager) TerminateInstance(ctx context.Context, h *host.Host, user, reason string) error {
 	// terminate the instance
+	//chaya
 	if h.Status == evergreen.HostTerminated {
 		return errors.Errorf("cannot terminate host '%s' because it's already marked as terminated", h.Id)
 	}

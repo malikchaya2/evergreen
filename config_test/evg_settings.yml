@@ -33,8 +33,8 @@ providers:
   aws:
     ec2_keys:
       - name: "test_region"
-        key: "aws id"
-        secret: "aws secret"
+        key: "keyid/date/region/service/termc"
+        secret: "keyid/date/region/service/termd"
     allowed_instance_types:
       - "test_instance_type"
     # Ensure that tests depending on global settings use the mock AWS clients by default instead of actually
