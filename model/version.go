@@ -747,6 +747,8 @@ func constructManifest(v *Version, projectRef *ProjectRef, moduleList ModuleList
 
 	modules := map[string]*manifest.Module{}
 	for _, module := range moduleList {
+		// it's probably not hitting this because it's not auto update
+		// that's why it won't get overwritten here
 		if isPatch && !module.AutoUpdate && baseManifest != nil {
 			if baseModule, ok := baseManifest.Modules[module.Name]; ok {
 				modules[module.Name] = baseModule
@@ -785,10 +787,16 @@ func getManifestModule(v *Version, projectRef *ProjectRef, token string, module 
 		// If this is a mainline commit, retrieve the module's commit from the time of the mainline commit.
 		// Otherwise, retrieve the module's commit from the time of the patch creation.
 		revisionTime := time.Unix(0, 0)
+		// merge_test
+		// IsPatchRequester will return true for merge_test
 		if !evergreen.IsPatchRequester(v.Requester) {
 			revisionTime = commit.Commit.Committer.GetDate().Time
 		}
 
+		// so we are getting it from github. that's why.
+		// we are rellying on github to give us the most recent branches
+		// so maybe it's because pr queue was only rellying on this function for it, and didn't hit the update, so it didn't correct itself
+		// but if this happens in finalize, won't it overwrite it?
 		branchCommits, _, err := thirdparty.GetGithubCommits(ghCtx, token, owner, repo, module.Branch, revisionTime, 0)
 		if err != nil {
 			return nil, errors.Wrapf(err, "retrieving git branch for module '%s'", module.Name)
@@ -811,7 +819,7 @@ func getManifestModule(v *Version, projectRef *ProjectRef, token string, module 
 	ghCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 
-	sha := module.Ref
+	sha := module.Ref // maybe it's already set and therefore it's not fetching it
 	gitCommit, err := thirdparty.GetCommitEvent(ghCtx, token, owner, repo, module.Ref)
 	if err != nil {
 		return nil, errors.Wrapf(err, "retrieving getting git commit for module '%s' with hash '%s'", module.Name, module.Ref)

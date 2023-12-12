@@ -397,7 +397,15 @@ func (j *commitQueueJob) processGitHubPRItem(ctx context.Context, cq *commitqueu
 	// 	return
 	// }
 
-	v, patch, err := updateAndFinalizeCqPatch(ctx, j.env.Settings(), nextItem.PatchId, commitqueue.SourcePullRequest, projectRef, githubToken)
+	// projectConfig, _, err := model.GetPatchedProject(ctx, j.env.Settings(), patch, githubToken)
+	// if err != nil {
+	// 	err = errors.Wrap(err, "getting patched project")
+	// 	j.logError(err, *nextItem)
+	// 	j.dequeue(ctx, cq, *nextItem, err.Error())
+	// 	j.AddError(thirdparty.SendCommitQueueGithubStatus(ctx, j.env, pr, message.GithubStateFailure, "can't get project config", ""))
+	// }
+
+	v, projectConfig, err := updateAndFinalizeCqPatch(ctx, j.env.Settings(), nextItem.PatchId, commitqueue.SourcePullRequest, projectRef, true, githubToken)
 	if err != nil {
 		j.logError(err, *nextItem)
 		j.dequeue(ctx, cq, *nextItem, err.Error())
@@ -406,13 +414,6 @@ func (j *commitQueueJob) processGitHubPRItem(ctx context.Context, cq *commitqueu
 		return
 	}
 
-	projectConfig, _, err := model.GetPatchedProject(ctx, j.env.Settings(), patch, githubToken)
-	if err != nil {
-		err = errors.Wrap(err, "getting patched project")
-		j.logError(err, *nextItem)
-		j.dequeue(ctx, cq, *nextItem, err.Error())
-		j.AddError(thirdparty.SendCommitQueueGithubStatus(ctx, j.env, pr, message.GithubStateFailure, "can't get project config", ""))
-	}
 	// v, err := model.FinalizePatch(ctx, patchDoc, evergreen.MergeTestRequester, githubToken)
 	// if err != nil {
 	// 	err = errors.Wrap(err, "finalizing patch")
@@ -448,7 +449,7 @@ func (j *commitQueueJob) processGitHubPRItem(ctx context.Context, cq *commitqueu
 }
 
 func (j *commitQueueJob) processCLIPatchItem(ctx context.Context, cq *commitqueue.CommitQueue, nextItem *commitqueue.CommitQueueItem, projectRef *model.ProjectRef, githubToken string) {
-	v, _, err := updateAndFinalizeCqPatch(ctx, j.env.Settings(), nextItem.Issue, commitqueue.SourceDiff, projectRef, githubToken)
+	v, _, err := updateAndFinalizeCqPatch(ctx, j.env.Settings(), nextItem.Issue, commitqueue.SourceDiff, projectRef, false, githubToken)
 	if err != nil {
 		j.logError(err, *nextItem)
 		event.LogCommitQueueEnqueueFailed(nextItem.Issue, err)
@@ -472,7 +473,7 @@ func (j *commitQueueJob) processCLIPatchItem(ctx context.Context, cq *commitqueu
 	event.LogCommitQueueStartTestEvent(v.Id)
 }
 
-func updateAndFinalizeCqPatch(ctx context.Context, settings *evergreen.Settings, patchId, source string, projectRef *model.ProjectRef, githubToken string) (*model.Version, *patch.Patch, error) {
+func updateAndFinalizeCqPatch(ctx context.Context, settings *evergreen.Settings, patchId, source string, projectRef *model.ProjectRef, returnProjectConfig bool, githubToken string) (*model.Version, *model.Project, error) {
 	patchDoc, err := patch.FindOneId(patchId)
 	if err != nil {
 
@@ -487,6 +488,18 @@ func updateAndFinalizeCqPatch(ctx context.Context, settings *evergreen.Settings,
 		// event.LogCommitQueueEnqueueFailed(patchId, err)
 		// j.dequeue(ctx, cq, *nextItem, err.Error())
 		return nil, nil, errors.Errorf("patch '%s' not found", patchId)
+	}
+
+	var projectConfig *model.Project
+	if returnProjectConfig {
+		projectConfig, _, err = model.GetPatchedProject(ctx, settings, patchDoc, githubToken)
+		if err != nil {
+			return nil, nil, errors.Wrap(err, "getting patched project")
+			// err = errors.Wrap(err, "getting patched project")
+			// j.logError(err, *nextItem)
+			// j.dequeue(ctx, cq, *nextItem, err.Error())
+			// j.AddError(thirdparty.SendCommitQueueGithubStatus(ctx, j.env, pr, message.GithubStateFailure, "can't get project config", ""))
+		}
 	}
 
 	project, pp, err := updatePatch(ctx, settings, githubToken, projectRef, patchDoc)
@@ -540,7 +553,7 @@ func updateAndFinalizeCqPatch(ctx context.Context, settings *evergreen.Settings,
 		return nil, nil, errors.Wrap(err, "finalizing patch")
 	}
 
-	return v, patchDoc, nil
+	return v, projectConfig, nil
 }
 
 func (j *commitQueueJob) logError(err error, item commitqueue.CommitQueueItem) {

@@ -90,6 +90,7 @@ func (pc *DBCommitQueueConnector) AddPatchForPR(ctx context.Context, projectRef 
 	}
 
 	serviceModules := []commitqueue.Module{}
+	// where modules are added for the pr queue? but only modules in the evergreen merge comment..?
 	for _, module := range modules {
 		serviceModules = append(serviceModules, *restModel.APIModuleToService(module))
 	}
@@ -361,6 +362,7 @@ func getAndEnqueueCommitQueueItemForPR(ctx context.Context, env evergreen.Enviro
 		return nil, pr, err
 	}
 
+	// cqInfo.modules is what? it's if people write --module in the comment
 	patchDoc, err := tryEnqueueItemForPR(ctx, sc, projectRef, info.PR, cqInfo)
 	if err != nil {
 		return nil, pr, errors.Wrap(err, "enqueueing item to commit queue for PR")
@@ -446,6 +448,7 @@ func checkPRIsMergeable(ctx context.Context, sc Connector, pr *github.PullReques
 // failure case it will return an error and a short error message to be sent to
 // GitHub.
 func tryEnqueueItemForPR(ctx context.Context, sc Connector, projectRef *model.ProjectRef, prNum int, cqInfo restModel.GithubCommentCqData) (*patch.Patch, error) {
+	// whats the significance of cqInfo.Modules? it's if someone writes --module in the comments
 	patchDoc, err := sc.AddPatchForPR(ctx, *projectRef, prNum, cqInfo.Modules, cqInfo.MessageOverride)
 	if err != nil {
 		return nil, errors.Wrap(err, "creating patch for PR")
