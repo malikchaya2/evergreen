@@ -565,7 +565,7 @@ func FinalizePatch(ctx context.Context, p *patch.Patch, requester string, github
 		Activated:           utility.TruePtr(),
 		AuthorEmail:         authorEmail,
 	}
-	// building the manifest is done in finalize patch
+
 	mfst, err := constructManifest(patchVersion, projectRef, project.Modules, githubOauthToken)
 	if err != nil {
 		return nil, errors.Wrap(err, "constructing manifest")

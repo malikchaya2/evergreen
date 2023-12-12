@@ -31,8 +31,6 @@ import (
 
 type DBCommitQueueConnector struct{}
 
-// should UpdatePatch be called here?
-// probably not, should probably be done when it's processed
 func (pc *DBCommitQueueConnector) AddPatchForPR(ctx context.Context, projectRef model.ProjectRef, prNum int, modules []restModel.APIModule, messageOverride string) (*patch.Patch, error) {
 	settings, err := evergreen.GetConfig(ctx)
 	if err != nil {
@@ -90,7 +88,6 @@ func (pc *DBCommitQueueConnector) AddPatchForPR(ctx context.Context, projectRef 
 	}
 
 	serviceModules := []commitqueue.Module{}
-	// where modules are added for the pr queue? but only modules in the evergreen merge comment..?
 	for _, module := range modules {
 		serviceModules = append(serviceModules, *restModel.APIModuleToService(module))
 	}
@@ -102,11 +99,6 @@ func (pc *DBCommitQueueConnector) AddPatchForPR(ctx context.Context, projectRef 
 
 	// populate tasks/variants matching the commitqueue alias
 	proj.BuildProjectTVPairs(patchDoc, patchDoc.Alias)
-
-	// pp, err = units.AddMergeTaskAndVariant(ctx, patchDoc, proj, &projectRef, commitqueue.SourcePullRequest)
-	// if err != nil {
-	// 	return nil, err
-	// }
 
 	if err = patchDoc.Insert(); err != nil {
 		return nil, errors.Wrap(err, "inserting patch")
@@ -362,7 +354,6 @@ func getAndEnqueueCommitQueueItemForPR(ctx context.Context, env evergreen.Enviro
 		return nil, pr, err
 	}
 
-	// cqInfo.modules is what? it's if people write --module in the comment
 	patchDoc, err := tryEnqueueItemForPR(ctx, sc, projectRef, info.PR, cqInfo)
 	if err != nil {
 		return nil, pr, errors.Wrap(err, "enqueueing item to commit queue for PR")
@@ -448,7 +439,6 @@ func checkPRIsMergeable(ctx context.Context, sc Connector, pr *github.PullReques
 // failure case it will return an error and a short error message to be sent to
 // GitHub.
 func tryEnqueueItemForPR(ctx context.Context, sc Connector, projectRef *model.ProjectRef, prNum int, cqInfo restModel.GithubCommentCqData) (*patch.Patch, error) {
-	// whats the significance of cqInfo.Modules? it's if someone writes --module in the comments
 	patchDoc, err := sc.AddPatchForPR(ctx, *projectRef, prNum, cqInfo.Modules, cqInfo.MessageOverride)
 	if err != nil {
 		return nil, errors.Wrap(err, "creating patch for PR")

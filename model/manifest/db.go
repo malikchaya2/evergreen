@@ -80,9 +80,6 @@ func FindFromVersion(versionID, project, revision, requester string) (*Manifest,
 
 	// the version wasn't from the repotracker
 	// find the base commit's manifest
-	// it get's it from the base commit. and the base commit is old
-	// that's why, if they merge main, it's not old anymore and then it works
-	// that's why, if we add update, it updates the base commit and therefore the modules.
 	manifest, err = FindOne(ByBaseProjectAndRevision(project, revision))
 	if err != nil {
 		return nil, errors.Wrap(err, "finding manifest")
