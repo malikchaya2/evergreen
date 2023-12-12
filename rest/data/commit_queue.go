@@ -107,20 +107,12 @@ func (pc *DBCommitQueueConnector) AddPatchForPR(ctx context.Context, projectRef 
 	// 	return nil, err
 	// }
 
-	env := evergreen.GetEnvironment()
-	//todo: can this be removed? what does the cli do? does it do it twice?
-	pp.Init(patchDoc.Id.Hex(), patchDoc.CreateTime)
-	ppStorageMethod, err := model.ParserProjectUpsertOneWithS3Fallback(ctx, env.Settings(), evergreen.ProjectStorageMethodDB, pp)
-	if err != nil {
-		return nil, errors.Wrapf(err, "upsert parser project '%s' for patch '%s'", pp.Id, patchDoc.Id.Hex())
-	}
-	patchDoc.ProjectStorageMethod = ppStorageMethod
-
 	if err = patchDoc.Insert(); err != nil {
 		return nil, errors.Wrap(err, "inserting patch")
 	}
 
 	catcher = grip.NewBasicCatcher()
+	env := evergreen.GetEnvironment()
 	for _, modulePR := range modulePRs {
 		catcher.Add(thirdparty.SendCommitQueueGithubStatus(ctx, env, modulePR, message.GithubStatePending, "added to queue", patchDoc.Id.Hex()))
 	}

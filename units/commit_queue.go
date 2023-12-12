@@ -400,8 +400,9 @@ func (j *commitQueueJob) processGitHubPRItem(ctx context.Context, cq *commitqueu
 	v, patch, err := updateAndFinalizeCqPatch(ctx, j.env.Settings(), nextItem.PatchId, commitqueue.SourcePullRequest, projectRef, githubToken)
 	if err != nil {
 		j.logError(err, *nextItem)
-		event.LogCommitQueueEnqueueFailed(nextItem.Issue, err)
 		j.dequeue(ctx, cq, *nextItem, err.Error())
+		j.AddError(err)
+		j.AddError(thirdparty.SendCommitQueueGithubStatus(ctx, j.env, pr, message.GithubStateFailure, err.Error(), ""))
 		return
 	}
 
