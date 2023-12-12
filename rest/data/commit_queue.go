@@ -31,6 +31,8 @@ import (
 
 type DBCommitQueueConnector struct{}
 
+// should UpdatePatch be called here?
+// probably not, should probably be done when it's processed
 func (pc *DBCommitQueueConnector) AddPatchForPR(ctx context.Context, projectRef model.ProjectRef, prNum int, modules []restModel.APIModule, messageOverride string) (*patch.Patch, error) {
 	settings, err := evergreen.GetConfig(ctx)
 	if err != nil {
@@ -100,12 +102,13 @@ func (pc *DBCommitQueueConnector) AddPatchForPR(ctx context.Context, projectRef 
 	// populate tasks/variants matching the commitqueue alias
 	proj.BuildProjectTVPairs(patchDoc, patchDoc.Alias)
 
-	pp, err = units.AddMergeTaskAndVariant(ctx, patchDoc, proj, &projectRef, commitqueue.SourcePullRequest)
-	if err != nil {
-		return nil, err
-	}
+	// pp, err = units.AddMergeTaskAndVariant(ctx, patchDoc, proj, &projectRef, commitqueue.SourcePullRequest)
+	// if err != nil {
+	// 	return nil, err
+	// }
 
 	env := evergreen.GetEnvironment()
+	//todo: can this be removed? what does the cli do? does it do it twice?
 	pp.Init(patchDoc.Id.Hex(), patchDoc.CreateTime)
 	ppStorageMethod, err := model.ParserProjectUpsertOneWithS3Fallback(ctx, env.Settings(), evergreen.ProjectStorageMethodDB, pp)
 	if err != nil {
