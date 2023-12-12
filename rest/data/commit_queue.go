@@ -53,7 +53,7 @@ func (pc *DBCommitQueueConnector) AddPatchForPR(ctx context.Context, projectRef 
 		return nil, errors.Wrap(err, "making commit queue patch")
 	}
 
-	p, patchSummaries, proj, pp, err := getPatchInfo(ctx, settings, githubToken, patchDoc)
+	p, patchSummaries, proj, _, err := getPatchInfo(ctx, settings, githubToken, patchDoc)
 	if err != nil {
 		return nil, err
 	}
