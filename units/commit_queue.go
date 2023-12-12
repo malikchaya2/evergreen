@@ -442,7 +442,7 @@ func (j *commitQueueJob) processGitHubPRItem(ctx context.Context, cq *commitqueu
 		return
 	}
 	for _, modulePR := range modulePRs {
-		j.AddError(thirdparty.SendCommitQueueGithubStatus(ctx, j.env, modulePR, message.GithubStatePending, "preparing to test merge", patch.Id.Hex()))
+		j.AddError(thirdparty.SendCommitQueueGithubStatus(ctx, j.env, modulePR, message.GithubStatePending, "preparing to test merge", v.Id))
 	}
 
 	event.LogCommitQueueStartTestEvent(v.Id)
