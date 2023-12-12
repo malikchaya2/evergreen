@@ -390,7 +390,6 @@ func (j *commitQueueJob) processGitHubPRItem(ctx context.Context, cq *commitqueu
 		j.AddError(thirdparty.SendCommitQueueGithubStatus(ctx, j.env, pr, message.GithubStateFailure, err.Error(), ""))
 		return
 	}
-
 	nextItem.Version = v.Id
 	nextItem.ProcessingStartTime = time.Now()
 	if err = cq.UpdateVersion(nextItem); err != nil {
