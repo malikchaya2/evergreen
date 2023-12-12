@@ -347,6 +347,7 @@ func (as *APIServer) updatePatchModule(w http.ResponseWriter, r *http.Request) {
 			CommitMessages: commitMessages,
 		},
 	}
+	// look into this more
 	if err = p.UpdateModulePatch(modulePatch); err != nil {
 		as.LoggedError(w, r, http.StatusInternalServerError, err)
 		return

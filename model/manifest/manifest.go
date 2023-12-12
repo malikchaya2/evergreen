@@ -8,20 +8,17 @@ const Collection = "manifest"
 // ProjectName is the Project Id,
 // Branch is the branch of the repository. Modules is a map of the GitHub repository name to the
 // Module's information associated with the specific version.
+
+// chayaM this is what holds the modules
+// this is where it goes wrong
 type Manifest struct {
-	// Identifier for the version.
-	Id string `json:"id" bson:"_id"`
-	// The revision of the version.
-	Revision string `json:"revision" bson:"revision"`
-	// The project identifier for the version.
-	ProjectName string `json:"project" bson:"project"`
-	// The branch of the repository.
-	Branch string `json:"branch" bson:"branch"`
-	// Map from the GitHub repository name to the module's information.
-	Modules map[string]*Module `json:"modules" bson:"modules"`
-	// True if the version is a mainline build.
-	IsBase          bool              `json:"is_base" bson:"is_base"`
-	ModuleOverrides map[string]string `json:"module_overrides,omitempty" bson:"-"`
+	Id              string             `json:"id" bson:"_id"`
+	Revision        string             `json:"revision" bson:"revision"`
+	ProjectName     string             `json:"project" bson:"project"`
+	Branch          string             `json:"branch" bson:"branch"`
+	Modules         map[string]*Module `json:"modules" bson:"modules"`
+	IsBase          bool               `json:"is_base" bson:"is_base"`
+	ModuleOverrides map[string]string  `json:"module_overrides,omitempty" bson:"-"`
 }
 
 // A Module is a snapshot of the module associated with a version.
@@ -31,14 +28,9 @@ type Manifest struct {
 // Owner is the owner of the repository,
 // URL is the url to the GitHub API call to that specific commit.
 type Module struct {
-	// The branch of the repository.
-	Branch string `json:"branch" bson:"branch"`
-	// The name of the repository.
-	Repo string `json:"repo" bson:"repo"`
-	// The revision of the head of the branch.
+	Branch   string `json:"branch" bson:"branch"`
+	Repo     string `json:"repo" bson:"repo"`
 	Revision string `json:"revision" bson:"revision"`
-	// The owner of the repository.
-	Owner string `json:"owner" bson:"owner"`
-	// The url to the GitHub API call to that specific commit.
-	URL string `json:"url" bson:"url"`
+	Owner    string `json:"owner" bson:"owner"`
+	URL      string `json:"url" bson:"url"`
 }

@@ -555,6 +555,7 @@ type mergeParams struct {
 	githubAuthor string
 }
 
+// chayaM the merge happens here. This is what runs when someone runs evergreen commit-queue merge from the CLI
 func (p *mergeParams) mergeBranch(ctx context.Context, conf *ClientSettings, client client.Communicator, ac *legacyClient) error {
 	if p.id == "" {
 		showCQMessageForProject(ac, p.project)
@@ -562,6 +563,7 @@ func (p *mergeParams) mergeBranch(ctx context.Context, conf *ClientSettings, cli
 		if err != nil {
 			return errors.Wrap(err, "getting UI v2 URL")
 		}
+		// this grabs the base from the diff
 		if err := p.uploadMergePatch(conf, ac, uiV2); err != nil {
 			return err
 		}
@@ -571,6 +573,12 @@ func (p *mergeParams) mergeBranch(ctx context.Context, conf *ClientSettings, cli
 	if p.pause {
 		return nil
 	}
+	// func (c *communicatorImpl) EnqueueItem(ctx
+	// makeCommitQueueEnqueueItem()
+	// data.EnqueueItem(
+	// enqueue is done, and it's enqueued with the base from the diff information
+	// now what happens when it's processed?
+	// also still, what about modules?
 	position, err := client.EnqueueItem(ctx, p.id, p.force)
 	if err != nil {
 		return err
@@ -639,6 +647,8 @@ func (p *mergeParams) uploadMergePatch(conf *ClientSettings, ac *legacyClient, u
 	if err = patchParams.validateSubmission(diffData); err != nil {
 		return err
 	}
+	// chayaM here it's created
+	// when is the manifest created though?
 	patch, err := patchParams.createPatch(ac, diffData)
 	if err != nil {
 		return err

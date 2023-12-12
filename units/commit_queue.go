@@ -64,6 +64,7 @@ func NewCommitQueueJob(env evergreen.Environment, queueID string, id string) amb
 	return job
 }
 
+// happens before this
 func (j *commitQueueJob) Run(ctx context.Context) {
 	defer j.MarkComplete()
 
@@ -182,6 +183,8 @@ func (j *commitQueueJob) Run(ctx context.Context) {
 			return
 		}
 		// create a version with the item and subscribe to its completion
+		// this is important
+		// look at how it's processed
 		if nextItem.Source == commitqueue.SourcePullRequest {
 			j.processGitHubPRItem(ctx, cq, &nextItem, projectRef, githubToken)
 		} else if nextItem.Source == commitqueue.SourceDiff {
@@ -382,6 +385,7 @@ func (j *commitQueueJob) processGitHubPRItem(ctx context.Context, cq *commitqueu
 		return
 	}
 
+	//this patchDoc has the bad base
 	patchDoc, err := patch.FindOneId(nextItem.PatchId)
 	if err != nil {
 		j.AddError(errors.Wrapf(err, "finding patch '%s'", nextItem.Version))
@@ -439,6 +443,8 @@ func (j *commitQueueJob) processGitHubPRItem(ctx context.Context, cq *commitqueu
 }
 
 func (j *commitQueueJob) processCLIPatchItem(ctx context.Context, cq *commitqueue.CommitQueue, nextItem *commitqueue.CommitQueueItem, projectRef *model.ProjectRef, githubToken string) {
+	// this patchDoc has the good base
+	// so that happens before this
 	patchDoc, err := patch.FindOneId(nextItem.Issue)
 	if err != nil {
 		err = errors.Wrapf(err, "finding patch '%s'", nextItem.Issue)
@@ -455,6 +461,8 @@ func (j *commitQueueJob) processCLIPatchItem(ctx context.Context, cq *commitqueu
 		return
 	}
 
+	// chayaM here in update Patch, it does:  sha, err = getBranchCommitHash. does the PR queue do that?
+	// this is it. we need this for the pr one too.
 	project, pp, err := updatePatch(ctx, j.env.Settings(), githubToken, projectRef, patchDoc)
 	if err != nil {
 		err = errors.Wrap(err, "updating patch")
@@ -464,6 +472,7 @@ func (j *commitQueueJob) processCLIPatchItem(ctx context.Context, cq *commitqueu
 		return
 	}
 
+	// adds the merge tasks and variants now
 	pp, err = AddMergeTaskAndVariant(ctx, patchDoc, project, projectRef, commitqueue.SourceDiff)
 	if err != nil {
 		err = errors.Wrap(err, "updating patch project config to include merge task")
@@ -473,6 +482,7 @@ func (j *commitQueueJob) processCLIPatchItem(ctx context.Context, cq *commitqueu
 		return
 	}
 
+	// it updates the githash now
 	if err = patchDoc.UpdateGithashProjectAndTasks(); err != nil {
 		err = errors.Wrap(err, "updating patch after including merge task")
 		j.logError(err, *nextItem)
@@ -668,6 +678,7 @@ func AddMergeTaskAndVariant(ctx context.Context, patchDoc *patch.Patch, project 
 	return updatedPP, nil
 }
 
+// chayaM does this need to be updated?
 func getMergeTaskCommands(settings *evergreen.Settings, source string) ([]model.PluginCommandConf, error) {
 	switch source {
 	case commitqueue.SourceDiff:
@@ -748,6 +759,7 @@ func updatePatch(ctx context.Context, settings *evergreen.Settings, githubToken 
 	patchDoc.PatchedProjectConfig = patchConfig.PatchedProjectConfig
 
 	// Update module githashes
+	// chayaM this here is done to update the githashes. Is this done for PRs?
 	for i, mod := range patchDoc.Patches {
 		if mod.ModuleName == "" {
 			patchDoc.Patches[i].Githash = sha

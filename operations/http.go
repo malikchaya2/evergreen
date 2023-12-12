@@ -517,6 +517,7 @@ func (ac *legacyClient) ListDistros() ([]distro.Distro, error) {
 
 // PutPatch submits a new patch for the given project to the API server. If successful, returns
 // the patch object itself.
+// chayaM this is an important one
 func (ac *legacyClient) PutPatch(incomingPatch patchSubmission) (*patch.Patch, error) {
 	// Characters in a string without a utf-8 representation are shoehorned into the � replacement character
 	// when marshalled into JSON.

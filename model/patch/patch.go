@@ -1190,9 +1190,11 @@ func MakeNewMergePatch(pr *github.PullRequest, projectID, alias, commitTitle, co
 	}
 
 	patchDoc := &Patch{
-		Id:          id,
-		Project:     projectID,
-		Author:      u.Id,
+		Id:      id,
+		Project: projectID,
+		Author:  u.Id,
+		// chayaM1 this here is the one from github.
+		// is there where it needs to be the base pulled from latest? how the cli one set it?
 		Githash:     pr.Base.GetSHA(),
 		Description: fmt.Sprintf("'%s' commit queue merge (PR #%d) by %s: %s (%s)", pr.Base.Repo.GetFullName(), pr.GetNumber(), u.Username(), pr.GetTitle(), pr.GetHTMLURL()),
 		CreateTime:  time.Now(),

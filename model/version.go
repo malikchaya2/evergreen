@@ -754,6 +754,7 @@ func constructManifest(v *Version, projectRef *ProjectRef, moduleList ModuleList
 			}
 		}
 
+		// chayaM this is where it gets the manifest module
 		mfstModule, err := getManifestModule(v, projectRef, token, module)
 		if err != nil {
 			return nil, errors.Wrapf(err, "module '%s'", module.Name)
@@ -774,7 +775,7 @@ func getManifestModule(v *Version, projectRef *ProjectRef, token string, module 
 	if module.Ref == "" {
 		ghCtx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
-
+		// chayaM this is the base commit for the main version
 		commit, err := thirdparty.GetCommitEvent(ghCtx, token, projectRef.Owner, projectRef.Repo, v.Revision)
 		if err != nil {
 			return nil, errors.Wrapf(err, "can't get commit '%s' on '%s/%s'", v.Revision, projectRef.Owner, projectRef.Repo)
@@ -789,6 +790,7 @@ func getManifestModule(v *Version, projectRef *ProjectRef, token string, module 
 			revisionTime = commit.Commit.Committer.GetDate().Time
 		}
 
+		// this will then grab the latest commit from the owner/repo/branch for the module
 		branchCommits, _, err := thirdparty.GetGithubCommits(ghCtx, token, owner, repo, module.Branch, revisionTime, 0)
 		if err != nil {
 			return nil, errors.Wrapf(err, "retrieving git branch for module '%s'", module.Name)
@@ -828,6 +830,7 @@ func getManifestModule(v *Version, projectRef *ProjectRef, token string, module 
 }
 
 // CreateManifest inserts a newly constructed manifest into the DB.
+// here, when does the commit queue call this?
 func CreateManifest(v *Version, modules ModuleList, projectRef *ProjectRef, settings *evergreen.Settings) (*manifest.Manifest, error) {
 	token, err := settings.GetGithubOauthToken()
 	if err != nil {

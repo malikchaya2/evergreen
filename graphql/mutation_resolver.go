@@ -288,7 +288,7 @@ func (r *mutationResolver) EnqueuePatch(ctx context.Context, patchID string, com
 	if commitMessage == nil {
 		commitMessage = existingPatch.Description
 	}
-
+	// chayaM can see difference between PR and not PR here
 	if utility.FromStringPtr(existingPatch.Requester) == evergreen.GithubPRRequester {
 		info := commitqueue.EnqueuePRInfo{
 			PR:            existingPatch.GithubPatchData.PRNumber,

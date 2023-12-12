@@ -46,6 +46,7 @@ func (pc *DBCommitQueueConnector) AddPatchForPR(ctx context.Context, projectRef 
 	}
 
 	title := fmt.Sprintf("%s (#%d)", pr.GetTitle(), prNum)
+	// is this where the base is set?
 	patchDoc, err := patch.MakeNewMergePatch(pr, projectRef.Id, evergreen.CommitQueueAlias, title, messageOverride)
 	if err != nil {
 		return nil, errors.Wrap(err, "making commit queue patch")
@@ -214,6 +215,7 @@ func FindCommitQueueForProject(name string) (*restModel.APICommitQueue, error) {
 // FindAndRemoveCommitQueueItem dequeues an item from the commit queue and returns the
 // removed item. If the item is already being tested in a batch, later items in
 // the batch are restarted.
+// chayaM this is where it's dequeued
 func FindAndRemoveCommitQueueItem(ctx context.Context, cqId, issue, user, reason string) (*restModel.APICommitQueueItem, error) {
 	cq, err := commitqueue.FindOneId(cqId)
 	if err != nil {
@@ -330,6 +332,7 @@ var errNoCommitQueueForBranch = errors.New("no project with commit queue enabled
 // submit to the commit queue, and enqueues it. If it succeeds, it will return
 // the created patch and the PR info. It may still return the PR info even if
 // it fails to create the patch.
+// check where this is called. And what is called if it's a cli one?
 func getAndEnqueueCommitQueueItemForPR(ctx context.Context, env evergreen.Environment, sc Connector, info commitqueue.EnqueuePRInfo) (*patch.Patch, *github.PullRequest, error) {
 	pr, err := getPRAndCheckBase(ctx, sc, info)
 	if err != nil {
@@ -337,6 +340,7 @@ func getAndEnqueueCommitQueueItemForPR(ctx context.Context, env evergreen.Enviro
 	}
 
 	cqInfo := restModel.ParseGitHubComment(info.CommitMessage)
+	// here it gets the base
 	baseBranch := *pr.Base.Ref
 	projectRef, err := model.FindOneProjectRefWithCommitQueueByOwnerRepoAndBranch(info.Owner, info.Repo, baseBranch)
 	if err != nil {
@@ -366,10 +370,12 @@ func getAndEnqueueCommitQueueItemForPR(ctx context.Context, env evergreen.Enviro
 		return nil, pr, err
 	}
 
+	// here it builds a patch eventually in AddPatchForPR where the base is set to the base from the PR
 	patchDoc, err := tryEnqueueItemForPR(ctx, sc, projectRef, info.PR, cqInfo)
 	if err != nil {
 		return nil, pr, errors.Wrap(err, "enqueueing item to commit queue for PR")
 	}
+	// where/how is this pr that's returned used?
 	return patchDoc, pr, nil
 }
 
@@ -388,6 +394,7 @@ func getPRAndCheckBase(ctx context.Context, sc Connector, info commitqueue.Enque
 // checkPRIsMergeable verifies that the PR is mergeable. It may refresh the PR
 // state if it's out of date; otherwise, if it's up-to-date, it will return the
 // PR info as-is.
+// where is this called?
 func checkPRIsMergeable(ctx context.Context, sc Connector, pr *github.PullRequest, info commitqueue.EnqueuePRInfo) (*github.PullRequest, error) {
 	mergeableState := pr.GetMergeableState()
 
@@ -456,12 +463,14 @@ func tryEnqueueItemForPR(ctx context.Context, sc Connector, projectRef *model.Pr
 		return nil, errors.Wrap(err, "creating patch for PR")
 	}
 
+	// looks like the base branch is not part of what's enqueued
 	item := restModel.APICommitQueueItem{
 		Issue:           utility.ToStringPtr(strconv.Itoa(prNum)),
 		MessageOverride: &cqInfo.MessageOverride,
 		Modules:         cqInfo.Modules,
-		Source:          utility.ToStringPtr(commitqueue.SourcePullRequest),
-		PatchId:         utility.ToStringPtr(patchDoc.Id.Hex()),
+		// does it take the source and decide how to get the base based on that?
+		Source:  utility.ToStringPtr(commitqueue.SourcePullRequest),
+		PatchId: utility.ToStringPtr(patchDoc.Id.Hex()),
 	}
 	if _, err = EnqueueItem(projectRef.Id, item, false); err != nil {
 		return nil, errors.Wrap(err, "enqueueing commit queue item")

@@ -37,8 +37,10 @@ func GetModulesFromPR(ctx context.Context, githubToken string, modules []commitq
 			return nil, nil, errors.Wrap(err, "PR not valid for merge")
 		}
 		modulePRs = append(modulePRs, pr)
+		// chayaM: change this
 		githash := pr.GetMergeCommitSHA()
-
+		// chayaM is this used in the commit queue? yes. It's called in AddPatchForPR
+		// how is this done in the CLI one?
 		modulePatches = append(modulePatches, patch.ModulePatch{
 			ModuleName: mod.Module,
 			Githash:    githash,

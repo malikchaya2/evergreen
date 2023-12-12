@@ -115,12 +115,13 @@ type patchSubmission struct {
 	patchAuthor       string
 }
 
+// chayaM this is where the patch is created if it's added from the CLI
 func (p *patchParams) createPatch(ac *legacyClient, diffData *localDiff) (*patch.Patch, error) {
 	patchSub := patchSubmission{
 		projectName:       p.Project,
 		patchData:         diffData.fullPatch,
 		description:       p.Description,
-		base:              diffData.base,
+		base:              diffData.base, // get's the base from here
 		variants:          p.Variants,
 		tasks:             p.Tasks,
 		regexVariants:     p.RegexVariants,
