@@ -1,19 +1,4 @@
 #######################################
-#               Modules               #
-#######################################
-# This format is deprecated
-# modules:
-#   - name: spruce
-#     repo: git@github.com:evergreen-ci/spruce.git
-#     branch: main
-#   # Use this format instead
-#   - name: logkeeper
-#     owner: evergreen-ci
-#     repo: logkeeper
-#     branch: main
-#     auto_update: true
-
-#######################################
 #              Functions              #
 #######################################
 functions:
@@ -38,7 +23,6 @@ tasks:
           shell: "bash"
           script: |
             echo "hello world"
-  # This will not work anymore
   - name: test-ssh-clone-public
     commands:
       - func: get-project-and-modules
@@ -47,7 +31,6 @@ tasks:
           shell: "bash"
           script: |
             git clone git@github.com:evergreen-ci/spruce.git
-  # This will still work
   - name: test-ssh-clone-private
     commands:
       - func: get-project-and-modules
@@ -60,19 +43,20 @@ tasks:
         params:
           shell: "bash"
           script: |
-            sleep 20m
+            echo hello
+  - name: test-https-clone
+    commands:
+      - func: get-project-and-modules
+      - command: shell.exec
+        params:
+          shell: "bash"
+          script: |
+            git clone https://github.com/evergreen-ci/spruce.git
 
 #######################################
 #            Buildvariants            #
 #######################################
 buildvariants:
-  # - name: ubuntu2204-small
-  # display_name: ubuntu2204-small
-  # run_on:
-  #   - ubuntu2204-small
-  # tasks:
-  #   - name: test-ssh-clone
-  #   - name: test-https-clone
   - name: ubuntu1604-small
     display_name: ubuntu1604-small
     run_on:
@@ -80,19 +64,4 @@ buildvariants:
     tasks:
       - name: test-ssh-clone-public
       - name: test-ssh-clone-private
-  # - name: ssh-module
-  #   display_name: with-ssh-module
-  #   run_on:
-  #     - ubuntu2204-small
-  #   modules:
-  #     - spruce
-  #   tasks:
-  #     - name: just-print
-  # - name: https-module
-  #   display_name: with-https-module
-  #   run_on:
-  #     - ubuntu2204-small
-  #   modules:
-  #     - logkeeper
-  #   tasks:
-  #     - name: just-print
+      - name: test-https-clone
