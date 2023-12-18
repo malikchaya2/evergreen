@@ -431,6 +431,9 @@ func (a *Agent) setupTask(agentCtx, setupCtx context.Context, initialTC *taskCon
 		// use that as the killProcsOverride. Because the taskConfig will be nil in this case, killProcs
 		// will not be able to determine if it should kill processes from the taskConfig task group.
 		taskGroupIsNil := nt.TaskGroup == ""
+		if initialTC != nil && initialTC.taskConfig != nil {
+			taskGroupIsNil = initialTC.taskConfig.TaskGroup == nil
+		}
 		return a.handleSetupError(setupCtx, tc, errors.Wrap(err, "making task config"), taskGroupIsNil) // here
 	}
 	tc.taskConfig = taskConfig
