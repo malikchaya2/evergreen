@@ -1413,6 +1413,12 @@ func (bvt *BuildVariantTaskUnit) HasSpecificActivation() bool {
 	return bvt.CronBatchTime != "" || bvt.BatchTime != nil || bvt.Activate != nil || bvt.IsDisabled()
 }
 
+// HasSpecificActivation returns if the build variant task specifies an activation condition that
+// overrides the default, such as cron/batchtime, disabling the task, or explicitly activating it.
+func (bvt *BuildVariantTaskUnit) HasCheckRun() bool {
+	return bvt.CreateCheckRun != nil
+}
+
 // FindTaskForVariant returns the build variant task unit for a matching task or
 // task within a task group. If searching for a task within the task group, the
 // build variant task unit returned will have its fields populated, respecting
