@@ -14,6 +14,7 @@ import (
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/model/cache"
 	"github.com/evergreen-ci/evergreen/model/commitqueue"
+	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/utility"
 	"github.com/google/go-github/v52/github"
 	"github.com/gregjones/httpcache"
@@ -1938,8 +1939,20 @@ func GetBranchProtectionRules(ctx context.Context, token, owner, repo, branch st
 	return nil, nil
 }
 
-// CreateCheckrun creates a checkRun and returns a Github CheckRun object
-func CreateCheckrun(ctx context.Context, owner, repo, name, headSHA string, output *github.CheckRunOutput) (*github.CheckRun, error) {
+// ProcessCheckRunForTask takes in all the parameters specified in path_to_outputs,
+// then fills in the parameters that Evergreen sets for users
+// https://docs.github.com/en/rest/checks/runs?apiVersion=2022-11-28#update-a-check-run
+func ProcessCheckRunForTask(ctx context.Context, task *task.Task) {
+	// The upsertCheckRun function should look like:
+	// Apply expansions
+	// Read and validate output
+	// (To be added later) Pass in output and other parameters to github function
+	// The function should not yet call the GitHub function or support multiple executions.
+	output, err := ReadAndValidateOutputPath(f.Name())
+}
+
+// createCheckrun creates a checkRun and returns a Github CheckRun object
+func createCheckrun(ctx context.Context, owner, repo, name, headSHA string, output *github.CheckRunOutput) (*github.CheckRun, error) {
 	caller := "createCheckrun"
 	ctx, span := tracer.Start(ctx, caller, trace.WithAttributes(
 		attribute.String(githubEndpointAttribute, caller),
