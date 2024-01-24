@@ -973,12 +973,14 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 		grip.Error(errors.Wrap(tc.logger.Flush(flushCtx), "flushing logs"))
 	}
 
+	// the work for this ticket
 	err := a.upsertCheckRun(ctx, tc)
 	if err != nil {
 		grip.Error(errors.Wrap(err, "upserting checkrun"))
 	}
 	grip.Info("Successfully upserted checkRun.")
 
+	// end here
 	grip.Infof("Sending final task status: '%s'.", detail.Status)
 	resp, err := a.comm.EndTask(ctx, detail, tc.task)
 	if err != nil {
