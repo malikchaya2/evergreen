@@ -2847,3 +2847,78 @@ patch_aliases:
 		s.NotEqual("other-variant", pair.Variant)
 	}
 }
+
+func (s *projectSuite) TestTagNegation2() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	const projYml = `
+tasks:
+  - name: performance-test
+    tags: ["performance"]
+    commands:
+      - command: shell.exec
+        params:
+          script: echo "performance test"
+  - name: other
+    tags: ["other"]
+    commands:
+      - command: shell.exec
+        params:
+          script: echo "other"
+  - name: task-for-task-group
+    commands:
+      - command: shell.exec
+        params:
+          script: echo "task-for-task-group"
+task_groups:
+  - name: task-group-name
+    tags: ["performance"]
+    max_hosts: 1
+    tasks:
+      - task-for-task-group
+buildvariants:
+  - name: my-build-variant
+    display_name: my-build-variant
+    run_on:
+      - ubuntu1604-small
+    tasks:
+      - name: .performance !.other
+
+patch_aliases:
+  - alias: "my alias"
+    # select all the task in the build variant
+    variant: "my-build-variant"
+    task: ".*"
+`
+
+	p := &Project{}
+	_, err := LoadProjectInto(ctx, []byte(projYml), nil, "", p)
+	s.Require().NoError(err)
+
+	pc, err := CreateProjectConfig([]byte(projYml), "")
+	s.NoError(err)
+	s.NotNil(pc)
+
+	alias := pc.PatchAliases[0]
+	pairs, _, err := p.BuildProjectTVPairsWithAlias([]ProjectAlias{alias}, evergreen.PatchVersionRequester)
+	s.NoError(err)
+	s.Len(pairs, 1)
+	for _, pair := range pairs {
+		a := pair.Variant
+		b := pair.TaskName
+		print(a, b)
+	}
+
+	pairStrs := make([]string, len(pairs))
+	for i, p := range pairs {
+		pairStrs[i] = p.String()
+	}
+
+	s.Contains(pairStrs, "my-build-variant/performance-test")
+
+	// this will not select task-for-task-group even though it's tagged "performance"
+	// through the task group
+	for _, pair := range pairs {
+		s.NotEqual("task-for-task-group", pair.TaskName)
+	}
+}
