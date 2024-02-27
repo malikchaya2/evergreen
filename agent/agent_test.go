@@ -2244,6 +2244,146 @@ task_groups:
 	})
 }
 
+// chayamtesting
+func (s *AgentSuite) TestTeardownTaskWithOneTask() {
+	projYmlWithTeardownTask := `
+buildvariants:
+  - name: mock_build_variant
+
+tasks:
+  - name: this_is_a_task_name
+    commands:
+      - command: shell.exec
+        params:
+          script: echo "hi"
+  - name: this_is_another_task_name
+    commands:
+      - command: shell.exec
+        params:
+          script: echo "hi"
+  - name: task3
+    commands:
+      - command: shell.exec
+        params:
+          script: echo "hi"
+
+task_groups:
+  - name: some_task_group
+    teardown_task:
+      - command: shell.exec
+        params:
+          script: echo "tearing-down-task"
+    setup_task:
+      - command: shell.exec
+        params:
+          script: echo "seting-up-task"
+    tasks:
+      - this_is_a_task_name
+      - this_is_another_task_name
+      - task3
+`
+	s.tc.task = client.TaskData{
+		ID:     "this_is_a_task_name",
+		Secret: "task_secret",
+	}
+	s.setupRunTask(projYmlWithTeardownTask)
+	taskGroup := "some_task_group"
+	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
+
+	nextTask := &apimodels.NextTaskResponse{
+		TaskId:     s.tc.task.ID,
+		TaskSecret: s.tc.task.Secret,
+		TaskGroup:  taskGroup,
+	}
+
+	s.mockCommunicator.NextTaskResponse = nextTask
+
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Hour)
+	defer cancel()
+
+	errs := make(chan error, 1)
+	go func() {
+		errs <- s.a.loop(ctx)
+	}()
+	select {
+	case err := <-errs:
+		s.NoError(err)
+	case <-ctx.Done():
+		s.FailNow(ctx.Err().Error())
+	}
+
+	// _, _, err := s.a.runTask(s.ctx, s.tc, nextTask, false, s.testTmpDirName)
+	// s.NoError(err)
+
+	checkMockLogs(s.T(), s.mockCommunicator, s.tc.taskConfig.Task.Id, []string{
+		"Running teardown-task commands.",
+	}, []string{
+		panicLog,
+		"Running task-timeout commands",
+	})
+}
+
+func (s *AgentSuite) TestTeardownGroupWithOneTask() {
+	projYmlWithTeardownTask := `
+tasks:
+  - name: this_is_a_task_name
+    commands:
+      - command: shell.exec
+        params:
+          script: echo "hi"
+  - name: this_is_another_task_name
+    commands:
+      - command: shell.exec
+        params:
+          script: echo "hi"
+  - name: task3
+    commands:
+      - command: shell.exec
+        params:
+          script: echo "hi"
+
+task_groups:
+  - name: some_task_group
+    teardown_task:
+      - command: shell.exec
+        params:
+          script: echo "tearing-down-task"
+    setup_task:
+      - command: shell.exec
+        params:
+          script: echo "seting-up-task"
+    tasks:
+      - this_is_a_task_name
+      - this_is_another_task_name
+      - task3
+`
+
+	s.tc.task = client.TaskData{
+		ID:     "this_is_a_task_name",
+		Secret: "task_secret",
+	}
+
+	s.setupRunTask(projYmlWithTeardownTask)
+	taskGroup := "some_task_group"
+	s.tc.taskConfig.Task.TaskGroup = taskGroup
+	s.tc.taskConfig.TaskGroup = s.tc.taskConfig.Project.FindTaskGroup(taskGroup)
+
+	nextTask := &apimodels.NextTaskResponse{
+		TaskId:     s.tc.task.ID,
+		TaskSecret: s.tc.task.Secret,
+		TaskGroup:  taskGroup,
+	}
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, false, s.testTmpDirName)
+	s.NoError(err)
+
+	checkMockLogs(s.T(), s.mockCommunicator, s.tc.taskConfig.Task.Id, []string{
+		"tearing down",
+	}, []string{
+		panicLog,
+	})
+}
+
 func (s *AgentSuite) TestTimeoutHitsCallbackTimeout() {
 	s.tc.task = client.TaskData{
 		ID:     "task_id",
