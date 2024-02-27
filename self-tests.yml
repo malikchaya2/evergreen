@@ -1,19 +1,4 @@
 tasks:
-  - name: this_is_a_task_name
-    commands:
-      - command: shell.exec
-        params:
-          script: echo "running task this_is_a_task_name"
-  - name: this_is_another_task_name
-    commands:
-      - command: shell.exec
-        params:
-          script: echo "running task this_is_another_task_name"
-  - name: task3
-    commands:
-      - command: shell.exec
-        params:
-          script: echo "running task task3"
   - name: task4
     commands:
       - command: shell.exec
@@ -31,41 +16,6 @@ tasks:
           script: echo "running task task6"
 
 task_groups:
-  - name: group_few_tasks_teardown_task
-    teardown_task:
-      - command: shell.exec
-        params:
-          script: echo "this is the teardown_task"
-    setup_task:
-      - command: shell.exec
-        params:
-          script: echo "this is the setup_task"
-    tasks:
-      - this_is_a_task_name
-      - this_is_another_task_name
-  - name: group_one_task_teardown_task
-    teardown_task:
-      - command: shell.exec
-        params:
-          script: echo "this is the teardown_task"
-    setup_task:
-      - command: shell.exec
-        params:
-          script: echo "this is the setup_task"
-    tasks:
-      - task3
-  - name: group_few_tasks_teardown_group
-    teardown_group:
-      - command: shell.exec
-        params:
-          script: echo "this is the teardown_task"
-    setup_task:
-      - command: shell.exec
-        params:
-          script: echo "this is the setup_task"
-    tasks:
-      - task4
-      - task5
   - name: group_one_task_teardown_group
     teardown_group:
       - command: shell.exec
@@ -77,7 +27,21 @@ task_groups:
           script: echo "this is the setup_task"
     tasks:
       - task6
-
+  - name: closer_copy
+    setup_group_can_fail_task: true
+    setup_group_timeout_secs: 1800
+    setup_group:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: echo "this is the setup_group"
+    teardown_group:
+      - command: shell.exec
+        params:
+          shell: bash
+          script: echo "this is the teardown_group"
+    tasks:
+      - task4
 buildvariants:
   - name: ubuntu2204
     display_name: Ubuntu 22.04
@@ -85,7 +49,4 @@ buildvariants:
       - ubuntu2204-small
       - ubuntu2204-large
     tasks:
-      - "group_few_tasks_teardown_task"
-      - "group_one_task_teardown_task"
-      - "group_few_tasks_teardown_group"
-      - "group_one_task_teardown_group"
+      - "closer_copy"
