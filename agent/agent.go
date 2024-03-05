@@ -268,10 +268,14 @@ func (a *Agent) loop(ctx context.Context) error {
 				return errors.Wrap(err, "getting next task")
 			}
 
-			tc.logger.Task().Infof("chayaMtesting loop 271 needTeardownGroup: '%s').", needTeardownGroup)
+			if tc.logger != nil {
+				tc.logger.Task().Infof("chayaMtesting loop 271 needTeardownGroup: '%s').", needTeardownGroup)
+			}
 
 			ntr, err := a.processNextTask(ctx, nextTask, tc, needTeardownGroup)
-			tc.logger.Task().Infof("chayaMtesting loop 274 ntr.needTeardownGroup: '%s').", ntr.needTeardownGroup)
+			if tc.logger != nil {
+				tc.logger.Task().Infof("chayaMtesting loop 274 ntr.needTeardownGroup: '%s').", ntr.needTeardownGroup)
+			}
 			if err != nil {
 				return errors.Wrap(err, "processing next task")
 			}
