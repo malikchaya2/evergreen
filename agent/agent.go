@@ -267,7 +267,11 @@ func (a *Agent) loop(ctx context.Context) error {
 			if err != nil {
 				return errors.Wrap(err, "getting next task")
 			}
+
+			tc.logger.Task().Infof("chayaMtesting loop 271 needTeardownGroup: '%s').", needTeardownGroup)
+
 			ntr, err := a.processNextTask(ctx, nextTask, tc, needTeardownGroup)
+			tc.logger.Task().Infof("chayaMtesting loop 274 ntr.needTeardownGroup: '%s').", ntr.needTeardownGroup)
 			if err != nil {
 				return errors.Wrap(err, "processing next task")
 			}
@@ -311,6 +315,10 @@ func (a *Agent) processNextTask(ctx context.Context, nt *apimodels.NextTaskRespo
 		grip.Notice("Next task response indicates agent should exit.")
 		return processNextResponse{shouldExit: true}, nil
 	}
+
+	tc.logger.Task().Infof("chayaMtesting processNextTask 315 nt.ShouldTeardownGroup: '%s').", nt.ShouldTeardownGroup)
+	tc.logger.Task().Infof("chayaMtesting processNextTask 316 nt.needTeardownGroup: '%s').", needTeardownGroup)
+
 	if nt.ShouldTeardownGroup {
 		// Tear down the task group if the task group is finished.
 		a.runTeardownGroupCommands(ctx, tc)
@@ -388,7 +396,10 @@ func (a *Agent) finishPrevTask(ctx context.Context, nextTask *apimodels.NextTask
 		taskDirectory = tc.taskConfig.WorkDir
 	}
 
-	if shouldRunSetupGroup(nextTask, tc) {
+	ssg := shouldRunSetupGroup(nextTask, tc)
+	tc.logger.Task().Infof("chayaMtesting finishPrevTask 400 shouldSetupGroup: '%s').", ssg)
+
+	if ssg {
 		shouldSetupGroup = true
 		taskDirectory = ""
 		a.runTeardownGroupCommands(ctx, tc)
@@ -510,6 +521,9 @@ func shouldRunSetupGroup(nextTask *apimodels.NextTaskResponse, tc *taskContext) 
 	if tc.taskConfig != nil && tc.taskConfig.TaskGroup != nil {
 		previousTaskGroup = tc.taskConfig.TaskGroup.Name
 	}
+
+	tc.logger.Task().Infof("chayaMtesting shouldRunSetupGroup 525 previousTaskGroup: '%s').", previousTaskGroup)
+	tc.logger.Task().Infof("chayaMtesting shouldRunSetupGroup 526 nextTask.TaskGroup != previousTaskGroup : '%s').", nextTask.TaskGroup != previousTaskGroup)
 	if !tc.ranSetupGroup { // The agent hasn't run setup group before.
 		return true
 	} else if tc.taskConfig == nil || // The agent hasn't run any task previously.
@@ -848,6 +862,7 @@ func (a *Agent) runPostOrTeardownTaskCommands(ctx context.Context, tc *taskConte
 }
 
 func (a *Agent) runTeardownGroupCommands(ctx context.Context, tc *taskContext) {
+	tc.logger.Task().Info("chayaMtesting runTeardownGroupCommands 855")
 	defer a.removeTaskDirectory(tc)
 	if tc.taskConfig == nil {
 		return
