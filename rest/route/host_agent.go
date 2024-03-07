@@ -120,6 +120,10 @@ func (h *hostAgentNextTask) Run(ctx context.Context) gimlet.Responder {
 		return gimlet.MakeJSONInternalErrorResponder(err)
 	}
 	if nextTaskResponse.ShouldExit {
+		grip.Debug(message.Fields{
+			"message": "host is asking the agent to exit after handling reprovisioning",
+			"host_id": h.host.Id,
+		})
 		return gimlet.NewJSONResponse(nextTaskResponse)
 	}
 
@@ -147,6 +151,10 @@ func (h *hostAgentNextTask) Run(ctx context.Context) gimlet.Responder {
 			host:          h.host,
 			remoteAddr:    h.remoteAddr,
 			ec2InstanceID: h.details.EC2InstanceID,
+		})
+		grip.DebugWhen(shouldExit, message.Fields{
+			"message": "host is asking the agent to exit after preparing host for agent exit",
+			"host_id": h.host.Id,
 		})
 		if err != nil {
 			grip.Error(message.WrapError(err, message.Fields{
@@ -176,6 +184,10 @@ func (h *hostAgentNextTask) Run(ctx context.Context) gimlet.Responder {
 		return gimlet.MakeJSONInternalErrorResponder(err)
 	}
 	if nextTaskResponse.ShouldExit {
+		grip.Debug(message.Fields{
+			"message": "host is asking the agent to exit after handling old agent revision",
+			"host_id": h.host.Id,
+		})
 		return gimlet.NewJSONResponse(nextTaskResponse)
 	}
 
