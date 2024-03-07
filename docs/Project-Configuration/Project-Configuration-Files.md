@@ -462,7 +462,9 @@ All projects can have a `pre` and `post` field which define a list of commands
 to run at the start and end of every task that isn't in a task group. For task
 groups, `setup_task` and `teardown_task` will run instead of `pre` and `post`
 (see [task groups](#task-groups) for more information). These are incredibly
-useful as a place for results commands or for task setup and cleanup.
+useful as a place for results commands or for task setup and cleanup. Note: If a 
+host runs into an issue and needs to exit before it ran the post task commands, 
+it will exit without running the post task commands. 
 
 ``` yaml
 pre_error_fails_task: true
@@ -1498,6 +1500,18 @@ If a task in a multi-host task group is restarted:
   running the task group but with a different task execution, it's treated like
   a new task group, so it will run the teardown group commands, clear the task
   directory, and re-run the setup group commands.
+
+#### TearDown task and teardown group reliability 
+Both teardown task and teardown group are not 100% guaranteed to run. If a 
+host runs into an issue and needs to exit before it ran the teardown task 
+or teardown group, it will exit without running the teardown commands. 
+
+However, teardown group has a higher likelihood of running into this situation
+than teardown task does. Teardown group runs after the next task has already 
+been assigned and it was able to determine that the next task that will run on 
+the host is not part of the same task group. There are a few things the 
+host will do and check before a task is assigned and when doing that may run 
+into a situation where the agent is asked to exit. 
 
 ### Task Dependencies
 
