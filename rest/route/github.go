@@ -265,6 +265,9 @@ func (gh *githubHookApi) Run(ctx context.Context) gimlet.Responder {
 			return gh.handleMergeGroupChecksRequested(event)
 		}
 
+		// add for checkSuiteEvent
+		// maybe it was for all fialed
+		// maybe restart all is different than all failed
 	case *github.CheckRunEvent:
 		if event.GetAction() == githubActionRerequested {
 			return gh.handleCheckRunRerequested(ctx, event)

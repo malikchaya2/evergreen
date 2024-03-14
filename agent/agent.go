@@ -1037,10 +1037,12 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 }
 
 func (a *Agent) upsertCheckRun(ctx context.Context, tc *taskContext) error {
+	tc.logger.Task().Errorf("chayaMtesting in upsertCheckRun 1040")
 	if tc.taskConfig == nil {
+		tc.logger.Task().Errorf("chayaMtesting in upsertCheckRun 1042")
 		return nil
 	}
-
+	tc.logger.Task().Errorf("chayaMtesting in upsertCheckRun 1045")
 	checkRunOutput, err := buildCheckRun(ctx, tc)
 	if err != nil {
 		return err
@@ -1050,6 +1052,7 @@ func (a *Agent) upsertCheckRun(ctx context.Context, tc *taskContext) error {
 	}
 
 	if err = a.comm.UpsertCheckRun(ctx, tc.task, *checkRunOutput); err != nil {
+		tc.logger.Task().Errorf("Error upserting checkRun: error=%s", err)
 		return err
 	}
 

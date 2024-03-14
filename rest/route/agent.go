@@ -1431,6 +1431,10 @@ func (h *checkRunHandler) Factory() gimlet.RouteHandler {
 }
 
 func (h *checkRunHandler) Parse(ctx context.Context, r *http.Request) error {
+	grip.Error(message.Fields{
+		"message": "chayaMtesting checkRun Parse ",
+		"task_id": h.taskID,
+	})
 	if h.taskID = gimlet.GetVars(r)["task_id"]; h.taskID == "" {
 		return errors.New("missing task ID")
 	}
@@ -1467,6 +1471,10 @@ func (h *checkRunHandler) Parse(ctx context.Context, r *http.Request) error {
 }
 
 func (h *checkRunHandler) Run(ctx context.Context) gimlet.Responder {
+	grip.Error(message.Fields{
+		"message": "chayaMtesting checkRun Run 1475",
+		"task_id": h.taskID,
+	})
 	env := evergreen.GetEnvironment()
 	if env.Settings().GitHubCheckRun.CheckRunLimit <= 0 {
 		return nil
@@ -1498,6 +1506,10 @@ func (h *checkRunHandler) Run(ctx context.Context) gimlet.Responder {
 			Message:    "empty patch for task",
 		})
 	}
+	grip.Error(message.Fields{
+		"message": "chayaMtesting checkRun Run  1510",
+		"task_id": h.taskID,
+	})
 
 	gh := p.GithubPatchData
 	if t.CheckRunId != nil {
@@ -1517,6 +1529,10 @@ func (h *checkRunHandler) Run(ctx context.Context) gimlet.Responder {
 
 	checkRun, err := thirdparty.CreateCheckRun(ctx, gh.BaseOwner, gh.BaseRepo, gh.HeadHash, env.Settings().ApiUrl, t, h.checkRunOutput)
 
+	grip.Error(message.Fields{
+		"message": "chayaMtesting checkRun Run  1533",
+		"task_id": h.taskID,
+	})
 	if err != nil {
 		errorMessage := fmt.Sprintf("creating checkRun for task: '%s'", t.Id)
 		grip.Error(message.Fields{
@@ -1536,6 +1552,10 @@ func (h *checkRunHandler) Run(ctx context.Context) gimlet.Responder {
 		})
 		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "creating check run"))
 	}
+	grip.Error(message.Fields{
+		"message": "chayaMtesting checkRun Run  1556",
+		"task_id": h.taskID,
+	})
 
 	checkRunInt := utility.FromInt64Ptr(checkRun.ID)
 	if err = t.SetCheckRunId(checkRunInt); err != nil {
