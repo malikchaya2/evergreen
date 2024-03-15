@@ -1948,6 +1948,10 @@ func GetBranchProtectionRules(ctx context.Context, token, owner, repo, branch st
 }
 
 func getCheckRunConclusion(status string) string {
+	grip.Info(message.Fields{
+		"ticket": "chayaMtesting in getCheckRunConclusion",
+		"status": status,
+	})
 	switch status {
 	case evergreen.TaskSucceeded:
 		return githubCheckRunSuccess
@@ -1998,6 +2002,11 @@ func CreateCheckRun(ctx context.Context, owner, repo, headSHA, uiBase string, ta
 		Conclusion:  utility.ToStringPtr(getCheckRunConclusion(task.Status)),
 		DetailsURL:  utility.ToStringPtr(makeTaskLink(uiBase, task.Id, task.Execution)),
 	}
+
+	grip.Info(message.Fields{
+		"ticket": "chayaMtesting in CreateCheckRun",
+		"opts":   opts,
+	})
 
 	checkRun, resp, err := githubClient.Checks.CreateCheckRun(ctx, owner, repo, opts)
 	if resp != nil {
