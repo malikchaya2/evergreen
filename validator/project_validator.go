@@ -1716,15 +1716,7 @@ func validateTaskGroups(p *model.Project) ValidationErrors {
 				Level:   Error,
 			})
 		}
-		// validate that the task group is not named the same as a task
-		for _, t := range p.Tasks {
-			if t.Name == tg.Name {
-				errs = append(errs, ValidationError{
-					Message: fmt.Sprintf("%s is used as a name for both a task and task group", t.Name),
-					Level:   Error,
-				})
-			}
-		}
+
 		// validate that a task is not listed twice in a task group
 		counts := make(map[string]int)
 		for _, name := range tg.Tasks {
