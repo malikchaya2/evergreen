@@ -594,6 +594,7 @@ func (p *Patch) UpdateStatus(newStatus string) error {
 	return UpdateOne(bson.M{IdKey: p.Id}, update)
 }
 
+// here
 func (p *Patch) MarkFinished(status string, finishTime time.Time) error {
 	p.Status = status
 	p.FinishTime = finishTime

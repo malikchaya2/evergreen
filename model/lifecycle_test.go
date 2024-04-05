@@ -509,7 +509,7 @@ func TestSetVersionActivation(t *testing.T) {
 		require.NoError(t, task.Insert())
 	}
 
-	assert.NoError(t, SetVersionActivation(vID, false, "user"))
+	assert.NoError(t, SetVersionActivation(context.Background(), vID, false, "user"))
 	builds, err := build.FindBuildsByVersions([]string{vID})
 	require.NoError(t, err)
 	require.Len(t, builds, 2)
