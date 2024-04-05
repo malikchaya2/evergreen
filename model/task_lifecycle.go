@@ -903,14 +903,14 @@ func logTaskEndStats(ctx context.Context, t *task.Task) error {
 
 // logVersionEndStats logs the information for a patch or version
 // after it completes.
-func logVersionEndStats(ctx context.Context, v *Version, project string) error {
+func getVersionCtxForTracing(ctx context.Context, v *Version, project string) (context.Context, error) {
 	if v == nil {
-		return errors.New("version is nil")
+		return nil, errors.New("version is nil")
 	}
 
 	timeTaken, makespan, err := v.GetTimeSpent()
 	if err != nil {
-		return errors.Wrap(err, "getting time spent")
+		return nil, errors.Wrap(err, "getting time spent")
 	}
 	timeTakenMs := int64(timeTaken.Round(time.Second) / time.Millisecond)
 	MakeSpanMs := int64(makespan.Round(time.Second) / time.Millisecond)
@@ -932,10 +932,7 @@ func logVersionEndStats(ctx context.Context, v *Version, project string) error {
 		attribute.String(evergreen.VersionBranchOtelAttribute, v.Branch),
 	})
 
-	ctx, span := tracer.Start(ctx, "patch-or-version-completion")
-	defer span.End()
-
-	return nil
+	return ctx, nil
 }
 
 // UpdateBlockedDependencies traverses the dependency graph and recursively sets
@@ -1804,9 +1801,14 @@ func UpdateBuildAndVersionStatusForTask(ctx context.Context, t *task.Task) error
 		}
 		// for patches, also wait for child patches
 		if !evergreen.IsPatchRequester(taskVersion.Requester) {
-			if err = logVersionEndStats(ctx, taskVersion, t.Project); err != nil {
-				return errors.Wrap(err, "logging version end stats")
+			traceContext, err := getVersionCtxForTracing(ctx, taskVersion, t.Project)
+			if err != nil {
+				return errors.Wrap(err, "getting context for tracing")
 			}
+			_, span := tracer.Start(traceContext, "version-completion")
+			defer span.End()
+
+			return nil
 		}
 	}
 
@@ -1839,9 +1841,12 @@ func UpdateBuildAndVersionStatusForTask(ctx context.Context, t *task.Task) error
 			if err = UpdatePatchStatus(ctx, p, newVersionStatus); err != nil {
 				return errors.Wrapf(err, "updating patch '%s' status", p.Id.Hex())
 			}
-			if err = logVersionEndStats(ctx, taskVersion, p.Project); err != nil {
-				return errors.Wrap(err, "logging patch end stats")
+			traceContext, err := getVersionCtxForTracing(ctx, taskVersion, t.Project)
+			if err != nil {
+				return errors.Wrap(err, "getting context for tracing")
 			}
+			_, span := tracer.Start(traceContext, "version-completion")
+			defer span.End()
 		}
 
 	}
