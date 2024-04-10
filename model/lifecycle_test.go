@@ -528,6 +528,8 @@ func TestSetVersionActivation(t *testing.T) {
 
 func TestBuildSetActivated(t *testing.T) {
 	Convey("With a build", t, func() {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
 
 		require.NoError(t, db.ClearCollections(build.Collection, task.Collection, VersionCollection))
 
@@ -610,7 +612,7 @@ func TestBuildSetActivated(t *testing.T) {
 				}
 				So(canary.Insert(), ShouldBeNil)
 
-				So(ActivateBuildsAndTasks([]string{b.Id}, false, ""), ShouldBeNil)
+				So(ActivateBuildsAndTasks(ctx, []string{b.Id}, false, ""), ShouldBeNil)
 				// the build should have been updated in the db
 				b, err := build.FindOne(build.ById(b.Id))
 				So(err, ShouldBeNil)
@@ -629,7 +631,7 @@ func TestBuildSetActivated(t *testing.T) {
 				So(differentUserTask.Activated, ShouldBeTrue)
 				So(differentUserTask.ActivatedBy, ShouldEqual, user)
 
-				So(ActivateBuildsAndTasks([]string{b.Id}, true, ""), ShouldBeNil)
+				So(ActivateBuildsAndTasks(ctx, []string{b.Id}, true, ""), ShouldBeNil)
 				activatedTasks, err := task.Find(task.ByActivation(true))
 				So(err, ShouldBeNil)
 				So(len(activatedTasks), ShouldEqual, 5)
@@ -675,7 +677,7 @@ func TestBuildSetActivated(t *testing.T) {
 				So(matching2.Insert(), ShouldBeNil)
 
 				// have a user set the build activation to true
-				So(ActivateBuildsAndTasks([]string{b.Id}, true, user), ShouldBeNil)
+				So(ActivateBuildsAndTasks(ctx, []string{b.Id}, true, user), ShouldBeNil)
 
 				// task with the different user activating should be activated with that user
 				task1, err := task.FindOne(db.Query(task.ById(matching.Id)))
@@ -696,7 +698,7 @@ func TestBuildSetActivated(t *testing.T) {
 				So(b.ActivatedBy, ShouldEqual, user)
 
 				// deactivate the task from evergreen and nothing should be deactivated.
-				So(ActivateBuildsAndTasks([]string{b.Id}, false, ""), ShouldBeNil)
+				So(ActivateBuildsAndTasks(ctx, []string{b.Id}, false, ""), ShouldBeNil)
 
 				// refresh from the database and check again
 				b, err = build.FindOne(build.ById(b.Id))
