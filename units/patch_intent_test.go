@@ -428,7 +428,7 @@ func (s *PatchIntentUnitsSuite) TestSetToPreviousPatchDefinition() {
 			s.NoError(err)
 			s.Equal(previousPatchStatus, "failed")
 
-			s.Equal(currentPatchDoc.BuildVariants, previousPatchDoc.BuildVariants)
+			s.Equal(currentPatchDoc.BuildVariants, []string{"bv1", "bv_only_dt", "bv_different_dt"})
 			s.Equal(currentPatchDoc.Tasks, []string{"t1", "t2", "tgt1", "tgt2", "tgt4", "et1"})
 
 		},
@@ -436,7 +436,7 @@ func (s *PatchIntentUnitsSuite) TestSetToPreviousPatchDefinition() {
 			previousPatchStatus, err := j.setToPreviousPatchDefinition(currentPatchDoc, &project, "", true)
 			s.NoError(err)
 			s.Equal(previousPatchStatus, "failed")
-			s.Equal(currentPatchDoc.BuildVariants, previousPatchDoc.BuildVariants)
+			s.Equal(currentPatchDoc.BuildVariants, []string{"bv1", "bv_only_dt", "bv_different_dt"})
 			s.Equal(currentPatchDoc.Tasks, []string{"t1", "tgt1", "tgt2", "tgt4", "et1"})
 		},
 		"specific patch/reuse": func(j *patchIntentProcessor, currentPatchDoc *patch.Patch) {
@@ -598,7 +598,7 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithRepeatFailed() {
 	patchId := "aaaaaaaaaaff001122334455"
 	tasks := []task.Task{
 		{
-			Id:           "t1",
+			Id:           "t1", // should only include this one
 			DependsOn:    []task.Dependency{{TaskId: "t3", Status: evergreen.TaskSucceeded}},
 			Version:      patchId,
 			BuildVariant: "bv1",
@@ -693,15 +693,13 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithRepeatFailed() {
 	}
 
 	currentPatchDoc := intent.NewPatch()
-	currentPatchDoc.Tasks = []string{"t1", "t2"}
-	currentPatchDoc.BuildVariants = []string{"bv1"}
 
 	s.NoError(err)
 
 	err = j.buildTasksAndVariants(currentPatchDoc, &project)
 	s.NoError(err)
 	sort.Strings(currentPatchDoc.Tasks)
-	s.Equal([]string{"t1", "t3", "t4"}, currentPatchDoc.Tasks)
+	s.Equal([]string{"t1"}, currentPatchDoc.Tasks)
 }
 
 func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
@@ -721,7 +719,7 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 		{
 			Id:           "t2",
 			Activated:    true,
-			BuildVariant: "bv1",
+			BuildVariant: "bv2",
 			BuildId:      "b0",
 			Version:      patchId,
 			Status:       evergreen.TaskSucceeded,
@@ -743,11 +741,15 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 		Author:        s.user,
 		Version:       patchId,
 		Tasks:         []string{"t1", "t2"},
-		BuildVariants: []string{"bv1"},
+		BuildVariants: []string{"bv1", "bv2"},
 		VariantsTasks: []patch.VariantTasks{
 			{
 				Variant: "bv1",
-				Tasks:   []string{"t1", "t2", "t3", "t4"},
+				Tasks:   []string{"t1"},
+			},
+			{
+				Variant: "bv2",
+				Tasks:   []string{"t2"},
 			},
 		},
 	}
@@ -804,8 +806,6 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 	}
 
 	currentPatchDoc := intent.NewPatch()
-	currentPatchDoc.Tasks = []string{"t1", "t2"}
-	currentPatchDoc.BuildVariants = []string{"bv1"}
 
 	s.NoError(err)
 
@@ -813,7 +813,9 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 	err = j.buildTasksAndVariants(currentPatchDoc, &project)
 	s.NoError(err)
 	sort.Strings(currentPatchDoc.Tasks)
-	s.Equal([]string{"t1", "t2", "t3", "t4"}, currentPatchDoc.Tasks)
+	s.Equal(previousPatchDoc.Tasks, currentPatchDoc.Tasks)
+	s.Equal(previousPatchDoc.BuildVariants, currentPatchDoc.BuildVariants)
+	s.Equal(previousPatchDoc.VariantsTasks, currentPatchDoc.VariantsTasks)
 }
 
 func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReusePatchId() {
