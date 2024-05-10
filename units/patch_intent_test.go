@@ -631,7 +631,7 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithRepeatFailed() {
 		CreateTime:    time.Now(),
 		Author:        s.user,
 		Version:       patchId,
-		Tasks:         []string{"t1", "t2"},
+		Tasks:         []string{"t1", "t2", "t3", "t4"},
 		BuildVariants: []string{"bv1"},
 		VariantsTasks: []patch.VariantTasks{
 			{
@@ -721,7 +721,7 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 		{
 			Id:           "t2",
 			Activated:    true,
-			BuildVariant: "bv1",
+			BuildVariant: "bv2",
 			BuildId:      "b0",
 			Version:      patchId,
 			Status:       evergreen.TaskSucceeded,
@@ -742,12 +742,16 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 		CreateTime:    time.Now(),
 		Author:        s.user,
 		Version:       patchId,
-		Tasks:         []string{"t1", "t2"},
-		BuildVariants: []string{"bv1"},
+		Tasks:         []string{"t1", "t2", "t3,", "t4"},
+		BuildVariants: []string{"bv1", "bv2"},
 		VariantsTasks: []patch.VariantTasks{
 			{
 				Variant: "bv1",
-				Tasks:   []string{"t1", "t2", "t3", "t4"},
+				Tasks:   []string{"t1", "t3", "t4"},
+			},
+			{
+				Variant: "bv2",
+				Tasks:   []string{"t2"},
 			},
 		},
 	}
@@ -794,6 +798,32 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 						Variant: "bv1",
 					}},
 			},
+			{
+				Name: "bv2",
+				Tasks: []model.BuildVariantTaskUnit{
+					{
+						Name:    "t1",
+						Variant: "bv2",
+						DependsOn: []model.TaskUnitDependency{
+							{Name: "t3", Status: evergreen.TaskFailed},
+						},
+					},
+					{
+						Name:    "t2",
+						Variant: "bv2",
+					},
+					{
+						Name:    "t3",
+						Variant: "bv2",
+						DependsOn: []model.TaskUnitDependency{
+							{Name: "t4", Status: evergreen.TaskFailed},
+						},
+					},
+					{
+						Name:    "t4",
+						Variant: "bv2",
+					}},
+			},
 		},
 		Tasks: []model.ProjectTask{
 			{Name: "t1"},
@@ -814,6 +844,11 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 	s.NoError(err)
 	sort.Strings(currentPatchDoc.Tasks)
 	s.Equal([]string{"t1", "t2", "t3", "t4"}, currentPatchDoc.Tasks)
+	s.Equal(previousPatchDoc.VariantsTasks, currentPatchDoc.VariantsTasks)
+
+	// ensure tasks are not duplicated to buildvariants when they are not in the previous patch
+	s.NotContains(currentPatchDoc.VariantsTasks[0], "bv1")
+	s.NotContains(currentPatchDoc.VariantsTasks[1], "bv2")
 }
 
 func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReusePatchId() {

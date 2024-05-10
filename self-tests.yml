@@ -353,7 +353,7 @@ functions:
         args: ["scripts/verify-agent-version-update.sh"]
         env:
           BRANCH_NAME: ${branch_name}
-  
+
   verify-swaggo-fmt:
     - command: subprocess.exec
       params:
@@ -362,7 +362,7 @@ functions:
         args: ["scripts/verify-swaggo-fmt.sh"]
         env:
           GOPATH: ${workdir}/gopath
-  
+
   check-go-vulnerabilities:
     - command: subprocess.exec
       params:
@@ -593,6 +593,21 @@ tasks:
   - <<: *run-go-test-suite-with-mongodb-useast
     tags: ["db", "test"]
     name: test-graphql
+  - name: with-dependency
+    depends_on:
+      - name: the-dependency
+        status: success
+    commands:
+      - command: shell.exec
+        params:
+          script: |
+            echo hi
+  - name: the-dependency
+    commands:
+      - command: shell.exec
+        params:
+          script: |
+            echo hello
   - name: test-repotracker
     tags: ["db", "test"]
     commands:
@@ -685,7 +700,7 @@ tasks:
       - func: get-project-and-modules
       - func: verify-merge-function-update
   - name: generate-api-docs
-    commands: 
+    commands:
       - func: get-project-and-modules
       - command: subprocess.exec
         params:
@@ -807,6 +822,37 @@ buildvariants:
       - name: test-cloud
       - name: "js-test"
       - name: generate-api-docs
+      - name: with-dependency
+      - name: the-dependency
+
+  - name: ubuntu2204-2
+    display_name: Another Ubuntu 22.04
+    run_on:
+      - ubuntu2204-small
+      - ubuntu2204-large
+    expansions:
+      goos: linux
+      goarch: amd64
+      nodebin: /opt/node/bin
+      GOROOT: /opt/golang/go1.20
+      RUN_EC2_SPECIFIC_TESTS: true
+      mongodb_url: https://fastdl.mongodb.org/linux/mongodb-linux-x86_64-ubuntu2204-7.0.2.tgz
+      mongosh_url: https://downloads.mongodb.com/compass/mongosh-2.0.2-linux-x64.tgz
+      notary_client_url: https://macos-notary-1628249594.s3.amazonaws.com/releases/client/v3.1.2/linux_amd64.zip
+      sign_macos: true
+    tasks:
+      - name: "dist-and-upload-clis"
+      - name: "dist-staging"
+      - name: "dist-unsigned"
+        activate: false
+      - name: ".smoke"
+      - name: ".test"
+      - name: ".linter"
+      - name: test-cloud
+      - name: "js-test"
+      - name: generate-api-docs
+      - name: with-dependency
+      - name: the-dependency
 
   - name: race-detector
     display_name: Race Detector
@@ -913,7 +959,7 @@ buildvariants:
     display_tasks:
       - name: build-and-push
         execution_tasks:
-        - ".build"
+          - ".build"
 
   - name: build-and-push-staging
     display_name: Build and Push - Staging
@@ -928,7 +974,7 @@ buildvariants:
     display_tasks:
       - name: build-and-push
         execution_tasks:
-        - ".build-staging"
+          - ".build-staging"
 
   - name: build-and-push-unsigned
     run_on:
@@ -942,8 +988,7 @@ buildvariants:
     display_tasks:
       - name: build-and-push
         execution_tasks:
-        - ".build"
-
+          - ".build"
 
 containers:
   - name: evg-container
