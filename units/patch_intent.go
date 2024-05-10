@@ -655,56 +655,68 @@ func (j *patchIntentProcessor) buildTasksAndVariants(patchDoc *patch.Patch, proj
 }
 
 // todo: does this need updating too?
-func setTasksToPreviousFailed(patchDoc, previousPatch *patch.Patch, project *model.Project) error {
-	var failedTasks []string
-	for _, vt := range previousPatch.VariantsTasks {
-		tasks, err := getPreviousFailedTasksAndDisplayTasks(project, vt, previousPatch.Version)
-		if err != nil {
-			return err
+func setToFilteredTasks(patchDoc, reusePatch *patch.Patch, project *model.Project, failedOnly bool) error {
+	reuseTasks := []string{}
+	reuseVariants := []string{}
+	for _, vt := range reusePatch.VariantsTasks {
+		reuseTasks = append(reuseTasks, vt.Tasks...)
+		reuseVariants = append(reuseVariants, vt.Variant)
+		//todo: test with display
+		for _, displayTask := range vt.DisplayTasks {
+			reuseTasks = append(reuseTasks, displayTask.ExecTasks...)
 		}
-		failedTasks = append(failedTasks, tasks...)
+	}
 
-		// failedVariantTasks := []patch.VariantTasks{}
-		// for _, vt := range patchDoc.VariantsTasks {
-		// 	variantTask := patch.VariantTasks{}
-		// 	variantTask.Variant = vt.Variant
-		// 	variantTask.Tasks = utility.StringSliceIntersection(failedTasks, vt.Tasks)
-
-		// 	for _, displayTask := range vt.DisplayTasks {
-		// 		if utility.StringSliceContains(failedTasks, displayTask.Name) {
-		// 			variantTask.DisplayTasks = append(variantTask.DisplayTasks, displayTask)
-		// 		}
-		// 	}
-
-		// 	if len(variantTask.Tasks) != 0 || len(variantTask.DisplayTasks) != 0 {
-		// 		failedVariantTasks = append(failedVariantTasks, variantTask)
-		// 	}
-		// }
-
-		// // not working, probably because it's still building it later.
-		// // maybe add some splunk logging or something
-		// patchDoc.VariantsTasks = failedVariantTasks
-
-		patchDoc.Tasks = utility.StringSliceIntersection(failedTasks, patchDoc.Tasks)
-
-		activatedVariantTasks := []patch.VariantTasks{}
-		for _, vt := range patchDoc.VariantsTasks {
-			variantTask := patch.VariantTasks{}
-			variantTask.Variant = vt.Variant
-			variantTask.Tasks = utility.StringSliceIntersection(failedTasks, vt.Tasks)
-			variantTask.DisplayTasks = vt.DisplayTasks
-
-			if len(variantTask.Tasks) != 0 {
-				activatedVariantTasks = append(activatedVariantTasks, variantTask)
+	tasksForFilter := []string{}
+	if failedOnly {
+		var failedTasks []string
+		for _, vt := range reusePatch.VariantsTasks {
+			tasks, err := getPreviousFailedTasksAndDisplayTasks(project, vt, reusePatch.Version)
+			if err != nil {
+				return err
 			}
+			failedTasks = append(failedTasks, tasks...)
+		}
+		tasksForFilter = failedTasks
+	} else {
+		// Only add activated tasks from previous patch
+		query := db.Query(bson.M{
+			task.VersionKey:     reusePatch.Version,
+			task.DisplayNameKey: bson.M{"$in": reuseTasks},
+			task.ActivatedKey:   true,
+			task.DisplayOnlyKey: bson.M{"$ne": true},
+			// use build variants from previous patch because that already includes the regex variants
+			task.BuildVariantKey: bson.M{"$in": reuseVariants},
+		}).WithFields(task.DisplayNameKey)
+		allActivatedTasks, err := task.FindAll(query)
+		if err != nil {
+			return errors.Wrap(err, "getting previous patch tasks")
 		}
 
-		// variant tasks is empty. Look into why.
-		patchDoc.VariantsTasks = activatedVariantTasks
+		activatedTasks := []string{}
+		for _, t := range allActivatedTasks {
+			activatedTasks = append(activatedTasks, t.DisplayName)
+		}
+		tasksForFilter = activatedTasks
 
 	}
 
-	patchDoc.Tasks = failedTasks
+	patchDoc.Tasks = utility.StringSliceIntersection(tasksForFilter, reuseTasks)
+	patchDoc.BuildVariants = utility.StringSliceIntersection(tasksForFilter, reuseVariants)
+
+	filteredVariantTasks := []patch.VariantTasks{}
+	for _, vt := range reusePatch.VariantsTasks {
+		variantTask := patch.VariantTasks{}
+		variantTask.Variant = vt.Variant
+		variantTask.Tasks = utility.StringSliceIntersection(tasksForFilter, vt.Tasks)
+		variantTask.DisplayTasks = vt.DisplayTasks
+
+		if len(variantTask.Tasks) != 0 {
+			filteredVariantTasks = append(filteredVariantTasks, variantTask)
+		}
+	}
+
+	patchDoc.VariantsTasks = filteredVariantTasks
 	return nil
 }
 
@@ -740,69 +752,7 @@ func (j *patchIntentProcessor) setToPreviousPatchDefinition(patchDoc *patch.Patc
 		return reusePatch.Status, nil
 	}
 
-	// todo: do something similar for failed
-	// add variants from previous patch
-	reuseTasks := []string{}
-	reuseVariants := []string{}
-	for _, vt := range reusePatch.VariantsTasks {
-		reuseTasks = append(reuseTasks, vt.Tasks...)
-		reuseVariants = append(reuseVariants, vt.Variant)
-		//todo: test with display
-		for _, displayTask := range vt.DisplayTasks {
-			reuseTasks = append(reuseTasks, displayTask.ExecTasks...)
-		}
-	}
-
-	tasksForFilter := []string{}
-	if failedOnly {
-		var failedTasks []string
-		for _, vt := range reusePatch.VariantsTasks {
-			tasks, err := getPreviousFailedTasksAndDisplayTasks(project, vt, reusePatch.Version)
-			if err != nil {
-				return "", err
-			}
-			failedTasks = append(failedTasks, tasks...)
-		}
-		tasksForFilter = failedTasks
-	} else {
-		// Only add activated tasks from previous patch
-		query := db.Query(bson.M{
-			task.VersionKey:     reusePatch.Version,
-			task.DisplayNameKey: bson.M{"$in": reuseTasks},
-			task.ActivatedKey:   true,
-			task.DisplayOnlyKey: bson.M{"$ne": true},
-			// use patchDoc.BuildVariants because that already also includes the regex variants
-			task.BuildVariantKey: bson.M{"$in": reuseVariants},
-		}).WithFields(task.DisplayNameKey)
-		allActivatedTasks, err := task.FindAll(query)
-		if err != nil {
-			return "", errors.Wrap(err, "getting previous patch tasks")
-		}
-
-		activatedTasks := []string{}
-		for _, t := range allActivatedTasks {
-			activatedTasks = append(activatedTasks, t.DisplayName)
-		}
-		tasksForFilter = activatedTasks
-
-	}
-
-	patchDoc.Tasks = utility.StringSliceIntersection(tasksForFilter, reuseTasks)
-	patchDoc.BuildVariants = utility.StringSliceIntersection(tasksForFilter, reuseVariants)
-
-	filteredVariantTasks := []patch.VariantTasks{}
-	for _, vt := range reusePatch.VariantsTasks {
-		variantTask := patch.VariantTasks{}
-		variantTask.Variant = vt.Variant
-		variantTask.Tasks = utility.StringSliceIntersection(tasksForFilter, vt.Tasks)
-		variantTask.DisplayTasks = vt.DisplayTasks
-
-		if len(variantTask.Tasks) != 0 {
-			filteredVariantTasks = append(filteredVariantTasks, variantTask)
-		}
-	}
-
-	patchDoc.VariantsTasks = filteredVariantTasks
+	setToFilteredTasks(patchDoc, reusePatch, project, failedOnly)
 
 	return reusePatch.Status, nil
 }
