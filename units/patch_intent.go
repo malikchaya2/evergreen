@@ -764,7 +764,8 @@ func (j *patchIntentProcessor) setToPreviousPatchDefinition(patchDoc *patch.Patc
 			variantTask.Tasks = utility.StringSliceIntersection(activatedTasks, vt.Tasks)
 
 			for _, displayTask := range vt.DisplayTasks {
-				if utility.StringSliceContains(activatedTasks, displayTask.Name) {
+				activatedExecTasks := utility.StringSliceIntersection(activatedTasks, displayTask.ExecTasks)
+				if len(activatedExecTasks) != 0 {
 					variantTask.DisplayTasks = append(variantTask.DisplayTasks, displayTask)
 				}
 			}
