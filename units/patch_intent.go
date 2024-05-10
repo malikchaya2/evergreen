@@ -716,9 +716,18 @@ func (j *patchIntentProcessor) setToPreviousPatchDefinition(patchDoc *patch.Patc
 		}
 	}
 
+	// todo: do something similar for failed
 	// add variants from previous patch
+	reuseTasks := []string{}
+	reuseVariants := []string{}
 	for _, vt := range reusePatch.VariantsTasks {
 		patchDoc.BuildVariants = append(patchDoc.BuildVariants, vt.Variant)
+		reuseTasks = append(reuseTasks, vt.Tasks...)
+		reuseVariants = append(reuseVariants, vt.Variant)
+		//todo: test with display
+		for _, displayTask := range vt.DisplayTasks {
+			reuseTasks = append(reuseTasks, displayTask.ExecTasks...)
+		}
 	}
 	if failedOnly {
 		if err = setTasksToPreviousFailed(patchDoc, reusePatch, project); err != nil {
@@ -726,16 +735,17 @@ func (j *patchIntentProcessor) setToPreviousPatchDefinition(patchDoc *patch.Patc
 		}
 	} else if j.IntentType == patch.GithubIntentType {
 		patchDoc.Tasks = reusePatch.Tasks
+		patchDoc.BuildVariants = reusePatch.BuildVariants
 		patchDoc.VariantsTasks = reusePatch.VariantsTasks
 	} else {
 		// Only add activated tasks from previous patch
 		query := db.Query(bson.M{
 			task.VersionKey:     reusePatch.Version,
-			task.DisplayNameKey: bson.M{"$in": reusePatch.Tasks},
+			task.DisplayNameKey: bson.M{"$in": reuseTasks},
 			task.ActivatedKey:   true,
 			task.DisplayOnlyKey: bson.M{"$ne": true},
 			// use patchDoc.BuildVariants because that already also includes the regex variants
-			task.BuildVariantKey: bson.M{"$in": patchDoc.BuildVariants},
+			task.BuildVariantKey: bson.M{"$in": reuseVariants},
 		}).WithFields(task.DisplayNameKey)
 		allActivatedTasks, err := task.FindAll(query)
 		if err != nil {
@@ -745,7 +755,7 @@ func (j *patchIntentProcessor) setToPreviousPatchDefinition(patchDoc *patch.Patc
 		for _, t := range allActivatedTasks {
 			activatedTasks = append(activatedTasks, t.DisplayName)
 		}
-		patchDoc.Tasks = utility.StringSliceIntersection(activatedTasks, reusePatch.Tasks)
+		patchDoc.Tasks = utility.StringSliceIntersection(activatedTasks, reuseTasks)
 
 		activatedVariantTasks := []patch.VariantTasks{}
 		for _, vt := range reusePatch.VariantsTasks {

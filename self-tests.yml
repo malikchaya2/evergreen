@@ -197,13 +197,7 @@ functions:
         include_expansions_in_env: ["GOROOT"]
         shell: bash
         script: |
-          # Downloading modules is flaky in the ubuntu1604-arm64 distros, because the TCP connection is sometimes reset
-          # by the peer for unknown reasons (this does not happen in other distros). Retry the module download multiple
-          # times to reduce the flakiness.
-          for i in {1..5}; do
-            make mod-tidy;
-            [[ $? -eq 0 ]] && break;
-          done
+          exit 1
 
   assume-role:
     - command: ec2.assume_role
@@ -353,7 +347,7 @@ functions:
         args: ["scripts/verify-agent-version-update.sh"]
         env:
           BRANCH_NAME: ${branch_name}
-  
+
   verify-swaggo-fmt:
     - command: subprocess.exec
       params:
@@ -362,7 +356,7 @@ functions:
         args: ["scripts/verify-swaggo-fmt.sh"]
         env:
           GOPATH: ${workdir}/gopath
-  
+
   check-go-vulnerabilities:
     - command: subprocess.exec
       params:
@@ -685,7 +679,7 @@ tasks:
       - func: get-project-and-modules
       - func: verify-merge-function-update
   - name: generate-api-docs
-    commands: 
+    commands:
       - func: get-project-and-modules
       - command: subprocess.exec
         params:
@@ -913,7 +907,7 @@ buildvariants:
     display_tasks:
       - name: build-and-push
         execution_tasks:
-        - ".build"
+          - ".build"
 
   - name: build-and-push-staging
     display_name: Build and Push - Staging
@@ -928,7 +922,7 @@ buildvariants:
     display_tasks:
       - name: build-and-push
         execution_tasks:
-        - ".build-staging"
+          - ".build-staging"
 
   - name: build-and-push-unsigned
     run_on:
@@ -942,8 +936,7 @@ buildvariants:
     display_tasks:
       - name: build-and-push
         execution_tasks:
-        - ".build"
-
+          - ".build"
 
 containers:
   - name: evg-container
