@@ -616,6 +616,22 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithRepeatFailed() {
 			Project:      s.project,
 			DisplayName:  "t2",
 		},
+		{
+			Id:           "t3",
+			Version:      patchId,
+			BuildVariant: "bv1",
+			BuildId:      "b0",
+			Status:       evergreen.TaskFailed,
+			Project:      s.project,
+		},
+		{
+			Id:           "t4",
+			Version:      patchId,
+			BuildVariant: "bv1",
+			BuildId:      "b0",
+			Status:       evergreen.TaskFailed,
+			Project:      s.project,
+		},
 	}
 
 	for _, t := range tasks {
@@ -726,6 +742,26 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 			Status:       evergreen.TaskSucceeded,
 			Project:      s.project,
 			DisplayName:  "t2",
+		},
+		{
+			Id:           "t3",
+			Activated:    true,
+			BuildVariant: "bv2",
+			BuildId:      "b0",
+			Version:      patchId,
+			Status:       evergreen.TaskSucceeded,
+			Project:      s.project,
+			DisplayName:  "t3",
+		},
+		{
+			Id:           "t4",
+			Activated:    true,
+			BuildVariant: "bv2",
+			BuildId:      "b0",
+			Version:      patchId,
+			Status:       evergreen.TaskSucceeded,
+			Project:      s.project,
+			DisplayName:  "t4",
 		},
 	}
 

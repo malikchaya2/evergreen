@@ -788,6 +788,19 @@ func getPreviousFailedTasksAndDisplayTasks(project *model.Project, vt patch.Vari
 				allFailedTasks = append(allFailedTasks, failedTask.DisplayName)
 			}
 		}
+
+	}
+	// add all the dependencies if they are not already there
+	for _, failedTask := range failedTasks {
+		for _, dep := range failedTask.DependsOn {
+			depTask, err := task.FindOne(db.Query(task.ById(dep.TaskId)))
+			if err != nil {
+				return nil, errors.Wrapf(err, "finding failed task dependency '%s' from previous patch '%s'", dep.TaskId, version)
+			}
+			if !utility.StringSliceContains(allFailedTasks, depTask.DisplayName) {
+				allFailedTasks = append(allFailedTasks, dep.TaskId)
+			}
+		}
 	}
 	return allFailedTasks, nil
 }

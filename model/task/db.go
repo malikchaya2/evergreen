@@ -439,6 +439,13 @@ func FailedTasksByVersionAndBV(version string, variant string) bson.M {
 	}
 }
 
+func TaskByVersionAndBV(version string, variant string) bson.M {
+	return bson.M{
+		VersionKey:      version,
+		BuildVariantKey: variant,
+	}
+}
+
 // PotentiallyBlockedTasksByIds finds tasks with the given task ids
 // that have dependencies (these could be completed or not), do not have
 // override dependencies set to true, and the dependencies met time has not
