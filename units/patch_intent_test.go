@@ -360,10 +360,9 @@ func (s *PatchIntentUnitsSuite) TestSetToPreviousPatchDefinition() {
 				Tasks:        []string{"et2"},
 			},
 		},
-		Tasks:              []string{"t1", "t2", "tgt1", "tgt2", "tgt3", "tgt4", "dt1", "et1", "dt2", "et2", "not_activated"},
-		BuildVariants:      []string{"bv_only_dt", "bv_different_dt"},
-		RegexBuildVariants: []string{"bv_$"},
-		RegexTasks:         []string{"1$"},
+		Tasks:         []string{"t1", "t2", "tgt1", "tgt2", "tgt3", "tgt4", "dt1", "et1", "dt2", "et2", "not_activated"},
+		BuildVariants: []string{"bv_only_dt", "bv_different_dt", "bv1"},
+		RegexTasks:    []string{"1$"},
 	}
 	s.NoError((previousPatchDoc).Insert())
 
@@ -834,8 +833,8 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 	}
 
 	currentPatchDoc := intent.NewPatch()
-	currentPatchDoc.Tasks = []string{"t1", "t2"}
-	currentPatchDoc.BuildVariants = []string{"bv1"}
+	// currentPatchDoc.Tasks = []string{"t1", "t2"}
+	// currentPatchDoc.BuildVariants = []string{"bv1"}
 
 	s.NoError(err)
 
@@ -987,8 +986,8 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReusePatchId() {
 	}
 
 	currentPatchDoc := intent.NewPatch()
-	currentPatchDoc.Tasks = []string{"t1", "t2"}
-	currentPatchDoc.BuildVariants = []string{"bv1"}
+	// currentPatchDoc.Tasks = []string{"t1", "t2"}
+	// currentPatchDoc.BuildVariants = []string{"bv1"}
 
 	s.NoError(err)
 
