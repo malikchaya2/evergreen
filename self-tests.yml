@@ -603,11 +603,20 @@ tasks:
           script: |
             echo hi
   - name: the-dependency
+    depends_on:
+      - name: nested
+        status: success
     commands:
       - command: shell.exec
         params:
           script: |
             echo hello
+  - name: nested
+    commands:
+      - command: shell.exec
+        params:
+          script: |
+            echo nested
   - name: test-repotracker
     tags: ["db", "test"]
     commands:
@@ -824,6 +833,7 @@ buildvariants:
       - name: generate-api-docs
       - name: with-dependency
       - name: the-dependency
+      - name: nested
 
   - name: ubuntu2204-2
     display_name: Another Ubuntu 22.04
@@ -853,6 +863,7 @@ buildvariants:
       - name: generate-api-docs
       - name: with-dependency
       - name: the-dependency
+      - name: nested
 
   - name: race-detector
     display_name: Race Detector

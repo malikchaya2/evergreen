@@ -851,6 +851,7 @@ func createTasksForBuild(creationInfo TaskCreationInfo) (task.Tasks, error) {
 				return nil, errors.Wrapf(err, "creating display task '%s'", id)
 			}
 			newDisplayTask.GeneratedBy = creationInfo.GeneratedBy
+			// chaya here
 			newDisplayTask.DependsOn, err = task.GetAllDependencies(newDisplayTask.ExecutionTasks, taskMap)
 			if err != nil {
 				return nil, errors.Wrapf(err, "getting dependencies for display task '%s'", newDisplayTask.Id)
