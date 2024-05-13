@@ -693,8 +693,8 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithRepeatFailed() {
 	}
 
 	currentPatchDoc := intent.NewPatch()
-	currentPatchDoc.Tasks = []string{"t1", "t2"}
-	currentPatchDoc.BuildVariants = []string{"bv1"}
+	// currentPatchDoc.Tasks = []string{"t1", "t2"}
+	// currentPatchDoc.BuildVariants = []string{"bv1"}
 
 	s.NoError(err)
 
