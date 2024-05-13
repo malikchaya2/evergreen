@@ -2169,7 +2169,7 @@ func TestGetRecursiveDependenciesDown(t *testing.T) {
 		require.NoError(t, task.Insert())
 	}
 
-	dependingOnMe, err := getRecursiveDependenciesDown([]string{"t0"}, nil)
+	dependingOnMe, err := GetRecursiveDependenciesDown([]string{"t0"}, nil)
 	assert.NoError(t, err)
 	assert.Len(t, dependingOnMe, 3)
 	expectedIDs := []string{"t2", "t4", "t5"}

@@ -1928,7 +1928,8 @@ func getDependencyTaskIdsToActivate(tasks []string, updateDependencies bool) (ma
 		taskMap[t] = true
 	}
 
-	tasksDependingOnTheseTasks, err := getRecursiveDependenciesDown(tasks, nil)
+	// here
+	tasksDependingOnTheseTasks, err := GetRecursiveDependenciesDown(tasks, nil)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "getting recursive dependencies down")
 	}
@@ -2155,7 +2156,7 @@ func getDependencyTasksToUpdate(tasks []string, updateDependencies bool) ([]Task
 	if !updateDependencies {
 		return nil, nil, nil
 	}
-	tasksDependingOnTheseTasks, err := getRecursiveDependenciesDown(tasks, nil)
+	tasksDependingOnTheseTasks, err := GetRecursiveDependenciesDown(tasks, nil)
 	if err != nil {
 		return nil, nil, errors.Wrap(err, "getting recursive dependencies down")
 	}
@@ -2561,10 +2562,10 @@ func GetRecursiveDependenciesUp(tasks []Task, depCache map[string]Task) ([]Task,
 	return append(deps, recursiveDeps...), nil
 }
 
-// getRecursiveDependenciesDown returns a slice containing all tasks recursively depending on tasks.
+// GetRecursiveDependenciesDown returns a slice containing all tasks recursively depending on tasks.
 // taskMap should originally be nil.
 // We assume there are no dependency cycles.
-func getRecursiveDependenciesDown(tasks []string, taskMap map[string]bool) ([]Task, error) {
+func GetRecursiveDependenciesDown(tasks []string, taskMap map[string]bool) ([]Task, error) {
 	if taskMap == nil {
 		taskMap = make(map[string]bool)
 	}
@@ -2598,7 +2599,7 @@ func getRecursiveDependenciesDown(tasks []string, taskMap map[string]bool) ([]Ta
 	for _, t := range newDeps {
 		newDepIDs = append(newDepIDs, t.Id)
 	}
-	recurseTasks, err := getRecursiveDependenciesDown(newDepIDs, taskMap)
+	recurseTasks, err := GetRecursiveDependenciesDown(newDepIDs, taskMap)
 	if err != nil {
 		return nil, errors.Wrap(err, "getting recursive dependencies")
 	}
