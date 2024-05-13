@@ -869,8 +869,6 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 	}
 
 	currentPatchDoc := intent.NewPatch()
-	// currentPatchDoc.Tasks = []string{"t1", "t2"}
-	// currentPatchDoc.BuildVariants = []string{"bv1"}
 
 	s.NoError(err)
 
@@ -879,11 +877,13 @@ func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReuse() {
 	s.NoError(err)
 	sort.Strings(currentPatchDoc.Tasks)
 	s.Equal([]string{"t1", "t2", "t3", "t4"}, currentPatchDoc.Tasks)
-	s.Equal(previousPatchDoc.VariantsTasks, currentPatchDoc.VariantsTasks)
 
 	// ensure tasks are not duplicated to buildvariants when they are not in the previous patch
-	s.NotContains(currentPatchDoc.VariantsTasks[0], "bv1")
-	s.NotContains(currentPatchDoc.VariantsTasks[1], "bv2")
+	s.NotContains("bv1", currentPatchDoc.VariantsTasks[0])
+	s.NotContains("bv2", currentPatchDoc.VariantsTasks[1])
+
+	s.Equal([]string{"t1", "t3", "t4"}, currentPatchDoc.VariantsTasks[0].Tasks)
+	s.Equal([]string{"t2"}, currentPatchDoc.VariantsTasks[1].Tasks)
 }
 
 func (s *PatchIntentUnitsSuite) TestBuildTasksAndVariantsWithReusePatchId() {
