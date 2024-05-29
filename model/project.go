@@ -2107,7 +2107,6 @@ func dependenciesForTaskUnit(taskUnits []BuildVariantTaskUnit) []task.Dependency
 			if dep.Variant == "" {
 				dep.Variant = dependentTask.Variant
 			}
-
 			for _, dependedOnTask := range taskUnits {
 				if dependedOnTask.ToTVPair() != dependentTask.ToTVPair() &&
 					(dep.Variant == AllVariants || dependedOnTask.Variant == dep.Variant) &&
@@ -2121,7 +2120,7 @@ func dependenciesForTaskUnit(taskUnits []BuildVariantTaskUnit) []task.Dependency
 			}
 		}
 	}
-
+	// generated --> dependedOn, dependedOn --> generator
 	return dependencies
 }
 

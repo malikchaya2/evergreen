@@ -131,6 +131,9 @@ func (g *DependencyGraph) AddEdge(dependentTask, dependedOnTask TaskNode, status
 	if g.transposed {
 		g.addEdgeToGraph(DependencyEdge{From: dependedOnTask, To: dependentTask, Status: status})
 	} else {
+		// comes here: from generated to dependent on
+		// should have been dependedOn --> generator.
+		// how did it become dependedOn --> generated??
 		g.addEdgeToGraph(DependencyEdge{From: dependentTask, To: dependedOnTask, Status: status})
 	}
 }

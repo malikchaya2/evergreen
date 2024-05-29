@@ -400,7 +400,6 @@ func (g *GeneratedProject) simulateNewTasks(ctx context.Context, graph task.Depe
 	if err != nil {
 		return graph, errors.Wrap(err, "getting task ids")
 	}
-
 	graph = addTasksToGraph(newTVPairs.ExecTasks, graph, p, taskIDs)
 	return g.addDependencyEdgesToGraph(ctx, newTVPairs.ExecTasks, v, p, graph, taskIDs)
 }
@@ -434,9 +433,9 @@ func addTasksToGraph(tasks TVPairSet, graph task.DependencyGraph, p *Project, ta
 		})
 	}
 
-	allNodes := graph.Nodes()
-	bvts := make([]BuildVariantTaskUnit, 0, len(allNodes))
-	for _, node := range graph.Nodes() {
+	nodes := graph.Nodes()
+	bvts := make([]BuildVariantTaskUnit, 0, len(nodes))
+	for _, node := range nodes {
 		bvt := p.FindTaskForVariant(node.Name, node.Variant)
 		if bvt != nil {
 			bvts = append(bvts, *bvt)
@@ -460,12 +459,14 @@ func (g *GeneratedProject) addDependencyEdgesToGraph(ctx context.Context, newTas
 	}
 
 	for _, newTask := range activatedNewTasks {
-		for _, edge := range graph.EdgesIntoTask(g.Task.ToTaskNode()) {
-			graph.AddEdge(edge.From, task.TaskNode{
-				ID:      taskIDs.ExecutionTasks.GetId(newTask.Variant, newTask.TaskName),
-				Name:    newTask.TaskName,
-				Variant: newTask.Variant,
-			}, edge.Status)
+		node := task.TaskNode{
+			ID:      taskIDs.ExecutionTasks.GetId(newTask.Variant, newTask.TaskName),
+			Name:    newTask.TaskName,
+			Variant: newTask.Variant,
+		}
+		edgesIntoTask := graph.EdgesIntoTask(node)
+		for _, edge := range edgesIntoTask {
+			graph.AddEdge(edge.From, node, edge.Status)
 		}
 	}
 
