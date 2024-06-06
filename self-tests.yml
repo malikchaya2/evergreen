@@ -37,17 +37,37 @@ buildvariants:
     run_on:
       - DEVPROD-5742
     tasks:
-      - name: clone-public-repo-ssh
-      - name: clone-private-repo-ssh
-      - name: clone-public-repo-https
-      - name: clone-private-repo-https
+      - name: clone-public-repo-ssh # should fail
+      - name: clone-private-repo-ssh # should fail
+      - name: clone-public-repo-https # should succeed
+      - name: clone-private-repo-https # should fail
 
   - name: ubuntu2204
     display_name: Ubuntu 22.04
     run_on:
       - ubuntu2204-small
     tasks:
-      - name: clone-public-repo-ssh
-      - name: clone-private-repo-ssh
-      - name: clone-public-repo-https
-      - name: clone-private-repo-https
+      - name: clone-public-repo-ssh # should succeed
+      - name: clone-private-repo-ssh # should succeed
+      - name: clone-public-repo-https # should succeed
+      - name: clone-private-repo-https # should fail
+
+  - name: DEVPROD-5742-amazon2-cloud-small
+    display_name: DEVPROD-5742-amazon2-cloud-small
+    run_on:
+      - DEVPROD-5742-amazon2-cloud-small
+    tasks:
+      - name: clone-public-repo-ssh # should fail
+      - name: clone-private-repo-ssh # should fail
+      - name: clone-public-repo-https # should succeed
+      - name: clone-private-repo-https # should fail
+
+  - name: DEVPROD-5742-rhel8.8-small
+    display_name: DEVPROD-5742-rhel8.8-small
+    run_on:
+      - DEVPROD-5742-rhel8.8-small
+    tasks:
+      - name: clone-public-repo-ssh # should fail
+      - name: clone-private-repo-ssh # should fail
+      - name: clone-public-repo-https # should succeed
+      - name: clone-private-repo-https # should fail
