@@ -32,10 +32,10 @@ tasks:
 #            Buildvariants            #
 #######################################
 buildvariants:
-  - name: DEVPROD-5742
-    display_name: DEVPROD-5742
+  - name: DEVPROD-5742-ubuntu2204-small
+    display_name: DEVPROD-5742-ubuntu2204-small
     run_on:
-      - DEVPROD-5742
+      - DEVPROD-5742-ubuntu2204-small
     tasks:
       - name: clone-public-repo-ssh # should fail
       - name: clone-private-repo-ssh # should fail
