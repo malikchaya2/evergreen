@@ -3,13 +3,13 @@
 #######################################
 
 tasks:
-  - name: private-clone-no-token
+  - name: should-fail-private-clone-no-token
     commands:
       - command: shell.exec
         params:
           script: |
             git clone https://github.com/${owner}/${repo}.git
-  - name: private-clone-with-token
+  - name: should-pass-private-clone-with-token
     commands:
       - command: github.generate_token
         params:
@@ -31,6 +31,6 @@ buildvariants:
       owner: evergreen-ci
       repo: github-merge-queue-sandbox
     tasks:
-      - name: private-clone-no-token # should fail
-      - name: private-clone-with-token # should succeed
+      - name: should-fail-private-clone-no-token # should fail
+      - name: should-pass-private-clone-with-token # should succeed
 
