@@ -8,7 +8,7 @@ tasks:
       - command: shell.exec
         params:
           script: |
-            git clone https://github.com/evergreen-ci/github-merge-queue-sandbox.git
+            git clone https://github.com/${owner}/${repo}.git
   - name: private-clone-with-token
     commands:
       - command: github.generate_token
@@ -17,17 +17,20 @@ tasks:
       - command: shell.exec
         params:
           script: |
-            git clone https://x-access-token:${generated_token}@github.com/evergreen-ci/github-merge-queue-sandbox.git
+            git clone https://x-access-token:${generated_token}@github.com/${owner}/${repo}.git
 
 #######################################
 #            Buildvariants            #
 #######################################
 buildvariants:
   - name: DEVPROD-5742-ubuntu2204-small
-    display_name: DEVPROD-5742-ubuntu2204-small
     run_on:
       - DEVPROD-5742-ubuntu2204-small
+    display_name: BV-with-no-ssh-key
+    expansions:
+      owner: evergreen-ci
+      repo: github-merge-queue-sandbox
     tasks:
-      - name: clone-private-https-no-token # should fail
-      - name: clone-private-https-with-token # should succeed
+      - name: private-clone-no-token # should fail
+      - name: private-clone-with-token # should succeed
 
