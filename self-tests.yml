@@ -3,30 +3,21 @@
 #######################################
 
 tasks:
-  - name: clone-public-repo-ssh
-    commands:
-      - command: shell.exec
-        params:
-          script: |
-            git clone git@github.com:evergreen-ci/evergreen.git
-  - name: clone-private-repo-ssh
-    commands:
-      - command: shell.exec
-        params:
-          script: |
-            git clone git@github.com:evergreen-ci/github-merge-queue-sandbox.git
-  - name: clone-public-repo-https
-    commands:
-      - command: shell.exec
-        params:
-          script: |
-            git clone https://github.com/evergreen-ci/evergreen.git
-  - name: clone-private-repo-https
+  - name: private-clone-no-token
     commands:
       - command: shell.exec
         params:
           script: |
             git clone https://github.com/evergreen-ci/github-merge-queue-sandbox.git
+  - name: private-clone-with-token
+    commands:
+      - command: github.generate_token
+        params:
+          expansion_name: generated_token
+      - command: shell.exec
+        params:
+          script: |
+            git clone https://x-access-token:${generated_token}@github.com/evergreen-ci/github-merge-queue-sandbox.git
 
 #######################################
 #            Buildvariants            #
@@ -37,37 +28,6 @@ buildvariants:
     run_on:
       - DEVPROD-5742-ubuntu2204-small
     tasks:
-      - name: clone-public-repo-ssh # should fail
-      - name: clone-private-repo-ssh # should fail
-      - name: clone-public-repo-https # should succeed
-      - name: clone-private-repo-https # should fail
+      - name: clone-private-https-no-token # should fail
+      - name: clone-private-https-with-token # should succeed
 
-  - name: ubuntu2204
-    display_name: Ubuntu 22.04
-    run_on:
-      - ubuntu2204-small
-    tasks:
-      - name: clone-public-repo-ssh # should succeed
-      - name: clone-private-repo-ssh # should succeed
-      - name: clone-public-repo-https # should succeed
-      - name: clone-private-repo-https # should fail
-
-  - name: DEVPROD-5742-amazon2-cloud-small
-    display_name: DEVPROD-5742-amazon2-cloud-small
-    run_on:
-      - DEVPROD-5742-amazon2-cloud-small
-    tasks:
-      - name: clone-public-repo-ssh # should fail
-      - name: clone-private-repo-ssh # should fail
-      - name: clone-public-repo-https # should succeed
-      - name: clone-private-repo-https # should fail
-
-  - name: DEVPROD-5742-rhel8.8-small
-    display_name: DEVPROD-5742-rhel8.8-small
-    run_on:
-      - DEVPROD-5742-rhel8.8-small
-    tasks:
-      - name: clone-public-repo-ssh # should fail
-      - name: clone-private-repo-ssh # should fail
-      - name: clone-public-repo-https # should succeed
-      - name: clone-private-repo-https # should fail
