@@ -633,6 +633,7 @@ func (a *Agent) runTask(ctx context.Context, tcInput *taskContext, nt *apimodels
 	}
 
 	defer a.killProcs(ctx, tc, false, "task is finished")
+	defer a.clearGitConfig(tc, "task is finished")
 
 	grip.Info(message.Fields{
 		"message": "running task",
@@ -849,6 +850,7 @@ func (a *Agent) runPostOrTeardownTaskCommands(ctx context.Context, tc *taskConte
 
 	a.killProcs(ctx, tc, false, "post-task or teardown-task commands are starting")
 	defer a.killProcs(ctx, tc, false, "post-task or teardown-task commands are finished")
+	defer a.clearGitConfig(tc, "post-task or teardown-task commands are finished")
 
 	post, err := tc.getPost()
 	if err != nil {
@@ -874,6 +876,7 @@ func (a *Agent) runTeardownGroupCommands(ctx context.Context, tc *taskContext) {
 	// empty working directory to killProcs, and is okay because this
 	// killProcs is only for the processes run in runTeardownGroupCommands.
 	defer a.killProcs(ctx, tc, true, "teardown group commands are finished")
+	defer a.clearGitConfig(tc, "teardown group commands are finished")
 
 	defer func() {
 		if tc.logger != nil {
@@ -1235,6 +1238,33 @@ func (a *Agent) killProcs(ctx context.Context, tc *taskContext, ignoreTaskGroupC
 		}
 		logger.Info("Cleaned up Docker artifacts.")
 	}
+}
+
+func (a *Agent) clearGitConfig(tc *taskContext, reason string) {
+	logger := grip.NewJournaler("clearGitConfig")
+	if tc.logger != nil && !tc.logger.Closed() {
+		logger = tc.logger.Execution()
+	}
+
+	logger.Infof("Clearing git config because %s", reason)
+
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		logger.Critical(errors.Wrap(err, "getting user home directory"))
+		return
+	}
+
+	globalGitConfigPath := filepath.Join(homeDir, ".gitconfig")
+	if _, err := os.Stat(globalGitConfigPath); os.IsNotExist(err) {
+		logger.Info("Global git config file does not exist.")
+		return
+	}
+	if err := os.Remove(globalGitConfigPath); err != nil {
+		logger.Critical(errors.Wrap(err, "removing global git config file"))
+		return
+	}
+
+	logger.Info("Cleared git config.")
 }
 
 func (a *Agent) shouldKill(tc *taskContext, ignoreTaskGroupCheck bool) bool {
