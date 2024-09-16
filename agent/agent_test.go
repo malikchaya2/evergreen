@@ -76,6 +76,10 @@ func TestAgentSuite(t *testing.T) {
 
 func (s *AgentSuite) SetupSuite() {
 	s.suiteTmpDirName = s.T().TempDir()
+
+	// Mock the os.UserHomeDir function to return the temporary directory.
+	os.Setenv("HOME", s.suiteTmpDirName)
+
 }
 
 func (s *AgentSuite) TearDownSuite() {
@@ -2711,6 +2715,41 @@ tasks:
 	}
 	expectedLines := "I am test log.\nI should get ingested automatically by the agent.\nAnd stored as well.\n"
 	s.Equal(expectedLines, actualLines)
+}
+
+func (s *AgentSuite) TestGitConfigIsCleared() {
+	projYml := `
+tasks:
+- name: this_is_a_task_name
+  commands:
+  - command: shell.exec
+    params:
+      script: |
+        git config --global user.name "Foo Bar"
+        cat ~/.gitconfig
+`
+	s.setupRunTask(projYml)
+
+	nextTask := &apimodels.NextTaskResponse{
+		TaskId:     s.tc.task.ID,
+		TaskSecret: s.tc.task.Secret,
+	}
+	_, _, err := s.a.runTask(s.ctx, s.tc, nextTask, false, s.testTmpDirName)
+
+	s.NoError(err)
+
+	s.NoError(s.tc.logger.Close())
+	checkMockLogs(s.T(), s.mockCommunicator, s.tc.taskConfig.Task.Id, []string{
+		"Executing script with shell 'sh':\ngit config --global user.name \"Foo Bar\"",
+		"\tname = Foo Bar",
+		"Clearing git config because post-task or teardown-task commands are finished",
+		"Cleared git config.",
+		"Clearing git config because task is finished",
+		"Global git config file does not exist.",
+	}, []string{
+		panicLog,
+		"Running task commands failed",
+	})
 }
 
 func (s *AgentSuite) TestShouldRunSetupGroup() {

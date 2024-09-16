@@ -79,6 +79,7 @@ type Options struct {
 	// SendTaskLogsToGlobalSender indicates whether task logs should also be
 	// sent to the global agent file log.
 	SendTaskLogsToGlobalSender bool
+	HomeDirectory              string
 }
 
 // AddLoggableInfo is a helper to add relevant information about the agent
