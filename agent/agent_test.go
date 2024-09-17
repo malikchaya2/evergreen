@@ -80,7 +80,7 @@ func (s *AgentSuite) SetupSuite() {
 
 func (s *AgentSuite) TearDownSuite() {
 	if runtime.GOOS == "windows" {
-		// This is a hack to give extra time for processes in Windows to finish
+		// This is a hack to give extra time for processes in Windows to finishh
 		// using the temporary working directory before the Go testing framework
 		// cna attempt to clean it up. When using (testing.T).TempDir, the Go
 		// testing framework will automatically clean up the directory at the
