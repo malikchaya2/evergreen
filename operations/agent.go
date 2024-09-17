@@ -143,7 +143,10 @@ func Agent() cli.Command {
 				fmt.Println(evergreen.AgentVersion)
 				return nil
 			}
-
+			homeDir, err := os.UserHomeDir()
+			if err != nil {
+				return errors.Wrap(err, "getting home directory")
+			}
 			opts := agent.Options{
 				HostID:                     c.String(agentHostIDFlagName),
 				HostSecret:                 c.String(agentHostSecretFlagName),
@@ -157,6 +160,7 @@ func Agent() cli.Command {
 				Cleanup:                    c.Bool(cleanupFlagName),
 				CloudProvider:              c.String(agentCloudProviderFlagName),
 				SendTaskLogsToGlobalSender: c.Bool(sendTaskLogsToGlobalSenderFlagName),
+				HomeDirectory:              c.String(homeDir),
 			}
 
 			if err := os.MkdirAll(opts.WorkingDirectory, 0777); err != nil {

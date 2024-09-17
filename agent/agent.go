@@ -1249,13 +1249,7 @@ func (a *Agent) clearGitConfig(tc *taskContext, reason string) {
 
 	logger.Infof("Clearing git config because %s", reason)
 
-	homeDir, err := os.UserHomeDir()
-	if err != nil {
-		logger.Critical(errors.Wrap(err, "getting user home directory"))
-		return
-	}
-
-	globalGitConfigPath := filepath.Join(homeDir, ".gitconfig")
+	globalGitConfigPath := filepath.Join(a.opts.HomeDirectory, ".gitconfig")
 	if _, err := os.Stat(globalGitConfigPath); os.IsNotExist(err) {
 		logger.Info("Global git config file does not exist.")
 		return

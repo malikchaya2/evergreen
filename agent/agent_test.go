@@ -76,10 +76,6 @@ func TestAgentSuite(t *testing.T) {
 
 func (s *AgentSuite) SetupSuite() {
 	s.suiteTmpDirName = s.T().TempDir()
-
-	// Mock the os.UserHomeDir function to return the temporary directory.
-	os.Setenv("HOME", s.suiteTmpDirName)
-
 }
 
 func (s *AgentSuite) TearDownSuite() {
@@ -116,6 +112,7 @@ func (s *AgentSuite) SetupTest() {
 			LogOutput:        globals.LogOutputStdout,
 			LogPrefix:        "agent",
 			WorkingDirectory: s.testTmpDirName,
+			HomeDirectory:    s.suiteTmpDirName,
 		},
 		comm:   client.NewMock("url"),
 		tracer: otel.GetTracerProvider().Tracer("noop_tracer"),
