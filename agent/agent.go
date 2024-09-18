@@ -1255,7 +1255,7 @@ func (a *Agent) clearGitConfig(tc *taskContext, reason string) {
 		return
 	}
 	if err := os.Remove(globalGitConfigPath); err != nil {
-		logger.Critical(errors.Wrap(err, "removing global git config file"))
+		logger.Error(errors.Wrap(err, "removing global git config file"))
 		return
 	}
 
