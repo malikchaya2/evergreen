@@ -40,6 +40,7 @@ const (
 	gitGetProjectAttribute = "evergreen.command.git_get_project"
 
 	// Valid types of performing git clone
+	//todo: should this be removed?
 	cloneMethodOAuth       = "oauth"
 	cloneMethodAccessToken = "access-token"
 )
@@ -158,36 +159,7 @@ func getProjectMethodAndToken(ctx context.Context, comm client.Communicator, td 
 	owner := conf.ProjectRef.Owner
 	repo := conf.ProjectRef.Repo
 	appToken, err := comm.CreateInstallationToken(ctx, td, owner, repo)
-	// TODO EVG-21022: Remove fallback once we delete GitHub tokens as expansions.
-	grip.Warning(message.WrapError(err, message.Fields{
-		"message": "error creating GitHub app token, falling back to legacy clone methods",
-		"owner":   owner,
-		"repo":    repo,
-		"task":    td.ID,
-		"ticket":  "EVG-21022",
-	}))
-	if appToken != "" {
-		return cloneMethodAccessToken, appToken, nil
-	}
-	grip.DebugWhen(err == nil, message.Fields{
-		"message": "GitHub app token not found, falling back to legacy clone methods",
-		"owner":   owner,
-		"repo":    repo,
-		"task":    td.ID,
-		"ticket":  "EVG-21022",
-	})
-
-	globalToken := conf.Expansions.Get(evergreen.GlobalGitHubTokenExpansion)
-	token, err := parseToken(globalToken)
-	if err != nil {
-		return "", "", err
-	}
-
-	if token == "" {
-		return "", "", errors.New("cannot clone using OAuth if explicit token from parameter and global token are both empty")
-	}
-
-	return cloneMethodOAuth, token, nil
+	return cloneMethodAccessToken, appToken, err
 }
 
 // parseToken parses the OAuth token, if it is in the format "token <token>";
@@ -736,16 +708,6 @@ func (c *gitFetchProject) fetchModuleSource(ctx context.Context,
 		if err == nil {
 			opts.token = appToken
 			opts.method = cloneMethodAccessToken
-		} else {
-			// If a token cannot be created, fallback to the legacy global token.
-			opts.method = cloneMethodOAuth
-			opts.token = conf.Expansions.Get(evergreen.GlobalGitHubTokenExpansion)
-			logger.Execution().Warning(message.WrapError(err, message.Fields{
-				"message": "failed to create app token, falling back to global token",
-				"ticket":  "EVG-19966",
-				"owner":   opts.owner,
-				"repo":    opts.repo,
-			}))
 		}
 	}
 

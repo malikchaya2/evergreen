@@ -27,6 +27,7 @@ func TestPatchPluginAPI(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	comm := client.NewMock("http://localhost.com")
+	comm.CreateInstallationTokenResult = "token"
 	conf := &internal.TaskConfig{Expansions: util.Expansions{}, Task: task.Task{}, Project: model.Project{}}
 	logger, err := comm.GetLoggerProducer(ctx, &conf.Task, nil)
 	require.NoError(t, err)

@@ -36,7 +36,6 @@ import (
 )
 
 const (
-	globalGitHubToken    = "GLOBALTOKEN"
 	projectGitHubToken   = "PROJECTTOKEN"
 	mockedGitHubAppToken = "MOCKEDTOKEN"
 )
@@ -104,9 +103,6 @@ func (s *GitGetProjectSuite) SetupTest() {
 	s.Require().NoError(err)
 	s.taskConfig1, err = agenttestutil.MakeTaskConfigFromModelData(s.ctx, s.settings, s.modelData1)
 	s.Require().NoError(err)
-	s.taskConfig1.Expansions = *util.NewExpansions(map[string]string{evergreen.GlobalGitHubTokenExpansion: fmt.Sprintf("token " + globalGitHubToken)})
-	s.Require().NoError(err)
-
 	s.modelData2, err = modelutil.SetupAPITestData(s.settings, "testtask1", "rhel55", configPath2, modelutil.NoPatch)
 	s.Require().NoError(err)
 	s.taskConfig2, err = agenttestutil.MakeTaskConfigFromModelData(s.ctx, s.settings, s.modelData2)
@@ -154,7 +150,6 @@ func (s *GitGetProjectSuite) SetupTest() {
 	s.Require().NoError(err)
 	s.taskConfig6, err = agenttestutil.MakeTaskConfigFromModelData(s.ctx, s.settings, s.modelData6)
 	s.Require().NoError(err)
-	s.taskConfig6.Expansions = *util.NewExpansions(map[string]string{evergreen.GlobalGitHubTokenExpansion: fmt.Sprintf("token " + globalGitHubToken)})
 	s.taskConfig6.BuildVariant.Modules = []string{"evergreen"}
 	s.taskConfig6.GithubMergeData = thirdparty.GithubMergeGroup{
 		HeadBranch: "gh-readonly-queue/main/pr-515-9cd8a2532bcddf58369aa82eb66ba88e2323c056",
@@ -292,6 +287,7 @@ func (s *GitGetProjectSuite) TestGitPlugin() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	s.comm.CreateInstallationTokenResult = "token"
 	for _, task := range conf.Project.Tasks {
 		s.NotEqual(len(task.Commands), 0)
 		for _, command := range task.Commands {
@@ -999,9 +995,6 @@ func (s *GitGetProjectSuite) TestGetProjectMethodAndToken() {
 			Owner: "valid-owner",
 			Repo:  "valid-repo",
 		},
-		Expansions: map[string]string{
-			evergreen.GlobalGitHubTokenExpansion: globalGitHubToken,
-		},
 	}
 
 	method, token, err = getProjectMethodAndToken(s.ctx, s.comm, td, conf, projectGitHubToken, true)
@@ -1024,8 +1017,6 @@ func (s *GitGetProjectSuite) TestGetProjectMethodAndToken() {
 	s.Equal(projectGitHubToken, token)
 	s.Equal(cloneMethodOAuth, method)
 
-	conf.Expansions[evergreen.GlobalGitHubTokenExpansion] = ""
-
 	method, token, err = getProjectMethodAndToken(s.ctx, s.comm, td, conf, projectGitHubToken, true)
 	s.NoError(err)
 	s.Equal(projectGitHubToken, token)
@@ -1040,8 +1031,6 @@ func (s *GitGetProjectSuite) TestGetProjectMethodAndToken() {
 
 	_, _, err = getProjectMethodAndToken(s.ctx, s.comm, td, conf, "", false)
 	s.Error(err)
-
-	conf.Expansions[evergreen.GlobalGitHubTokenExpansion] = globalGitHubToken
 
 	_, _, err = getProjectMethodAndToken(s.ctx, s.comm, td, conf, "token this is not a real token", false)
 	s.Error(err)
