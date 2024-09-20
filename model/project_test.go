@@ -417,8 +417,7 @@ func TestPopulateExpansions(t *testing.T) {
 		Project:      "mci",
 	}
 
-	oauthToken := "globalGitHubOauthToken"
-	expansions, err := PopulateExpansions(taskDoc, &h, oauthToken, "appToken", "")
+	expansions, err := PopulateExpansions(taskDoc, &h, "appToken", "")
 	assert.NoError(err)
 	assert.Len(map[string]string(expansions), 25)
 	assert.Equal("0", expansions.Get("execution"))
@@ -456,7 +455,7 @@ func TestPopulateExpansions(t *testing.T) {
 	}
 	require.NoError(t, p.Insert())
 
-	expansions, err = PopulateExpansions(taskDoc, &h, oauthToken, "", "")
+	expansions, err = PopulateExpansions(taskDoc, &h, "", "")
 	assert.NoError(err)
 	assert.Len(map[string]string(expansions), 25)
 	assert.Equal("true", expansions.Get("is_patch"))
@@ -484,7 +483,7 @@ func TestPopulateExpansions(t *testing.T) {
 		},
 	}
 	require.NoError(t, p.Insert())
-	expansions, err = PopulateExpansions(taskDoc, &h, oauthToken, "", "")
+	expansions, err = PopulateExpansions(taskDoc, &h, "", "")
 	assert.NoError(err)
 	assert.Len(map[string]string(expansions), 31)
 	assert.Equal("true", expansions.Get("is_patch"))
@@ -511,7 +510,7 @@ func TestPopulateExpansions(t *testing.T) {
 		},
 	}
 	require.NoError(t, p.Insert())
-	expansions, err = PopulateExpansions(taskDoc, &h, oauthToken, "", "")
+	expansions, err = PopulateExpansions(taskDoc, &h, "", "")
 	assert.NoError(err)
 	assert.Len(map[string]string(expansions), 29)
 	assert.Equal("true", expansions.Get("is_patch"))
@@ -529,7 +528,7 @@ func TestPopulateExpansions(t *testing.T) {
 		Version: v.Id,
 	}
 	require.NoError(t, p.Insert())
-	expansions, err = PopulateExpansions(taskDoc, &h, oauthToken, "", "")
+	expansions, err = PopulateExpansions(taskDoc, &h, "", "")
 	assert.NoError(err)
 	assert.Len(map[string]string(expansions), 29)
 	assert.Equal("true", expansions.Get("is_patch"))
@@ -554,7 +553,7 @@ func TestPopulateExpansions(t *testing.T) {
 	}
 	assert.NoError(patchDoc.Insert())
 
-	expansions, err = PopulateExpansions(taskDoc, &h, oauthToken, "", "")
+	expansions, err = PopulateExpansions(taskDoc, &h, "", "")
 	assert.NoError(err)
 	assert.Len(map[string]string(expansions), 29)
 	assert.Equal("github_pr", expansions.Get("requester"))
@@ -580,7 +579,7 @@ func TestPopulateExpansions(t *testing.T) {
 	assert.NoError(upstreamProject.Insert())
 	taskDoc.TriggerID = "upstreamTask"
 	taskDoc.TriggerType = ProjectTriggerLevelTask
-	expansions, err = PopulateExpansions(taskDoc, &h, oauthToken, "", "")
+	expansions, err = PopulateExpansions(taskDoc, &h, "", "")
 	assert.NoError(err)
 	assert.Len(map[string]string(expansions), 38)
 	assert.Equal(taskDoc.TriggerID, expansions.Get("trigger_event_identifier"))
