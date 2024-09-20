@@ -389,7 +389,7 @@ func (s *GitGetProjectSuite) TestStdErrLogged() {
 	s.NoError(logger.Close())
 	foundCloneCommand := false
 	foundCloneErr := false
-	foundSSHErr := false
+	foundGithubAppError := false
 	for _, line := range s.comm.GetTaskLogs(conf.Task.Id) {
 		if strings.Contains(line.Data, "/invalidRepo.git 'src' --branch 'main'") {
 			foundCloneCommand = true
@@ -397,12 +397,12 @@ func (s *GitGetProjectSuite) TestStdErrLogged() {
 		if strings.Contains(line.Data, "/invalidRepo.git/' not found") {
 			foundCloneErr = true
 		}
-		if strings.Contains(line.Data, "Authentication failed for") && strings.Contains(line.Data, "/evergreen-ci/invalidRepo.git") {
-			foundSSHErr = true
+		if strings.Contains(line.Data, "error creating GitHub app token") {
+			foundGithubAppError = true
 		}
 	}
 	s.True(foundCloneCommand)
-	s.True(foundCloneErr || foundSSHErr)
+	s.True(foundCloneErr || foundGithubAppError)
 }
 
 func (s *GitGetProjectSuite) TestValidateGitCommands() {
