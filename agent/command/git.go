@@ -122,9 +122,7 @@ func (opts cloneOpts) validate() error {
 		catcher.New("missing required location")
 	}
 	catcher.Wrapf(validateCloneMethod(opts.method), "invalid clone method '%s'", opts.method)
-	if opts.token == "" {
-		catcher.New("cannot clone using OAuth or access token if token is not set")
-	}
+
 	if opts.cloneDepth < 0 {
 		catcher.New("clone depth cannot be negative")
 	}
