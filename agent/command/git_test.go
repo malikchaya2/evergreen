@@ -164,6 +164,7 @@ func (s *GitGetProjectSuite) SetupTest() {
 	s.taskConfig7.BuildVariant.Modules = []string{"sample-1", "sample-2"}
 
 	s.comm.CreateInstallationTokenResult = mockedGitHubAppToken
+	s.comm.CreateInstallationTokenFail = false
 }
 
 func (s *GitGetProjectSuite) TestBuildSourceCommandUsesHTTPS() {
