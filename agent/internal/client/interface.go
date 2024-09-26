@@ -121,6 +121,7 @@ type SharedCommunicator interface {
 
 	// CreateInstallationToken creates an installation token for the given owner and repo if there is a GitHub app installed.
 	CreateInstallationToken(ctx context.Context, td TaskData, owner, repo string) (string, error)
+	CreateCachedInstallationToken(ctx context.Context, owner, repo string, lifetime time.Duration, opts *github.InstallationTokenOptions) (string, error)
 
 	// CreateGitHubDynamicAccessToken creates a dynamic access token using the task's project's GitHub app.
 	// It intersects the permissions requested with the permissions set in the project settings for the requester
