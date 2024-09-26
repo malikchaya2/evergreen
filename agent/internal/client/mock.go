@@ -550,6 +550,13 @@ func (c *Mock) CreateInstallationToken(ctx context.Context, td TaskData, owner, 
 	return c.CreateInstallationTokenResult, nil
 }
 
+func (c *Mock) CreateCachedInstallationToken(context.Context, string, string, time.Duration, *github.InstallationTokenOptions) (string, error) {
+	if c.CreateInstallationTokenFail {
+		return "", errors.New("failed to create token")
+	}
+	return c.CreateInstallationTokenResult, nil
+}
+
 func (c *Mock) CreateGitHubDynamicAccessToken(ctx context.Context, td TaskData, owner, repo string, permissions *github.InstallationPermissions) (string, error) {
 	if c.CreateGitHubDynamicAccessTokenFail {
 		return "", errors.New("failed to create token")
