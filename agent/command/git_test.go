@@ -322,10 +322,10 @@ func (s *GitGetProjectSuite) TestTokenScrubbedFromLogger() {
 	foundCloneCommand := false
 	foundCloneErr := false
 	for _, line := range s.comm.GetTaskLogs(conf.Task.Id) {
-		if strings.Contains(line.Data, "https://[redacted github token]:x-oauth-basic@github.com/evergreen-ci/invalidRepo.git") {
+		if strings.Contains(line.Data, "git clone https://x-access-token:[redacted github token]@github.com/evergreen-ci/invalidRepo.git") {
 			foundCloneCommand = true
 		}
-		if strings.Contains(line.Data, "Authentication failed for") {
+		if strings.Contains(line.Data, "git source clone failed") {
 			foundCloneErr = true
 		}
 		if strings.Contains(line.Data, token) {
