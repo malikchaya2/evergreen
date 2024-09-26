@@ -24,7 +24,7 @@ func MakeTaskConfigFromModelData(ctx context.Context, settings *evergreen.Settin
 		return nil, errors.Wrap(err, "creating GitHub app token")
 	}
 	knownHosts := settings.Expansions[evergreen.GithubKnownHosts]
-	exp, err := model.PopulateExpansions(data.Task, data.Host, appToken, knownHosts)
+	exp, err := model.PopulateExpansions(data.Task, data.Host, "", appToken, knownHosts)
 	if err != nil {
 		return nil, errors.Wrap(err, "populating expansions")
 	}
