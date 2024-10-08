@@ -741,6 +741,15 @@ tasks:
       - command: downstream_expansions.set
         params:
           file: downstream_expansions_pine.yaml
+  - name: ssh-clone
+  activate: false
+    commands:
+      - command: shell.exec
+        params:
+          script: |
+            ssh -T git@github.com
+            # this will fail without a valid ssh key
+            git clone git@github.com:evergreen-ci/evergreen.git
   - <<: *build-and-push-client
     name: build-linux_amd64
     tags: ["build"]
