@@ -23,6 +23,8 @@ func TestSmokeAgentMonitor(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
+	settings, err := GetConfig(ctx)
+
 	params := getSmokeTestParamsFromEnv(t)
 	grip.Info(message.Fields{
 		"message": "got smoke test parameters",

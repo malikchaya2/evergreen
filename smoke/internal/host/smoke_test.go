@@ -24,6 +24,23 @@ func TestSmokeHostTask(t *testing.T) {
 		"params":  fmt.Sprintf("%#v", params),
 	})
 
+	// // Manually update admin settings in DB for GitHub App credentials.
+	// //chayatodo: do this for the smoke test
+	// testSettings.AuthConfig = integrationSettings.AuthConfig
+	// err := testSettings.AuthConfig.Set(context.Background())
+	// require.NoError(t, err, "Error updating auth config settings in DB")
+
+	// if val, ok := integrationSettings.Expansions[evergreen.GithubAppPrivateKey]; ok {
+	// 	testSettings.Expansions[evergreen.GithubAppPrivateKey] = val
+	// }
+	// err = testSettings.Set(context.Background())
+
+	//manually update admin settings in DB for GitHub App credentials.
+
+	settings, err := GetConfig(ctx)
+	s.NoError(err)
+	s.NotNil(settings)
+
 	appServerCmd := internal.StartAppServer(ctx, t, params.APIParams)
 	defer func() {
 		if appServerCmd != nil {
