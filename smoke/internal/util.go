@@ -279,7 +279,7 @@ func checkTaskLogContent(t *testing.T, taskName string, body []byte, mode global
 // MakeSmokeRequest sends an authenticated smoke request to the smoke test app
 // server.
 func MakeSmokeRequest(ctx context.Context, params APIParams, method string, client *http.Client, url string) ([]byte, error) {
-	grip.Infof("Getting endpoint '%s'", url)
+	grip.Infof("chayaMTesting 282 Getting endpoint '%s'", url)
 
 	if !strings.HasPrefix(url, params.AppServerURL) {
 		url = strings.Join([]string{strings.TrimSuffix(params.AppServerURL, "/"), strings.TrimPrefix(url, "/")}, "/")
@@ -294,7 +294,7 @@ func MakeSmokeRequest(ctx context.Context, params APIParams, method string, clie
 
 	resp, err := client.Do(req)
 	if err != nil {
-		return nil, errors.Wrapf(err, "getting endpoint '%s'", url)
+		return nil, errors.Wrapf(err, "chayaMTesting 297 getting endpoint '%s'", url)
 	}
 	defer resp.Body.Close()
 

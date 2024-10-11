@@ -82,11 +82,8 @@ func (j *repotrackerJob) Run(ctx context.Context) {
 		j.AddError(errors.New("settings is empty"))
 		return
 	}
-	token, err := settings.GetGithubOauthToken()
-	if err != nil {
-		j.AddError(errors.New("GitHub OAuth token is missing"))
-		return
-	}
+
+	grip.Info("chayaMTesting in repo tracker job")
 
 	ref, err := model.FindMergedProjectRef(j.ProjectID, "", true)
 	if err != nil {
@@ -98,7 +95,7 @@ func (j *repotrackerJob) Run(ctx context.Context) {
 		return
 	}
 
-	if !repotracker.CheckGithubAPIResources(ctx, token) {
+	if !repotracker.CheckGithubAPIResources(ctx) {
 		j.AddError(errors.Errorf("skipping repotracker run for project '%s' because of GitHub API limit issues", j.ProjectID))
 		return
 	}

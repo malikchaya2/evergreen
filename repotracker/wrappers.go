@@ -6,6 +6,7 @@ import (
 
 	"github.com/evergreen-ci/evergreen"
 	"github.com/evergreen-ci/evergreen/model"
+	"github.com/evergreen-ci/evergreen/model/githubapp"
 	"github.com/evergreen-ci/evergreen/thirdparty"
 	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/message"
@@ -21,8 +22,10 @@ const (
 	githubAPILimitCeiling = 20
 )
 
-func getTracker(conf *evergreen.Settings, project model.ProjectRef) (*RepoTracker, error) {
-	token, err := conf.GetGithubOauthToken()
+func getTracker(ctx context.Context, conf *evergreen.Settings, project model.ProjectRef) (*RepoTracker, error) {
+	//todo: use defaultGitHubAPIRequestLifetime
+	//todo: should opts be read only?
+	token, err := githubapp.CreateGitHubAppAuth(conf).CreateCachedInstallationToken(ctx, project.Owner, project.Repo, 15*time.Minute, nil)
 	if err != nil {
 		grip.Warning(message.Fields{
 			"runner":  RunnerName,
@@ -45,7 +48,7 @@ func CollectRevisionsForProject(ctx context.Context, conf *evergreen.Settings, p
 		return errors.Errorf("project disabled: %s", project.Id)
 	}
 
-	tracker, err := getTracker(conf, project)
+	tracker, err := getTracker(ctx, conf, project)
 	if err != nil {
 		grip.Error(message.WrapError(err, message.Fields{
 			"project":            project.Id,
@@ -93,9 +96,9 @@ func ActivateBuildsForProject(ctx context.Context, project model.ProjectRef, ts 
 
 // CheckGithubAPIResources returns true when the github API is ready,
 // accessible and with sufficient quota to satisfy our needs
-func CheckGithubAPIResources(ctx context.Context, githubToken string) bool {
+func CheckGithubAPIResources(ctx context.Context) bool {
 
-	remaining, err := thirdparty.CheckGithubAPILimit(ctx, githubToken)
+	remaining, err := thirdparty.CheckGithubAPILimit(ctx)
 	if err != nil {
 		grip.Error(message.WrapError(err, message.Fields{
 			"runner":  RunnerName,

@@ -1284,8 +1284,8 @@ func GetGithubTokenUser(ctx context.Context, token string, requiredOrg string) (
 }
 
 // CheckGithubAPILimit queries Github for the number of API requests remaining
-func CheckGithubAPILimit(ctx context.Context, token string) (int64, error) {
-	limit, err := apiLimit(ctx, "")
+func CheckGithubAPILimit(ctx context.Context) (int64, error) {
+	limit, err := apiLimit(ctx)
 	if err == nil {
 		return limit, nil
 	}
@@ -1296,23 +1296,22 @@ func CheckGithubAPILimit(ctx context.Context, token string) (int64, error) {
 		"caller":  "CheckGithubAPILimit",
 	}))
 
-	return apiLimit(ctx, token)
+	return apiLimit(ctx)
 }
 
-func apiLimit(ctx context.Context, token string) (int64, error) {
+func apiLimit(ctx context.Context) (int64, error) {
 	caller := "CheckGithubAPILimit"
 	ctx, span := tracer.Start(ctx, caller, trace.WithAttributes(
 		attribute.String(githubEndpointAttribute, caller),
 	))
 	defer span.End()
 
-	if token == "" {
-		var err error
-		token, err = getInstallationTokenWithDefaultOwnerRepo(ctx, nil)
-		if err != nil {
-			return 0, errors.Wrap(err, "getting installation token")
-		}
+	var err error
+	token, err := getInstallationTokenWithDefaultOwnerRepo(ctx, nil)
+	if err != nil {
+		return 0, errors.Wrap(err, "getting installation token")
 	}
+
 	githubClient := getGithubClient(token, caller, retryConfig{retry: true})
 	defer githubClient.Close()
 

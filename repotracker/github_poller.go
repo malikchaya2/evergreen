@@ -16,6 +16,7 @@ import (
 // required of a RepoPoller
 type GithubRepositoryPoller struct {
 	ProjectRef *model.ProjectRef
+	//chaya todo: remove
 	OauthToken string
 }
 

@@ -133,6 +133,7 @@ func triggerRepotracker(ctx context.Context, t *testing.T, params SmokeTestParam
 	for i := 0; i < repotrackerAttempts; i++ {
 		time.Sleep(2 * time.Second)
 		grip.Infof("Requesting repotracker for evergreen project. (%d/%d)", i+1, repotrackerAttempts)
+		// this somehow needs a token
 		_, err := internal.MakeSmokeRequest(ctx, params.APIParams, http.MethodPost, client, fmt.Sprintf("/rest/v2/projects/%s/repotracker", params.ProjectID))
 		if err != nil {
 			grip.Error(errors.Wrap(err, "requesting repotracker to run"))
@@ -175,7 +176,7 @@ func waitForRepotracker(ctx context.Context, t *testing.T, params SmokeTestParam
 			continue
 		}
 		if len(latestVersions) == 0 {
-			grip.Errorf("listing latest versions for project '%s' yielded no results", params.ProjectID)
+			grip.Errorf("chayaMTesting 179 listing latest versions for project '%s' yielded no results", params.ProjectID)
 			continue
 		}
 
