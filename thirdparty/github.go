@@ -109,12 +109,6 @@ const (
 var (
 	githubTransport http.RoundTripper
 	cacheTransport  *httpcache.Transport
-<<<<<<< HEAD
-
-	// TODO: (DEVPROD-2923) Remove this error type.
-	missingTokenError = errors.New("missing installation token")
-=======
->>>>>>> f97506739 (remove github token tech debt)
 )
 
 type cacheControlTransport struct {
@@ -357,19 +351,12 @@ func getInstallationToken(ctx context.Context, owner, repo string, opts *github.
 	if err != nil {
 		grip.Debug(message.WrapError(err, message.Fields{
 			"message": "error creating token",
-			"ticket":  "DEVPROD-2923",
+			"ticket":  "EVG-19966",
 			"owner":   owner,
 			"repo":    repo,
 		}))
 		return "", errors.Wrap(err, "creating installation token")
 	}
-<<<<<<< HEAD
-	// TODO: (DEVPROD-2923) Remove once CreateInstallationToken returns an error.
-	if token == "" {
-		return "", missingTokenError
-	}
-=======
->>>>>>> f97506739 (remove github token tech debt)
 
 	return token, nil
 }
@@ -408,44 +395,18 @@ func getInstallationTokenWithDefaultOwnerRepo(ctx context.Context, opts *github.
 	if err != nil {
 		grip.Debug(message.WrapError(err, message.Fields{
 			"message": "error creating default token",
-			"ticket":  "DEVPROD-2923",
+			"ticket":  "EVG-19966",
 		}))
 		return "", errors.Wrap(err, "creating default installation token")
 	}
-<<<<<<< HEAD
-	// TODO: (DEVPROD-2923) Remove once CreateInstallationTokenWithDefaultOwnerRepo returns an error.
-	if token == "" {
-		return "", missingTokenError
-	}
-=======
->>>>>>> f97506739 (remove github token tech debt)
 
 	return token, nil
 }
 
 // GetGithubCommits returns a slice of GithubCommit objects from
 // the given commitsURL when provided a valid oauth token
-<<<<<<< HEAD
-func GetGithubCommits(ctx context.Context, token, owner, repo, ref string, until time.Time, commitPage int) ([]*github.RepositoryCommit, int, error) {
-	commits, nextPage, err := getCommits(ctx, "", owner, repo, ref, until, commitPage)
-	if err == nil {
-		return commits, nextPage, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get commits from GitHub",
-		"caller":  "GetGithubCommits",
-		"owner":   owner,
-		"repo":    repo,
-		"ref":     ref,
-	}))
-
-	return getCommits(ctx, token, owner, repo, ref, until, commitPage)
-=======
 func GetGithubCommits(ctx context.Context, owner, repo, ref string, until time.Time, commitPage int) ([]*github.RepositoryCommit, int, error) {
 	return getCommits(ctx, owner, repo, ref, until, commitPage)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func getCommits(ctx context.Context, owner, repo, ref string, until time.Time, commitPage int) ([]*github.RepositoryCommit, int, error) {
@@ -510,27 +471,7 @@ func GetGithubFile(ctx context.Context, owner, repo, path, ref string) (*github.
 	if path == "" {
 		return nil, errors.New("remote repository path cannot be empty")
 	}
-<<<<<<< HEAD
-
-	content, err := getFile(ctx, "", owner, repo, path, ref)
-	if err == nil {
-		return content, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get a file from GitHub",
-		"caller":  "GetGithubFile",
-		"owner":   owner,
-		"repo":    repo,
-		"path":    path,
-		"ref":     ref,
-	}))
-
-	return getFile(ctx, token, owner, repo, path, ref)
-=======
 	return getFile(ctx, owner, repo, path, ref)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func getFile(ctx context.Context, owner, repo, path, ref string) (*github.RepositoryContent, error) {
@@ -652,7 +593,7 @@ func GetGithubMergeBaseRevision(ctx context.Context, owner, repo, baseRevision, 
 		return mergeBase, nil
 	}
 	grip.Debug(message.WrapError(err, message.Fields{
-		"ticket":              "DEVPROD-2923",
+		"ticket":              "EVG-19966",
 		"message":             "failed to get merge-base from GitHub",
 		"caller":              "GetGithubMergeBaseRevision",
 		"owner":               owner,
@@ -738,26 +679,8 @@ func getCommitComparison(ctx context.Context, owner, repo, baseRevision, current
 	return compare, nil
 }
 
-<<<<<<< HEAD
-func GetCommitEvent(ctx context.Context, token, owner, repo, githash string) (*github.RepositoryCommit, error) {
-	event, err := commitEvent(ctx, "", owner, repo, githash)
-	if err == nil {
-		return event, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get commit event from GitHub",
-		"caller":  "GetCommitEvent",
-		"owner":   owner,
-		"repo":    repo,
-	}))
-
-	return commitEvent(ctx, token, owner, repo, githash)
-=======
 func GetCommitEvent(ctx context.Context, owner, repo, githash string) (*github.RepositoryCommit, error) {
 	return commitEvent(ctx, owner, repo, githash)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func commitEvent(ctx context.Context, owner, repo, githash string) (*github.RepositoryCommit, error) {
@@ -822,27 +745,8 @@ func commitEvent(ctx context.Context, owner, repo, githash string) (*github.Repo
 }
 
 // GetCommitDiff gets the diff of the specified commit via an API call to GitHub
-<<<<<<< HEAD
-func GetCommitDiff(ctx context.Context, token, owner, repo, sha string) (string, error) {
-	diff, err := commitDiff(ctx, "", owner, repo, sha)
-	if err == nil {
-		return diff, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get commit diff from GitHub",
-		"caller":  "GetCommitDiff",
-		"owner":   owner,
-		"repo":    repo,
-		"sha":     sha,
-	}))
-
-	return commitDiff(ctx, token, owner, repo, sha)
-=======
 func GetCommitDiff(ctx context.Context, owner, repo, sha string) (string, error) {
 	return commitDiff(ctx, owner, repo, sha)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func commitDiff(ctx context.Context, owner, repo, sha string) (string, error) {
@@ -885,27 +789,8 @@ func commitDiff(ctx context.Context, owner, repo, sha string) (string, error) {
 }
 
 // GetBranchEvent gets the head of the a given branch via an API call to GitHub
-<<<<<<< HEAD
-func GetBranchEvent(ctx context.Context, token, owner, repo, branch string) (*github.Branch, error) {
-	event, err := branchEvent(ctx, "", owner, repo, branch)
-	if err == nil {
-		return event, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get branch event from GitHub",
-		"caller":  "GetBranchEvent",
-		"owner":   owner,
-		"repo":    repo,
-		"branch":  branch,
-	}))
-
-	return branchEvent(ctx, token, owner, repo, branch)
-=======
 func GetBranchEvent(ctx context.Context, owner, repo, branch string) (*github.Branch, error) {
 	return branchEvent(ctx, owner, repo, branch)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func branchEvent(ctx context.Context, owner, repo, branch string) (*github.Branch, error) {
@@ -1084,27 +969,8 @@ func GithubAuthenticate(ctx context.Context, code, clientId, clientSecret string
 }
 
 // GetTaggedCommitFromGithub gets the commit SHA for the given tag name.
-<<<<<<< HEAD
-func GetTaggedCommitFromGithub(ctx context.Context, token, owner, repo, tag string) (string, error) {
-	sha, err := taggedCommit(ctx, "", owner, repo, tag)
-	if err == nil {
-		return sha, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get tagged commit from GitHub",
-		"caller":  "GetTaggedCommitFromGithub",
-		"owner":   owner,
-		"repo":    repo,
-		"tag":     tag,
-	}))
-
-	return taggedCommit(ctx, token, owner, repo, tag)
-=======
 func GetTaggedCommitFromGithub(ctx context.Context, owner, repo, tag string) (string, error) {
 	return taggedCommit(ctx, owner, repo, tag)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func taggedCommit(ctx context.Context, owner, repo, tag string) (string, error) {
@@ -1194,29 +1060,8 @@ func getObjectTag(ctx context.Context, owner, repo, sha string) (*github.Tag, er
 	return tag, nil
 }
 
-<<<<<<< HEAD
-func IsUserInGithubTeam(ctx context.Context, teams []string, org, user, token, owner, repo string) bool {
-	inTeam, err := userInTeam(ctx, "", teams, org, user, owner, repo)
-	if err == nil {
-		return inTeam
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get team membership from GitHub",
-		"caller":  "IsUserInGithubTeam",
-		"org":     org,
-		"owner":   owner,
-		"repo":    repo,
-		"teams":   teams,
-		"user":    user,
-	}))
-
-	inTeam, _ = userInTeam(ctx, token, teams, org, user, owner, repo)
-=======
 func IsUserInGithubTeam(ctx context.Context, teams []string, org, user, owner, repo string) bool {
 	inTeam, _ := userInTeam(ctx, teams, org, user, owner, repo)
->>>>>>> f97506739 (remove github token tech debt)
 	return inTeam
 }
 
@@ -1314,24 +1159,8 @@ func GetGithubTokenUser(ctx context.Context, token string, requiredOrg string) (
 }
 
 // CheckGithubAPILimit queries Github for the number of API requests remaining
-<<<<<<< HEAD
-func CheckGithubAPILimit(ctx context.Context, token string) (int64, error) {
-	limit, err := apiLimit(ctx, "")
-	if err == nil {
-		return limit, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get API limit from GitHub",
-		"caller":  "CheckGithubAPILimit",
-	}))
-
-	return apiLimit(ctx, token)
-=======
 func CheckGithubAPILimit(ctx context.Context) (int64, error) {
 	return apiLimit(ctx)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func apiLimit(ctx context.Context) (int64, error) {
@@ -1370,25 +1199,8 @@ func apiLimit(ctx context.Context) (int64, error) {
 }
 
 // GetGithubUser fetches the github user with the given login name
-<<<<<<< HEAD
-func GetGithubUser(ctx context.Context, token, loginName string) (*github.User, error) {
-	user, err := getUser(ctx, "", loginName)
-	if err == nil {
-		return user, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get user from GitHub",
-		"caller":  "GetGithubUser",
-		"user":    loginName,
-	}))
-
-	return getUser(ctx, token, loginName)
-=======
 func GetGithubUser(ctx context.Context, loginName string) (*github.User, error) {
 	return getUser(ctx, loginName)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func getUser(ctx context.Context, loginName string) (*github.User, error) {
@@ -1425,26 +1237,8 @@ func getUser(ctx context.Context, loginName string) (*github.User, error) {
 // GithubUserInOrganization returns true if the given github user is in the
 // given organization. The user with the attached token must have
 // visibility into organization membership, including private members
-<<<<<<< HEAD
-func GithubUserInOrganization(ctx context.Context, token, requiredOrganization, username string) (bool, error) {
-	inOrg, err := userInOrganization(ctx, "", requiredOrganization, username)
-	if err == nil {
-		return inOrg, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to check user in org from GitHub",
-		"caller":  "GithubUserInOrganization",
-		"org":     requiredOrganization,
-		"user":    username,
-	}))
-
-	return userInOrganization(ctx, token, requiredOrganization, username)
-=======
 func GithubUserInOrganization(ctx context.Context, requiredOrganization, username string) (bool, error) {
 	return userInOrganization(ctx, requiredOrganization, username)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func userInOrganization(ctx context.Context, requiredOrganization, username string) (bool, error) {
@@ -1472,26 +1266,8 @@ func userInOrganization(ctx context.Context, requiredOrganization, username stri
 
 // AppAuthorizedForOrg returns true if the given app name exists in the org's installation list,
 // and has permission to write to pull requests. Returns an error if the app name exists but doesn't have permission.
-<<<<<<< HEAD
-func AppAuthorizedForOrg(ctx context.Context, token, requiredOrganization, name string) (bool, error) {
-	authorized, err := authorizedForOrg(ctx, "", requiredOrganization, name)
-	if err == nil {
-		return authorized, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to check app in org from GitHub",
-		"caller":  "AppAuthorizedForOrg",
-		"org":     requiredOrganization,
-		"name":    name,
-	}))
-
-	return authorizedForOrg(ctx, token, requiredOrganization, name)
-=======
 func AppAuthorizedForOrg(ctx context.Context, requiredOrganization, name string) (bool, error) {
 	return authorizedForOrg(ctx, requiredOrganization, name)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func authorizedForOrg(ctx context.Context, requiredOrganization, name string) (bool, error) {
@@ -1551,7 +1327,7 @@ func GitHubUserHasWritePermission(ctx context.Context, owner, repo, username str
 		return level, nil
 	}
 	grip.Debug(message.WrapError(err, message.Fields{
-		"ticket":   "DEVPROD-2923",
+		"ticket":   "EVG-19966",
 		"message":  "failed to check user permission level from GitHub",
 		"caller":   "GitHubUserPermissionLevel",
 		"owner":    owner,
@@ -1623,26 +1399,8 @@ func MostRestrictiveGitHubPermission(perm1, perm2 string) string {
 // GetPullRequestMergeBase returns the merge base hash for the given PR.
 // This function will retry up to 5 times, regardless of error response (unless
 // error is the result of hitting an api limit)
-<<<<<<< HEAD
-func GetPullRequestMergeBase(ctx context.Context, token string, data GithubPatch) (string, error) {
-	mergeBase, err := getPRMergeBase(ctx, "", data)
-	if err == nil {
-		return mergeBase, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get PR merge base from GitHub",
-		"caller":  "GetPullRequestMergeBase",
-		"owner":   data.BaseOwner,
-		"repo":    data.BaseRepo,
-	}))
-
-	return getPRMergeBase(ctx, token, data)
-=======
 func GetPullRequestMergeBase(ctx context.Context, data GithubPatch) (string, error) {
 	return getPRMergeBase(ctx, data)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func getPRMergeBase(ctx context.Context, data GithubPatch) (string, error) {
@@ -1725,28 +1483,8 @@ func getCommit(ctx context.Context, owner, repo, sha string) (*github.Repository
 	return commit, nil
 }
 
-<<<<<<< HEAD
-func GetGithubPullRequest(ctx context.Context, token, baseOwner, baseRepo string, prNumber int) (*github.PullRequest, error) {
-	pr, err := getPullRequest(ctx, "", baseOwner, baseRepo, prNumber)
-	if err == nil {
-		return pr, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":         "DEVPROD-2923",
-		"message":        "failed to get PR from GitHub",
-		"caller":         "GetGithubPullRequest",
-		"owner":          baseOwner,
-		"repo":           baseRepo,
-		"pr_num":         prNumber,
-		"token is empty": token == "",
-	}))
-
-	return getPullRequest(ctx, token, baseOwner, baseRepo, prNumber)
-=======
 func GetGithubPullRequest(ctx context.Context, baseOwner, baseRepo string, prNumber int) (*github.PullRequest, error) {
 	return getPullRequest(ctx, baseOwner, baseRepo, prNumber)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func getPullRequest(ctx context.Context, baseOwner, baseRepo string, prNumber int) (*github.PullRequest, error) {
@@ -1779,27 +1517,8 @@ func getPullRequest(ctx context.Context, baseOwner, baseRepo string, prNumber in
 }
 
 // GetGithubPullRequestDiff downloads a diff from a Github Pull Request diff
-<<<<<<< HEAD
-func GetGithubPullRequestDiff(ctx context.Context, token string, gh GithubPatch) (string, []Summary, error) {
-	diff, summary, err := pullRequestDiff(ctx, "", gh)
-	if err == nil {
-		return diff, summary, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get PR diff from GitHub",
-		"caller":  "GetGithubPullRequestDiff",
-		"owner":   gh.BaseOwner,
-		"repo":    gh.BaseRepo,
-		"pr_num":  gh.PRNumber,
-	}))
-
-	return pullRequestDiff(ctx, token, gh)
-=======
 func GetGithubPullRequestDiff(ctx context.Context, gh GithubPatch) (string, []Summary, error) {
 	return pullRequestDiff(ctx, gh)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func pullRequestDiff(ctx context.Context, gh GithubPatch) (string, []Summary, error) {
@@ -1966,27 +1685,8 @@ func GetMergeablePullRequest(ctx context.Context, issue int, owner, repo string)
 
 // MergePullRequest attempts to merge the given pull request. If commits are merged one after another, Github may
 // not have updated that this can be merged, so we allow retries.
-<<<<<<< HEAD
-func MergePullRequest(ctx context.Context, token, appToken, owner, repo, commitMessage string, prNum int, mergeOpts *github.PullRequestOptions) error {
-	err := mergePR(ctx, appToken, owner, repo, commitMessage, prNum, mergeOpts)
-	if err == nil {
-		return nil
-	}
-	grip.Debug(message.WrapError(err, message.Fields{
-		"ticket":    "DEVPROD-2923",
-		"message":   "failed to merge PR on GitHub",
-		"caller":    "MergePullRequest",
-		"owner":     owner,
-		"repo":      repo,
-		"pr_number": prNum,
-		"opts":      mergeOpts,
-	}))
-
-	return mergePR(ctx, token, owner, repo, commitMessage, prNum, mergeOpts)
-=======
 func MergePullRequest(ctx context.Context, appToken, owner, repo, commitMessage string, prNum int, mergeOpts *github.PullRequestOptions) error {
 	return mergePR(ctx, appToken, owner, repo, commitMessage, prNum, mergeOpts)
->>>>>>> f97506739 (remove github token tech debt)
 }
 
 func mergePR(ctx context.Context, appToken, owner, repo, commitMessage string, prNum int, mergeOpts *github.PullRequestOptions) error {
@@ -2023,7 +1723,7 @@ func PostCommentToPullRequest(ctx context.Context, owner, repo string, prNum int
 		return nil
 	}
 	grip.Debug(message.WrapError(err, message.Fields{
-		"ticket":    "DEVPROD-2923",
+		"ticket":    "EVG-19966",
 		"message":   "failed to comment to PR on GitHub",
 		"caller":    "PostCommentToPullRequest",
 		"owner":     owner,
