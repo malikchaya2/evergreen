@@ -350,22 +350,7 @@ func getInstallationToken(ctx context.Context, owner, repo string, opts *github.
 		return "", errors.Wrap(err, "getting config")
 	}
 
-	token, err := githubapp.CreateGitHubAppAuth(settings).CreateCachedInstallationToken(ctx, owner, repo, defaultGitHubAPIRequestLifetime, opts)
-	if err != nil {
-		grip.Debug(message.WrapError(err, message.Fields{
-			"message": "error creating token",
-			"ticket":  "DEVPROD-2923",
-			"owner":   owner,
-			"repo":    repo,
-		}))
-		return "", errors.Wrap(err, "creating installation token")
-	}
-	// TODO: (DEVPROD-2923) Remove once CreateInstallationToken returns an error.
-	if token == "" {
-		return "", missingTokenError
-	}
-
-	return token, nil
+	return githubapp.CreateGitHubAppAuth(settings).CreateCachedInstallationToken(ctx, owner, repo, defaultGitHubAPIRequestLifetime, opts)
 }
 
 // RevokeInstallationToken revokes an installation token. Take care to make sure
@@ -398,40 +383,13 @@ func getInstallationTokenWithDefaultOwnerRepo(ctx context.Context, opts *github.
 	if err != nil {
 		return "", errors.Wrap(err, "getting evergreen settings")
 	}
-	token, err := githubapp.CreateCachedInstallationTokenWithDefaultOwnerRepo(ctx, settings, defaultGitHubAPIRequestLifetime, opts)
-	if err != nil {
-		grip.Debug(message.WrapError(err, message.Fields{
-			"message": "error creating default token",
-			"ticket":  "DEVPROD-2923",
-		}))
-		return "", errors.Wrap(err, "creating default installation token")
-	}
-	// TODO: (DEVPROD-2923) Remove once CreateInstallationTokenWithDefaultOwnerRepo returns an error.
-	if token == "" {
-		return "", missingTokenError
-	}
-
-	return token, nil
+	return githubapp.CreateCachedInstallationTokenWithDefaultOwnerRepo(ctx, settings, defaultGitHubAPIRequestLifetime, opts)
 }
 
 // GetGithubCommits returns a slice of GithubCommit objects from
 // the given commitsURL when provided a valid oauth token
 func GetGithubCommits(ctx context.Context, token, owner, repo, ref string, until time.Time, commitPage int) ([]*github.RepositoryCommit, int, error) {
-	commits, nextPage, err := getCommits(ctx, "", owner, repo, ref, until, commitPage)
-	if err == nil {
-		return commits, nextPage, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get commits from GitHub",
-		"caller":  "GetGithubCommits",
-		"owner":   owner,
-		"repo":    repo,
-		"ref":     ref,
-	}))
-
-	return getCommits(ctx, token, owner, repo, ref, until, commitPage)
+	return getCommits(ctx, "", owner, repo, ref, until, commitPage)
 }
 
 func getCommits(ctx context.Context, token, owner, repo, ref string, until time.Time, commitPage int) ([]*github.RepositoryCommit, int, error) {
