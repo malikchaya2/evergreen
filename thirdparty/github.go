@@ -457,22 +457,7 @@ func GetGithubFile(ctx context.Context, token, owner, repo, path, ref string) (*
 		return nil, errors.New("remote repository path cannot be empty")
 	}
 
-	content, err := getFile(ctx, "", owner, repo, path, ref)
-	if err == nil {
-		return content, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get a file from GitHub",
-		"caller":  "GetGithubFile",
-		"owner":   owner,
-		"repo":    repo,
-		"path":    path,
-		"ref":     ref,
-	}))
-
-	return getFile(ctx, token, owner, repo, path, ref)
+	return getFile(ctx, "", owner, repo, path, ref)
 }
 
 func getFile(ctx context.Context, token, owner, repo, path, ref string) (*github.RepositoryContent, error) {
@@ -684,20 +669,7 @@ func getCommitComparison(ctx context.Context, token, owner, repo, baseRevision, 
 }
 
 func GetCommitEvent(ctx context.Context, token, owner, repo, githash string) (*github.RepositoryCommit, error) {
-	event, err := commitEvent(ctx, "", owner, repo, githash)
-	if err == nil {
-		return event, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get commit event from GitHub",
-		"caller":  "GetCommitEvent",
-		"owner":   owner,
-		"repo":    repo,
-	}))
-
-	return commitEvent(ctx, token, owner, repo, githash)
+	return commitEvent(ctx, "", owner, repo, githash)
 }
 
 func commitEvent(ctx context.Context, token, owner, repo, githash string) (*github.RepositoryCommit, error) {
@@ -1694,21 +1666,7 @@ func getPullRequest(ctx context.Context, token, baseOwner, baseRepo string, prNu
 
 // GetGithubPullRequestDiff downloads a diff from a Github Pull Request diff
 func GetGithubPullRequestDiff(ctx context.Context, token string, gh GithubPatch) (string, []Summary, error) {
-	diff, summary, err := pullRequestDiff(ctx, "", gh)
-	if err == nil {
-		return diff, summary, nil
-	}
-	// TODO: (DEVPROD-2923) Remove logging.
-	grip.DebugWhen(!errors.Is(err, missingTokenError), message.WrapError(err, message.Fields{
-		"ticket":  "DEVPROD-2923",
-		"message": "failed to get PR diff from GitHub",
-		"caller":  "GetGithubPullRequestDiff",
-		"owner":   gh.BaseOwner,
-		"repo":    gh.BaseRepo,
-		"pr_num":  gh.PRNumber,
-	}))
-
-	return pullRequestDiff(ctx, token, gh)
+	return pullRequestDiff(ctx, "", gh)
 }
 
 func pullRequestDiff(ctx context.Context, token string, gh GithubPatch) (string, []Summary, error) {
@@ -1924,20 +1882,7 @@ func mergePR(ctx context.Context, token, owner, repo, commitMessage string, prNu
 
 // PostCommentToPullRequest posts the given comment to the associated PR.
 func PostCommentToPullRequest(ctx context.Context, token, owner, repo string, prNum int, comment string) error {
-	err := postComment(ctx, "", owner, repo, prNum, comment)
-	if err == nil {
-		return nil
-	}
-	grip.Debug(message.WrapError(err, message.Fields{
-		"ticket":    "DEVPROD-2923",
-		"message":   "failed to comment to PR on GitHub",
-		"caller":    "PostCommentToPullRequest",
-		"owner":     owner,
-		"repo":      repo,
-		"pr_number": prNum,
-	}))
-
-	return postComment(ctx, token, owner, repo, prNum, comment)
+	return postComment(ctx, "", owner, repo, prNum, comment)
 }
 
 func postComment(ctx context.Context, token, owner, repo string, prNum int, comment string) error {
