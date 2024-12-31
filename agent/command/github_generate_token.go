@@ -34,12 +34,17 @@ type githubGenerateToken struct {
 	Repo string `mapstructure:"repo" plugin:"expand"`
 
 	// ExpansionName is what the generated token will be saved as.
-	ExpansionName string `mapstructure:"expansion_name"`
+	ExpansionName string `mapstructure:"expansion_name" plugin:"expand"`
 
 	// Permissions to grant the token. If not provided, set to nil to grant all permissions.
 	// The command can never specify to restrict all permissions- as it would
 	// be the same as not using a token.
-	Permissions *github.InstallationPermissions `mapstructure:"permissions"`
+
+	// I don't know if this will work because I can't add plugin:"expand"` to the items inside
+	// of the Permissions struct because it's in vendor. Do the other ticket first that prints what the
+	// permissions are to make this one easier.
+	// then document where you can and can't use expansions.
+	Permissions *github.InstallationPermissions `mapstructure:"permissions" plugin:"expand"`
 
 	base
 }
