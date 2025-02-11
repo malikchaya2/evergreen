@@ -74,7 +74,7 @@ func (s *CliIntentSuite) TestNewCliIntent() {
 	s.Equal(s.module, cIntent.Module)
 	s.Equal(s.patchContent, cIntent.PatchContent)
 	s.Equal(s.description, cIntent.Description)
-	s.True(cIntent.Finalize)
+	s.False(cIntent.Finalize)
 	s.Equal(s.variants, cIntent.BuildVariants)
 	s.Equal(s.tasks, cIntent.Tasks)
 	s.Zero(cIntent.ProcessedAt)

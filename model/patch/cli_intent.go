@@ -44,6 +44,7 @@ type cliIntent struct {
 	Parameters []Parameter `bson:"parameters,omitempty"`
 
 	// Finalize is whether or not the patch should finalized.
+	// here
 	Finalize bool `bson:"finalize"`
 
 	// Module is the name of the module id as represented in the project's
@@ -161,7 +162,10 @@ func (c *cliIntent) ID() string {
 }
 
 func (c *cliIntent) ShouldFinalizePatch() bool {
-	return c.Finalize
+	// We do not automatically finalize a patch. Instead, we determine if a patch should be finalized based on if
+	// a finalize flag was passed in and based on the user's response to a prompt if the number of tasks is greater
+	// than the largeNumFinalizedTasksThreshold.
+	return false
 }
 
 func (c *cliIntent) RepeatPreviousPatchDefinition() (string, bool) {
