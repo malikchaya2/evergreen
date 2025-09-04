@@ -1343,6 +1343,13 @@ func (h *hostAgentEndTask) Run(ctx context.Context) gimlet.Responder {
 		}
 	}
 
+	// Move logs to failed bucket after marking task complete, for failed tasks only
+	if details.Status == evergreen.TaskFailed {
+		if err := t.MoveLogsToFailedBucket(ctx); err != nil {
+			grip.Error(errors.Wrap(err, "moving logs to failed bucket"))
+		}
+	}
+
 	err = model.MarkEnd(ctx, h.env.Settings(), t, evergreen.APIServerTaskActivator, finishTime, details)
 	if err != nil {
 		err = errors.Wrapf(err, "calling mark finish on task '%s'", t.Id)
