@@ -356,6 +356,7 @@ func (s *GitGetProjectSuite) TestTokenIsRedactedWhenGenerated() {
 
 	// This is to ensure that the token would be leaked if not redacted.
 	s.Run("WithoutRedactorShouldLeak", func() {
+		s.T().Parallel()
 		logger, err := s.comm.GetLoggerProducer(s.ctx, &conf.Task, nil)
 		s.Require().NoError(err)
 		runCommands(logger)
@@ -370,6 +371,7 @@ func (s *GitGetProjectSuite) TestTokenIsRedactedWhenGenerated() {
 	})
 
 	s.Run("WithRedactorShouldNotLeak", func() {
+		s.T().Parallel()
 		logger, err := s.comm.GetLoggerProducer(s.ctx, &conf.Task, &client.LoggerConfig{
 			RedactorOpts: redactor.RedactionOptions{
 				Expansions: conf.NewExpansions,

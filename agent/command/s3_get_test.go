@@ -235,6 +235,7 @@ func TestS3GetFetchesFiles(t *testing.T) {
 	}
 
 	t.Run("GetOptionalDoesNotError", func(t *testing.T) {
+		t.Parallel()
 		getCommand := s3GetFactory()
 		getParams := map[string]any{
 			"aws_key":           accessKeyID,
@@ -252,6 +253,7 @@ func TestS3GetFetchesFiles(t *testing.T) {
 	})
 
 	t.Run("GetPlainFile", func(t *testing.T) {
+		t.Parallel()
 		remoteFile := fmt.Sprintf("tests/%s/%s", t.Name(), id)
 		putFilePath := filepath.Join(temproot, "upload-file.txt")
 		getFilePath := filepath.Join(temproot, "download-file.txt")
@@ -296,6 +298,7 @@ func TestS3GetFetchesFiles(t *testing.T) {
 	})
 
 	t.Run("GetTarFile", func(t *testing.T) {
+		t.Parallel()
 		remoteTarFile := fmt.Sprintf("tests/%s/%s.tgz", t.Name(), id)
 		putTarFilePath := filepath.Join(temproot, "upload-file.tgz")
 		tarFileName := "hello-world.txt"
