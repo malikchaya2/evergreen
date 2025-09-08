@@ -5470,3 +5470,14 @@ func TestTaskCostIsZero(t *testing.T) {
 	nonZeroBoth := TaskCost{OnDemandCost: 0.1, AdjustedCost: 0.2}
 	assert.False(t, nonZeroBoth.IsZero())
 }
+
+func BenchmarkAddDependency(b *testing.B) {
+	t := &Task{Id: "task_id"}
+	dep := Dependency{TaskId: "dep_id", Status: "success"}
+	ctx := context.Background()
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		_ = t.AddDependency(ctx, dep)
+	}
+}

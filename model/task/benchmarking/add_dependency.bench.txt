@@ -1,0 +1,11 @@
+[task.test] 2025/09/08 09:35:58 [p=alert]: [args='[]' environ='test-count=10' op='called init() in testutil for production code.' test.v='<nil>' v='<nil>']
+[task.test] 2025/09/08 09:35:58 [p=info]: creating new remote job queue with 2 workers
+[task.test] 2025/09/08 09:35:58 [p=debug]: started worker 1 of 2 waiting for jobs
+[task.test] 2025/09/08 09:35:58 [p=debug]: started worker 2 of 2 waiting for jobs
+goos: darwin
+goarch: arm64
+pkg: github.com/evergreen-ci/evergreen/model/task
+cpu: Apple M1 Max
+BenchmarkAddDependency-10    	211724929	         5.626 ns/op	       0 B/op	       0 allocs/op
+PASS
+ok  	github.com/evergreen-ci/evergreen/model/task	2.601s
