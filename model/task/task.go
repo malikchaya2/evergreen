@@ -4299,12 +4299,11 @@ func (t *Task) moveObjectKeysToFailedBucket(ctx context.Context, settings *everg
 		return nil
 	}
 
-	failedCfg := settings.Buckets.LogBucketFailedTasks
-
 	srcBucket, err := newBucket(ctx, *srcCfg, creds)
 	if err != nil {
 		return errors.Wrap(err, "getting source bucket")
 	}
+	failedCfg := settings.Buckets.LogBucketFailedTasks
 	failedBucket, err := newBucket(ctx, failedCfg, creds)
 	if err != nil {
 		return errors.Wrap(err, "getting failed bucket")
@@ -4359,7 +4358,7 @@ func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *ever
 }
 
 func (t *Task) MoveTestAndTaskLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings) error {
-	if !ShouldUseFailedBucket(t) {
+	if !t.ShouldUseFailedBucket(settings) {
 		return nil
 	}
 	output, ok := t.GetTaskOutputSafe()
@@ -4373,23 +4372,6 @@ func (t *Task) MoveTestAndTaskLogsToFailedBucket(ctx context.Context, settings *
 		return errors.Wrap(err, "moving test logs to failed bucket")
 	}
 	return nil
-}
-
-// UpdateTestLogBucketConfigForTask updates the TestLogs.BucketConfig for the given task's TaskOutputInfo
-// based on the task status, the task project, and the admin settings
-func UpdateTestLogBucketConfigForTask(task *Task, originalBucketConfig evergreen.BucketConfig) evergreen.BucketConfig {
-	bucketConfig, usesOriginal := getTestLogBucketConfigForTask(task, originalBucketConfig)
-	if task == nil || task.TaskOutputInfo == nil {
-		return bucketConfig
-	}
-	if !usesOriginal {
-		// If we're not using the original bucket, we need to update the task's
-		// TaskOutputInfo to reflect the new bucket config.
-		//todo: persist it in the db
-		task.TaskOutputInfo.TestLogs.BucketConfig = bucketConfig
-	}
-
-	return bucketConfig
 }
 
 // getBucketConfigForProject returns the appropriate bucket config for a project,
@@ -4406,32 +4388,16 @@ func getBucketConfigForProject(project string, originalBucketConfig evergreen.Bu
 }
 
 // ShouldUseFailedBucket returns true if the task failed and is not in LongRetentionProjects.
-func ShouldUseFailedBucket(task *Task) bool {
-	if task == nil {
+func (t *Task) ShouldUseFailedBucket(settings *evergreen.Settings) bool {
+	if t == nil {
 		return false
 	}
-	if task.Status != evergreen.TaskFailed {
+	if t.Status != evergreen.TaskFailed {
 		return false
 	}
-	env := evergreen.GetEnvironment()
-	if env != nil && env.Settings() != nil && slices.Contains(env.Settings().Buckets.LongRetentionProjects, task.Project) {
+
+	if settings != nil && slices.Contains(settings.Buckets.LongRetentionProjects, t.Project) {
 		return false
 	}
 	return true
 }
-
-// getTestLogBucketConfigForTask returns the appropriate bucket config and a boolean indicating if it uses
-//
-//	the original bucket.
-func getTestLogBucketConfigForTask(task *Task, originalBucketConfig evergreen.BucketConfig) (evergreen.BucketConfig, bool) {
-	if ShouldUseFailedBucket(task) {
-		env := evergreen.GetEnvironment()
-		if env != nil && env.Settings() != nil {
-			return env.Settings().Buckets.LogBucketFailedTasks, true
-		}
-	}
-	bucketConfig, usesOriginal := getBucketConfigForProject(task.Project, originalBucketConfig)
-	return bucketConfig, usesOriginal
-}
-
-// moveLogsToFailedBucketHelper centralizes logic for moving logs to the failed bucket and updating output info.
