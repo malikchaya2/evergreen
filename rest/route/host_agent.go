@@ -1343,7 +1343,7 @@ func (h *hostAgentEndTask) Run(ctx context.Context) gimlet.Responder {
 		}
 	}
 
-	// Move logs to failed bucket after marking task complete, for failed tasks only
+	// Move logs to failed bucket after marking task complete if the task failed and it should be moved
 	if details.Status == evergreen.TaskFailed && t.ShouldUseFailedBucket(h.env.Settings()) {
 		if err := t.MoveTestAndTaskLogsToFailedBucket(ctx, h.env.Settings()); err != nil {
 			grip.Error(errors.Wrap(err, "moving logs to failed bucket"))
