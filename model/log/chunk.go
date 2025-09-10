@@ -10,17 +10,17 @@ package log
 // chunkInfo represents a log chunk file's metadata that enables optimized
 // fetching of log files stored as a set of chunks in pail-backed bucket
 // storage.
-type chunkInfo struct {
-	key      string
-	sequence int
-	start    int64
-	end      int64
-	numLines int
-	upload   int64
+type ChunkInfo struct {
+	Key      string
+	Sequence int
+	Start    int64
+	End      int64
+	NumLines int
+	Upload   int64
 }
 
 // chunkGroup represents a set of chunks belonging to a single log.
-type chunkGroup struct {
-	name   string
-	chunks []chunkInfo
+type ChunkGroup struct {
+	Name   string
+	Chunks []ChunkInfo
 }
