@@ -3,6 +3,7 @@ package task
 import (
 	"context"
 	"fmt"
+	"slices"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/evergreen-ci/evergreen"
@@ -177,4 +178,21 @@ func getLogService(ctx context.Context, o TaskLogOutput) (log.LogService, error)
 	}
 
 	return log.NewLogServiceV0(b), nil
+}
+
+// getBucketConfigForProject returns the appropriate bucket config for a project,
+// using long retention bucket if the project is in the long retention list. It returns
+// a boolean indicating if the original bucket is being used.
+
+// getBucketConfigForProject returns the appropriate bucket config for a project,
+// using long retention bucket if the project is in the long retention list. It returns
+// a boolean indicating if the original bucket is being used.
+func getBucketConfigForProject(project string, originalBucketConfig evergreen.BucketConfig) (evergreen.BucketConfig, bool) {
+	env := evergreen.GetEnvironment()
+	if env != nil && env.Settings() != nil && slices.Contains(env.Settings().Buckets.LongRetentionProjects, project) {
+		// Project is in long retention list, use current long retention bucket
+		return env.Settings().Buckets.LogBucketLongRetention, false
+	}
+	// Project is not in long retention list, use original bucket config
+	return originalBucketConfig, true
 }
