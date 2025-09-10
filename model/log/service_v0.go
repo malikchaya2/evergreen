@@ -45,8 +45,8 @@ func (s *logServiceV0) Get(ctx context.Context, getOpts GetOptions) (LogIterator
 	for _, chunks := range allLogChunks {
 		its = append(its, newChunkIterator(ctx, chunkIteratorOptions{
 			bucket:    s.bucket,
-			chunks:    chunks.Chunks,
-			parser:    s.getParser(chunks.Name),
+			chunks:    chunks.chunks,
+			parser:    s.getParser(chunks.name),
 			start:     start,
 			end:       end,
 			lineLimit: getOpts.LineLimit,
@@ -81,7 +81,7 @@ func (s *logServiceV0) Append(ctx context.Context, logName string, sequence int,
 
 // getLogChunks maps each logical log to its chunk files stored in pail-backed
 // bucket storage for the given prefix.
-func (s *logServiceV0) GetLogChunks(ctx context.Context, logNames []string) ([]ChunkGroup, int64, int64, error) {
+func (s *logServiceV0) GetLogChunks(ctx context.Context, logNames []string) ([]chunkGroup, int64, int64, error) {
 	// To reduce potentially expensive list calls, use the LCP of the
 	// given log names when calling `bucket.List`. Key names that do not
 	// have one of the log names as a prefix will get filtered out.
@@ -138,31 +138,31 @@ func (s *logServiceV0) GetLogChunks(ctx context.Context, logNames []string) ([]C
 		// find the first specified log's time range.
 		sort.Slice(chunks, func(i, j int) bool {
 			switch {
-			case chunks[i].Sequence != chunks[j].Sequence:
-				return chunks[i].Sequence < chunks[j].Sequence
-			case chunks[i].Start != chunks[j].Start:
-				return chunks[i].Start < chunks[j].Start
+			case chunks[i].sequence != chunks[j].sequence:
+				return chunks[i].sequence < chunks[j].sequence
+			case chunks[i].start != chunks[j].start:
+				return chunks[i].start < chunks[j].start
 			default:
-				return chunks[i].Upload < chunks[j].Upload
+				return chunks[i].upload < chunks[j].upload
 			}
 		})
 		if strings.HasPrefix(name, logNames[0]) {
-			if start == 0 || (start > 0 && start > chunks[0].Start) {
-				start = chunks[0].Start
+			if start == 0 || (start > 0 && start > chunks[0].start) {
+				start = chunks[0].start
 			}
-			if end < chunks[len(chunks)-1].End {
-				end = chunks[len(chunks)-1].End
+			if end < chunks[len(chunks)-1].end {
+				end = chunks[len(chunks)-1].end
 			}
 		}
 	}
 
 	// Preserve the order that pail returns the log names to ensure a
 	// deterministic merge order.
-	chunkGroups := make([]ChunkGroup, 0, len(logNames))
+	chunkGroups := make([]chunkGroup, 0, len(logNames))
 	for _, name := range orderedLogNames {
-		chunkGroups = append(chunkGroups, ChunkGroup{
-			Name:   name,
-			Chunks: logChunks[name],
+		chunkGroups = append(chunkGroups, chunkGroup{
+			name:   name,
+			chunks: logChunks[name],
 		})
 	}
 
@@ -217,12 +217,12 @@ func (s *logServiceV0) parseChunkKey(prefix, key string) (chunkInfo, error) {
 	}
 
 	return chunkInfo{
-		Key:      prefix + "/" + key,
-		Sequence: sequence,
-		Start:    start,
-		End:      end,
-		NumLines: numLines,
-		Upload:   upload,
+		key:      prefix + "/" + key,
+		sequence: sequence,
+		start:    start,
+		end:      end,
+		numLines: numLines,
+		upload:   upload,
 	}, nil
 }
 
@@ -273,8 +273,8 @@ func (s *logServiceV0) GetChunkKeys(ctx context.Context, logNames []string) ([]s
 	}
 	var keys []string
 	for _, group := range chunkGroups {
-		for _, chunk := range group.Chunks {
-			keys = append(keys, chunk.Key)
+		for _, chunk := range group.chunks {
+			keys = append(keys, chunk.key)
 		}
 	}
 	return keys, nil

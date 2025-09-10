@@ -138,14 +138,14 @@ func (it *chunkIterator) worker(ctx context.Context) {
 	}()
 
 	for _, chunk := range it.opts.chunks {
-		r, err := it.opts.bucket.Get(ctx, chunk.Key)
+		r, err := it.opts.bucket.Get(ctx, chunk.key)
 		if err != nil {
 			it.catcher.Wrap(err, "getting chunk from bucket")
 			return
 		}
 
 		select {
-		case it.next <- newChunkReader(r, chunk.NumLines):
+		case it.next <- newChunkReader(r, chunk.numLines):
 		case <-ctx.Done():
 			it.catcher.Add(ctx.Err())
 			return
@@ -174,7 +174,7 @@ func (it *chunkIterator) Close() error {
 func filterChunksByTimeRange(chunks []chunkInfo, start, end *int64) []chunkInfo {
 	var filteredChunks []chunkInfo
 	for i := 0; i < len(chunks); i++ {
-		if (end != nil && utility.FromInt64Ptr(end) < chunks[i].Start) || utility.FromInt64Ptr(start) > chunks[i].End {
+		if (end != nil && utility.FromInt64Ptr(end) < chunks[i].start) || utility.FromInt64Ptr(start) > chunks[i].end {
 			continue
 		}
 		filteredChunks = append(filteredChunks, chunks[i])
@@ -186,7 +186,7 @@ func filterChunksByTimeRange(chunks []chunkInfo, start, end *int64) []chunkInfo 
 func filterChunksByTailN(chunks []chunkInfo, tailN int) ([]chunkInfo, int) {
 	var numChunks, lineCount int
 	for i := len(chunks) - 1; i >= 0 && lineCount < tailN; i-- {
-		lineCount += chunks[i].NumLines
+		lineCount += chunks[i].numLines
 		numChunks++
 	}
 
@@ -196,7 +196,7 @@ func filterChunksByTailN(chunks []chunkInfo, tailN int) ([]chunkInfo, int) {
 func filterChunksByLimit(chunks []chunkInfo, limit int) []chunkInfo {
 	var numChunks, lineCount int
 	for i := 0; i < len(chunks) && lineCount < limit; i++ {
-		lineCount += chunks[i].NumLines
+		lineCount += chunks[i].numLines
 		numChunks++
 	}
 
