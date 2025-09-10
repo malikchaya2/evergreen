@@ -319,6 +319,7 @@ type ComplexityRoot struct {
 		Credentials            func(childComplexity int) int
 		InternalBuckets        func(childComplexity int) int
 		LogBucket              func(childComplexity int) int
+		LogBucketFailedTasks   func(childComplexity int) int
 		LogBucketLongRetention func(childComplexity int) int
 		LongRetentionProjects  func(childComplexity int) int
 		TestResultsBucket      func(childComplexity int) int
@@ -3809,6 +3810,13 @@ func (e *executableSchema) Complexity(ctx context.Context, typeName, field strin
 		}
 
 		return e.complexity.BucketsConfig.LogBucket(childComplexity), true
+
+	case "BucketsConfig.logBucketFailedTasks":
+		if e.complexity.BucketsConfig.LogBucketFailedTasks == nil {
+			break
+		}
+
+		return e.complexity.BucketsConfig.LogBucketFailedTasks(childComplexity), true
 
 	case "BucketsConfig.logBucketLongRetention":
 		if e.complexity.BucketsConfig.LogBucketLongRetention == nil {
@@ -19788,6 +19796,8 @@ func (ec *executionContext) fieldContext_AdminSettings_buckets(_ context.Context
 				return ec.fieldContext_BucketsConfig_logBucket(ctx, field)
 			case "logBucketLongRetention":
 				return ec.fieldContext_BucketsConfig_logBucketLongRetention(ctx, field)
+			case "logBucketFailedTasks":
+				return ec.fieldContext_BucketsConfig_logBucketFailedTasks(ctx, field)
 			case "longRetentionProjects":
 				return ec.fieldContext_BucketsConfig_longRetentionProjects(ctx, field)
 			case "testResultsBucket":
@@ -25261,6 +25271,55 @@ func (ec *executionContext) _BucketsConfig_logBucketLongRetention(ctx context.Co
 }
 
 func (ec *executionContext) fieldContext_BucketsConfig_logBucketLongRetention(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
+	fc = &graphql.FieldContext{
+		Object:     "BucketsConfig",
+		Field:      field,
+		IsMethod:   false,
+		IsResolver: false,
+		Child: func(ctx context.Context, field graphql.CollectedField) (*graphql.FieldContext, error) {
+			switch field.Name {
+			case "name":
+				return ec.fieldContext_BucketConfig_name(ctx, field)
+			case "testResultsPrefix":
+				return ec.fieldContext_BucketConfig_testResultsPrefix(ctx, field)
+			case "roleARN":
+				return ec.fieldContext_BucketConfig_roleARN(ctx, field)
+			}
+			return nil, fmt.Errorf("no field named %q was found under type BucketConfig", field.Name)
+		},
+	}
+	return fc, nil
+}
+
+func (ec *executionContext) _BucketsConfig_logBucketFailedTasks(ctx context.Context, field graphql.CollectedField, obj *model.APIBucketsConfig) (ret graphql.Marshaler) {
+	fc, err := ec.fieldContext_BucketsConfig_logBucketFailedTasks(ctx, field)
+	if err != nil {
+		return graphql.Null
+	}
+	ctx = graphql.WithFieldContext(ctx, fc)
+	defer func() {
+		if r := recover(); r != nil {
+			ec.Error(ctx, ec.Recover(ctx, r))
+			ret = graphql.Null
+		}
+	}()
+	resTmp, err := ec.ResolverMiddleware(ctx, func(rctx context.Context) (any, error) {
+		ctx = rctx // use context from middleware stack in children
+		return obj.LogBucketFailedTasks, nil
+	})
+	if err != nil {
+		ec.Error(ctx, err)
+		return graphql.Null
+	}
+	if resTmp == nil {
+		return graphql.Null
+	}
+	res := resTmp.(model.APIBucketConfig)
+	fc.Result = res
+	return ec.marshalOBucketConfig2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIBucketConfig(ctx, field.Selections, res)
+}
+
+func (ec *executionContext) fieldContext_BucketsConfig_logBucketFailedTasks(_ context.Context, field graphql.CollectedField) (fc *graphql.FieldContext, err error) {
 	fc = &graphql.FieldContext{
 		Object:     "BucketsConfig",
 		Field:      field,
@@ -97164,7 +97223,7 @@ func (ec *executionContext) unmarshalInputBucketsConfigInput(ctx context.Context
 		asMap[k] = v
 	}
 
-	fieldsInOrder := [...]string{"logBucket", "logBucketLongRetention", "longRetentionProjects", "testResultsBucket", "internalBuckets", "credentials"}
+	fieldsInOrder := [...]string{"logBucket", "logBucketLongRetention", "logBucketFailedTasks", "longRetentionProjects", "testResultsBucket", "internalBuckets", "credentials"}
 	for _, k := range fieldsInOrder {
 		v, ok := asMap[k]
 		if !ok {
@@ -97185,6 +97244,13 @@ func (ec *executionContext) unmarshalInputBucketsConfigInput(ctx context.Context
 				return it, err
 			}
 			it.LogBucketLongRetention = data
+		case "logBucketFailedTasks":
+			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("logBucketFailedTasks"))
+			data, err := ec.unmarshalOBucketConfigInput2githubᚗcomᚋevergreenᚑciᚋevergreenᚋrestᚋmodelᚐAPIBucketConfig(ctx, v)
+			if err != nil {
+				return it, err
+			}
+			it.LogBucketFailedTasks = data
 		case "longRetentionProjects":
 			ctx := graphql.WithPathContext(ctx, graphql.NewPathWithField("longRetentionProjects"))
 			data, err := ec.unmarshalOString2ᚕstringᚄ(ctx, v)
@@ -107571,6 +107637,8 @@ func (ec *executionContext) _BucketsConfig(ctx context.Context, sel ast.Selectio
 			out.Values[i] = ec._BucketsConfig_logBucket(ctx, field, obj)
 		case "logBucketLongRetention":
 			out.Values[i] = ec._BucketsConfig_logBucketLongRetention(ctx, field, obj)
+		case "logBucketFailedTasks":
+			out.Values[i] = ec._BucketsConfig_logBucketFailedTasks(ctx, field, obj)
 		case "longRetentionProjects":
 			out.Values[i] = ec._BucketsConfig_longRetentionProjects(ctx, field, obj)
 		case "testResultsBucket":
