@@ -4294,11 +4294,6 @@ func (t *Task) GetEstimatedCost(ctx context.Context) (TaskCost, error) {
 // moveObjectKeysToFailedBucket moves the given keys from the source bucket to the failed bucket.
 // If successful, it updates the provided output bucket config pointer to the failed bucket config.
 func (t *Task) moveObjectKeysToFailedBucket(ctx context.Context, settings *evergreen.Settings, srcCfg *evergreen.BucketConfig, creds aws.CredentialsProvider, keys []string, outputCfg *evergreen.BucketConfig) error {
-	grip.Debug(message.Fields{
-		"message":   "chayaMtesting in moveObjectKeysToFailedBucket 4298",
-		"task":      t.Id,
-		"len(keys)": len(keys),
-	})
 	if len(keys) == 0 {
 		return nil
 	}
@@ -4315,17 +4310,8 @@ func (t *Task) moveObjectKeysToFailedBucket(ctx context.Context, settings *everg
 	}
 
 	if err := srcBucket.MoveObjects(ctx, failedBucket, keys, keys); err != nil {
-		grip.Debug(message.Fields{
-			"message": "chayaMtesting in moveObjectKeysToFailedBucket returning error 4330",
-			"task":    t.Id,
-		})
 		return errors.Wrap(err, "moving objects to failed bucket")
 	}
-
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in moveObjectKeysToFailedBucket 4337",
-		"task":    t.Id,
-	})
 
 	*outputCfg = failedCfg
 	return nil
@@ -4333,9 +4319,6 @@ func (t *Task) moveObjectKeysToFailedBucket(ctx context.Context, settings *everg
 
 // MoveTestLogsToFailedBucket moves all test logs from the regular bucket to the failed bucket for a failed task.
 func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings, output *TaskOutput) error {
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveTestLogsToFailedBucket",
-	})
 	srcBucket, err := newBucket(ctx, output.TestLogs.BucketConfig, output.TestLogs.AWSCredentials)
 	if err != nil {
 		return errors.Wrap(err, "getting regular test log bucket")
@@ -4359,9 +4342,6 @@ func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *ever
 
 // MoveTaskLogsToFailedBucket moves all logs from the regular bucket to the failed bucket for a failed task.
 func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings, output *TaskOutput) error {
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveTaskLogsToFailedBucket",
-	})
 	srcBucket, err := newBucket(ctx, output.TaskLogs.BucketConfig, output.TaskLogs.AWSCredentials)
 	if err != nil {
 		return errors.Wrap(err, "getting regular task log bucket")
@@ -4375,10 +4355,6 @@ func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *ever
 	if err != nil {
 		return errors.Wrap(err, "getting task log chunk keys")
 	}
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveTaskLogsToFailedBucket",
-		"keys":    keys,
-	})
 	if len(keys) == 0 {
 		return nil
 	}
@@ -4405,7 +4381,6 @@ func (t *Task) MoveTestAndTaskLogsToFailedBucket(ctx context.Context, settings *
 	}
 	return nil
 }
-
 
 // UsesLongRetentionBucket returns true if the task failed and is not in LongRetentionProjects.
 func (t *Task) UsesLongRetentionBucket(settings *evergreen.Settings) bool {
