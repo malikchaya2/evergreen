@@ -26,7 +26,7 @@ func NewLogServiceV0(bucket pail.Bucket) *logServiceV0 {
 }
 
 func (s *logServiceV0) Get(ctx context.Context, getOpts GetOptions) (LogIterator, error) {
-	allLogChunks, firstStart, firstEnd, err := s.GetLogChunks(ctx, getOpts.LogNames)
+	allLogChunks, firstStart, firstEnd, err := s.getLogChunks(ctx, getOpts.LogNames)
 	if err != nil {
 		return nil, errors.Wrap(err, "getting log chunks")
 	}
@@ -81,7 +81,7 @@ func (s *logServiceV0) Append(ctx context.Context, logName string, sequence int,
 
 // getLogChunks maps each logical log to its chunk files stored in pail-backed
 // bucket storage for the given prefix.
-func (s *logServiceV0) GetLogChunks(ctx context.Context, logNames []string) ([]chunkGroup, int64, int64, error) {
+func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) ([]chunkGroup, int64, int64, error) {
 	// To reduce potentially expensive list calls, use the LCP of the
 	// given log names when calling `bucket.List`. Key names that do not
 	// have one of the log names as a prefix will get filtered out.
@@ -267,7 +267,7 @@ func (s *logServiceV0) getParser(logName string) LineParser {
 
 // GetChunkKeys flattens all chunk keys from a slice of ChunkGroups.
 func (s *logServiceV0) GetChunkKeys(ctx context.Context, logNames []string) ([]string, error) {
-	chunkGroups, _, _, err := s.GetLogChunks(ctx, logNames)
+	chunkGroups, _, _, err := s.getLogChunks(ctx, logNames)
 	if err != nil {
 		return nil, err
 	}
