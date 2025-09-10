@@ -2528,7 +2528,7 @@ func resetTaskUpdate(t *Task, caller string) []bson.M {
 				ActivatedTimeKey:               now,
 				ActivatedByKey:                 caller,
 				SecretKey:                      newSecret,
-				Status
+				StatusKey:                      evergreen.TaskUndispatched,
 				DispatchTimeKey:                utility.ZeroTime,
 				StartTimeKey:                   utility.ZeroTime,
 				ScheduledTimeKey:               utility.ZeroTime,
