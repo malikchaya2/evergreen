@@ -27,7 +27,7 @@ type chunkIterator struct {
 
 type chunkIteratorOptions struct {
 	bucket    pail.Bucket
-	chunks    []ChunkInfo
+	chunks    []chunkInfo
 	parser    LineParser
 	start     *int64
 	end       *int64
@@ -171,8 +171,8 @@ func (it *chunkIterator) Close() error {
 	return nil
 }
 
-func filterChunksByTimeRange(chunks []ChunkInfo, start, end *int64) []ChunkInfo {
-	var filteredChunks []ChunkInfo
+func filterChunksByTimeRange(chunks []chunkInfo, start, end *int64) []chunkInfo {
+	var filteredChunks []chunkInfo
 	for i := 0; i < len(chunks); i++ {
 		if (end != nil && utility.FromInt64Ptr(end) < chunks[i].Start) || utility.FromInt64Ptr(start) > chunks[i].End {
 			continue
@@ -183,7 +183,7 @@ func filterChunksByTimeRange(chunks []ChunkInfo, start, end *int64) []ChunkInfo 
 	return filteredChunks
 }
 
-func filterChunksByTailN(chunks []ChunkInfo, tailN int) ([]ChunkInfo, int) {
+func filterChunksByTailN(chunks []chunkInfo, tailN int) ([]chunkInfo, int) {
 	var numChunks, lineCount int
 	for i := len(chunks) - 1; i >= 0 && lineCount < tailN; i-- {
 		lineCount += chunks[i].NumLines
@@ -193,7 +193,7 @@ func filterChunksByTailN(chunks []ChunkInfo, tailN int) ([]ChunkInfo, int) {
 	return chunks[len(chunks)-numChunks:], lineCount - tailN
 }
 
-func filterChunksByLimit(chunks []ChunkInfo, limit int) []ChunkInfo {
+func filterChunksByLimit(chunks []chunkInfo, limit int) []chunkInfo {
 	var numChunks, lineCount int
 	for i := 0; i < len(chunks) && lineCount < limit; i++ {
 		lineCount += chunks[i].NumLines
