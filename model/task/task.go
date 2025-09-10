@@ -4324,14 +4324,10 @@ func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *ever
 		return errors.Wrap(err, "getting regular test log bucket")
 	}
 	logService := log.NewLogServiceV0(srcBucket)
-	// Use getLogNames to build test log prefixes, matching getTestLogs logic
 	logNames := getLogNames(*task, []string{"*"}, output.TestLogs.ID())
 	keys, err := logService.GetChunkKeys(ctx, logNames)
 	if err != nil {
 		return errors.Wrap(err, "getting test log chunk keys")
-	}
-	if len(keys) == 0 {
-		return nil
 	}
 	err = task.moveObjectKeysToFailedBucket(ctx, settings, &output.TestLogs.BucketConfig, output.TestLogs.AWSCredentials, keys, &task.TaskOutputInfo.TestLogs.BucketConfig)
 	if err != nil {
@@ -4354,9 +4350,6 @@ func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *ever
 	keys, err := logService.GetChunkKeys(ctx, logNames)
 	if err != nil {
 		return errors.Wrap(err, "getting task log chunk keys")
-	}
-	if len(keys) == 0 {
-		return nil
 	}
 	err = task.moveObjectKeysToFailedBucket(ctx, settings, &output.TaskLogs.BucketConfig, output.TaskLogs.AWSCredentials, keys, &task.TaskOutputInfo.TaskLogs.BucketConfig)
 	if err != nil {
