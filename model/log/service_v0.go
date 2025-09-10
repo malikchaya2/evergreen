@@ -102,7 +102,7 @@ func (s *logServiceV0) GetLogChunks(ctx context.Context, logNames []string) ([]C
 	}
 
 	var orderedLogNames []string
-	logChunks := map[string][]ChunkInfo{}
+	logChunks := map[string][]chunkInfo{}
 	for it.Next(ctx) {
 		chunkKey := it.Item().Name()
 		if !match(chunkKey) {
@@ -179,10 +179,10 @@ func (s *logServiceV0) createChunkKey(sequence int, start, end int64, numLines i
 }
 
 // parseChunkKey returns the chunk info encoded in the given key.
-func (s *logServiceV0) parseChunkKey(prefix, key string) (ChunkInfo, error) {
+func (s *logServiceV0) parseChunkKey(prefix, key string) (chunkInfo, error) {
 	parsedKey := strings.Split(key, "_")
 	if len(parsedKey) < 3 || len(parsedKey) > 5 {
-		return ChunkInfo{}, errors.New("invalid key format")
+		return chunkInfo{}, errors.New("invalid key format")
 	}
 
 	var (
@@ -192,31 +192,31 @@ func (s *logServiceV0) parseChunkKey(prefix, key string) (ChunkInfo, error) {
 	if len(parsedKey) == 5 {
 		sequence, err = strconv.Atoi(parsedKey[0])
 		if err != nil {
-			return ChunkInfo{}, errors.Wrap(err, "parsing sequence")
+			return chunkInfo{}, errors.Wrap(err, "parsing sequence")
 		}
 		idxOffset = 1
 	}
 	start, err := strconv.ParseInt(parsedKey[idxOffset+0], 10, 64)
 	if err != nil {
-		return ChunkInfo{}, errors.Wrap(err, "parsing start time")
+		return chunkInfo{}, errors.Wrap(err, "parsing start time")
 	}
 	end, err := strconv.ParseInt(parsedKey[idxOffset+1], 10, 64)
 	if err != nil {
-		return ChunkInfo{}, errors.Wrap(err, "parsing end time")
+		return chunkInfo{}, errors.Wrap(err, "parsing end time")
 	}
 	numLines, err := strconv.Atoi(parsedKey[idxOffset+2])
 	if err != nil {
-		return ChunkInfo{}, errors.Wrap(err, "parsing num lines")
+		return chunkInfo{}, errors.Wrap(err, "parsing num lines")
 	}
 	var upload int64
 	if len(parsedKey) == 4 {
 		upload, err = strconv.ParseInt(parsedKey[idxOffset+3], 10, 64)
 		if err != nil {
-			return ChunkInfo{}, errors.Wrap(err, "parsing upload time")
+			return chunkInfo{}, errors.Wrap(err, "parsing upload time")
 		}
 	}
 
-	return ChunkInfo{
+	return chunkInfo{
 		Key:      prefix + "/" + key,
 		Sequence: sequence,
 		Start:    start,
