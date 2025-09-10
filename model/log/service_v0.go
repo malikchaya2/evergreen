@@ -264,3 +264,18 @@ func (s *logServiceV0) getParser(logName string) LineParser {
 		}, nil
 	}
 }
+
+// GetChunkKeys flattens all chunk keys from a slice of ChunkGroups.
+func (s *logServiceV0) GetChunkKeys(ctx context.Context, logNames []string) ([]string, error) {
+	chunkGroups, _, _, err := s.GetLogChunks(ctx, logNames)
+	if err != nil {
+		return nil, err
+	}
+	var keys []string
+	for _, group := range chunkGroups {
+		for _, chunk := range group.Chunks {
+			keys = append(keys, chunk.Key)
+		}
+	}
+	return keys, nil
+}
