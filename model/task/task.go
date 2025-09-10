@@ -2070,7 +2070,8 @@ func getDependencyTaskIdsToActivate(ctx context.Context, tasks []string, updateD
 	return tasksToActivate, taskIDsToActivate, nil
 }
 
-// activateDeactivatedDependencies activates tasks that depend on these tasks which were deactivated. Only activate when all their dependencies are activated or are being activated
+// activateDeactivatedDependencies activates tasks that depend on these tasks which were deactivated because a task
+// they depended on was deactivated. Only activate when all their dependencies are activated or are being activated
 func activateDeactivatedDependencies(ctx context.Context, tasksToActivate map[string]Task, taskIDsToActivate []string, caller string) error {
 	_, err := UpdateAll(
 		ctx,
@@ -3110,7 +3111,7 @@ func ArchiveMany(ctx context.Context, tasks []Task) error {
 // - taskIds                : All tasks and display tasks IDs
 // - execTaskIds            : All execution task IDs
 // - toRestartExecTaskIds   : All execution task IDs for execution tasks that will be archived/restarted
-// - archivedTasks          : All archived tasks (created by Task.makeArchivedTask())
+// - archivedTasks          : All archived tasks created by Task.makeArchivedTask()
 func archiveAll(ctx context.Context, taskIds, execTaskIds, toRestartExecTaskIds []string, archivedTasks []any) error {
 	mongoClient := evergreen.GetEnvironment().Client()
 	session, err := mongoClient.StartSession()
@@ -4332,6 +4333,9 @@ func (t *Task) moveObjectKeysToFailedBucket(ctx context.Context, settings *everg
 
 // MoveTestLogsToFailedBucket moves all test logs from the regular bucket to the failed bucket for a failed task.
 func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings, output *TaskOutput) error {
+	grip.Debug(message.Fields{
+		"message": "chayaMtesting in MoveTestLogsToFailedBucket",
+	})
 	srcBucket, err := newBucket(ctx, output.TestLogs.BucketConfig, output.TestLogs.AWSCredentials)
 	if err != nil {
 		return errors.Wrap(err, "getting regular test log bucket")
@@ -4339,7 +4343,7 @@ func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *ever
 	logService := log.NewLogServiceV0(srcBucket)
 	// Use getLogNames to build test log prefixes, matching getTestLogs logic
 	logNames := getLogNames(*task, []string{"*"}, output.TestLogs.ID())
-	keys, err := getChunkKeys(ctx, logService, logNames)
+	keys, err := logService.GetChunkKeys(ctx, logNames)
 	if err != nil {
 		return errors.Wrap(err, "getting test log chunk keys")
 	}
@@ -4355,6 +4359,9 @@ func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *ever
 
 // MoveTaskLogsToFailedBucket moves all logs from the regular bucket to the failed bucket for a failed task.
 func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings, output *TaskOutput) error {
+	grip.Debug(message.Fields{
+		"message": "chayaMtesting in MoveTaskLogsToFailedBucket",
+	})
 	srcBucket, err := newBucket(ctx, output.TaskLogs.BucketConfig, output.TaskLogs.AWSCredentials)
 	if err != nil {
 		return errors.Wrap(err, "getting regular task log bucket")
@@ -4364,10 +4371,14 @@ func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *ever
 	for _, logType := range []TaskLogType{TaskLogTypeAgent, TaskLogTypeSystem, TaskLogTypeTask} {
 		logNames = append(logNames, getLogName(*task, logType, output.TaskLogs.ID()))
 	}
-	keys, err := getChunkKeys(ctx, logService, logNames)
+	keys, err := logService.GetChunkKeys(ctx, logNames)
 	if err != nil {
 		return errors.Wrap(err, "getting task log chunk keys")
 	}
+	grip.Debug(message.Fields{
+		"message": "chayaMtesting in MoveTaskLogsToFailedBucket",
+		"keys":    keys,
+	})
 	if len(keys) == 0 {
 		return nil
 	}
@@ -4378,7 +4389,6 @@ func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *ever
 	return nil
 }
 
-// MoveTestAndTaskLogsToFailedBucket moves all logs from the regular bucket to the failed bucket for a failed task.
 func (t *Task) MoveTestAndTaskLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings) error {
 	if t.UsesLongRetentionBucket(settings) {
 		return nil
@@ -4394,21 +4404,6 @@ func (t *Task) MoveTestAndTaskLogsToFailedBucket(ctx context.Context, settings *
 		return errors.Wrap(err, "moving test logs to failed bucket")
 	}
 	return nil
-}
-
-// getChunkKeys gets all chunk keys for the given log names using the log service.
-func getChunkKeys(ctx context.Context, logService *log.LogServiceV0, logNames []string) ([]string, error) {
-	chunkGroups, _, _, err := logService.GetLogChunks(ctx, logNames)
-	if err != nil {
-		return nil, err
-	}
-	var keys []string
-	for _, group := range chunkGroups {
-		for _, chunk := range group.Chunks {
-			keys = append(keys, chunk.Key)
-		}
-	}
-	return keys, nil
 }
 
 // getBucketConfigForProject returns the appropriate bucket config for a project,
