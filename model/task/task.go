@@ -4358,7 +4358,7 @@ func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *ever
 }
 
 func (t *Task) MoveTestAndTaskLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings) error {
-	if !t.ShouldUseFailedBucket(settings) {
+	if t.UsesLongRetentionBucket(settings) {
 		return nil
 	}
 	output, ok := t.GetTaskOutputSafe()
@@ -4387,17 +4387,19 @@ func getBucketConfigForProject(project string, originalBucketConfig evergreen.Bu
 	return originalBucketConfig, true
 }
 
-// ShouldUseFailedBucket returns true if the task failed and is not in LongRetentionProjects.
-func (t *Task) ShouldUseFailedBucket(settings *evergreen.Settings) bool {
-	if t == nil {
-		return false
-	}
-	if t.Status != evergreen.TaskFailed {
-		return false
-	}
+// UsesLongRetentionBucket returns true if the task failed and is not in LongRetentionProjects.
+func (t *Task) UsesLongRetentionBucket(settings *evergreen.Settings) bool {
+	grip.Debug(message.Fields{
+		"message":                          "chayaMtesting in ShouldUseFailedBucket",
+		"t == nil":                         t == nil,
+		"t.Status != evergreen.TaskFailed": t.Status != evergreen.TaskFailed,
+		"settings != nil ":                 settings != nil,
+		"t.Status":                         t.Status,
+		"slices.Contains(settings.Buckets.LongRetentionProjects, t.Project)": slices.Contains(settings.Buckets.LongRetentionProjects, t.Project),
+	})
 
 	if settings != nil && slices.Contains(settings.Buckets.LongRetentionProjects, t.Project) {
-		return false
+		return true
 	}
-	return true
+	return false
 }
