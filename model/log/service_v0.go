@@ -45,8 +45,8 @@ func (s *logServiceV0) Get(ctx context.Context, getOpts GetOptions) (LogIterator
 	for _, chunks := range allLogChunks {
 		its = append(its, newChunkIterator(ctx, chunkIteratorOptions{
 			bucket:    s.bucket,
-			chunks:    chunks.chunks,
-			parser:    s.getParser(chunks.name),
+			chunks:    chunks.Chunks,
+			parser:    s.getParser(chunks.Name),
 			start:     start,
 			end:       end,
 			lineLimit: getOpts.LineLimit,
@@ -102,7 +102,7 @@ func (s *logServiceV0) GetLogChunks(ctx context.Context, logNames []string) ([]C
 	}
 
 	var orderedLogNames []string
-	logChunks := map[string][]chunkInfo{}
+	logChunks := map[string][]ChunkInfo{}
 	for it.Next(ctx) {
 		chunkKey := it.Item().Name()
 		if !match(chunkKey) {
@@ -138,20 +138,20 @@ func (s *logServiceV0) GetLogChunks(ctx context.Context, logNames []string) ([]C
 		// find the first specified log's time range.
 		sort.Slice(chunks, func(i, j int) bool {
 			switch {
-			case chunks[i].sequence != chunks[j].sequence:
-				return chunks[i].sequence < chunks[j].sequence
-			case chunks[i].start != chunks[j].start:
-				return chunks[i].start < chunks[j].start
+			case chunks[i].Sequence != chunks[j].Sequence:
+				return chunks[i].Sequence < chunks[j].Sequence
+			case chunks[i].Start != chunks[j].Start:
+				return chunks[i].Start < chunks[j].Start
 			default:
-				return chunks[i].upload < chunks[j].upload
+				return chunks[i].Upload < chunks[j].Upload
 			}
 		})
 		if strings.HasPrefix(name, logNames[0]) {
-			if start == 0 || (start > 0 && start > chunks[0].start) {
-				start = chunks[0].start
+			if start == 0 || (start > 0 && start > chunks[0].Start) {
+				start = chunks[0].Start
 			}
-			if end < chunks[len(chunks)-1].end {
-				end = chunks[len(chunks)-1].end
+			if end < chunks[len(chunks)-1].End {
+				end = chunks[len(chunks)-1].End
 			}
 		}
 	}
@@ -160,10 +160,10 @@ func (s *logServiceV0) GetLogChunks(ctx context.Context, logNames []string) ([]C
 	// deterministic merge order.
 	chunkGroups := make([]ChunkGroup, 0, len(logNames))
 	for _, name := range orderedLogNames {
-	       chunkGroups = append(chunkGroups, ChunkGroup{
-		       Name:   name,
-		       Chunks: logChunks[name],
-	       })
+		chunkGroups = append(chunkGroups, ChunkGroup{
+			Name:   name,
+			Chunks: logChunks[name],
+		})
 	}
 
 	return chunkGroups, start, end, nil
@@ -179,10 +179,10 @@ func (s *logServiceV0) createChunkKey(sequence int, start, end int64, numLines i
 }
 
 // parseChunkKey returns the chunk info encoded in the given key.
-func (s *logServiceV0) parseChunkKey(prefix, key string) (chunkInfo, error) {
+func (s *logServiceV0) parseChunkKey(prefix, key string) (ChunkInfo, error) {
 	parsedKey := strings.Split(key, "_")
 	if len(parsedKey) < 3 || len(parsedKey) > 5 {
-		return chunkInfo{}, errors.New("invalid key format")
+		return ChunkInfo{}, errors.New("invalid key format")
 	}
 
 	var (
@@ -192,37 +192,37 @@ func (s *logServiceV0) parseChunkKey(prefix, key string) (chunkInfo, error) {
 	if len(parsedKey) == 5 {
 		sequence, err = strconv.Atoi(parsedKey[0])
 		if err != nil {
-			return chunkInfo{}, errors.Wrap(err, "parsing sequence")
+			return ChunkInfo{}, errors.Wrap(err, "parsing sequence")
 		}
 		idxOffset = 1
 	}
 	start, err := strconv.ParseInt(parsedKey[idxOffset+0], 10, 64)
 	if err != nil {
-		return chunkInfo{}, errors.Wrap(err, "parsing start time")
+		return ChunkInfo{}, errors.Wrap(err, "parsing start time")
 	}
 	end, err := strconv.ParseInt(parsedKey[idxOffset+1], 10, 64)
 	if err != nil {
-		return chunkInfo{}, errors.Wrap(err, "parsing end time")
+		return ChunkInfo{}, errors.Wrap(err, "parsing end time")
 	}
 	numLines, err := strconv.Atoi(parsedKey[idxOffset+2])
 	if err != nil {
-		return chunkInfo{}, errors.Wrap(err, "parsing num lines")
+		return ChunkInfo{}, errors.Wrap(err, "parsing num lines")
 	}
 	var upload int64
 	if len(parsedKey) == 4 {
 		upload, err = strconv.ParseInt(parsedKey[idxOffset+3], 10, 64)
 		if err != nil {
-			return chunkInfo{}, errors.Wrap(err, "parsing upload time")
+			return ChunkInfo{}, errors.Wrap(err, "parsing upload time")
 		}
 	}
 
-	return chunkInfo{
-		key:      prefix + "/" + key,
-		sequence: sequence,
-		start:    start,
-		end:      end,
-		numLines: numLines,
-		upload:   upload,
+	return ChunkInfo{
+		Key:      prefix + "/" + key,
+		Sequence: sequence,
+		Start:    start,
+		End:      end,
+		NumLines: numLines,
+		Upload:   upload,
 	}, nil
 }
 
