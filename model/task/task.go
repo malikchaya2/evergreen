@@ -4294,6 +4294,10 @@ func (t *Task) GetEstimatedCost(ctx context.Context) (TaskCost, error) {
 // moveObjectKeysToFailedBucket moves the given keys from the source bucket to the failed bucket.
 // If successful, it updates the provided output bucket config pointer to the failed bucket config.
 func (t *Task) moveObjectKeysToFailedBucket(ctx context.Context, settings *evergreen.Settings, srcCfg *evergreen.BucketConfig, creds aws.CredentialsProvider, keys []string, outputCfg *evergreen.BucketConfig) error {
+	grip.Debug(message.Fields{
+		"message":   "chayaMtesting in moveObjectKeysToFailedBucket 4298",
+		"len(keys)": len(keys),
+	})
 	if len(keys) == 0 {
 		return nil
 	}
@@ -4306,10 +4310,16 @@ func (t *Task) moveObjectKeysToFailedBucket(ctx context.Context, settings *everg
 	failedCfg := settings.Buckets.LogBucketFailedTasks
 	failedBucket, err := newBucket(ctx, failedCfg, creds)
 	if err != nil {
+		grip.Debug(message.Fields{
+			"message": "chayaMtesting in moveObjectKeysToFailedBucket 4314",
+		})
 		return errors.Wrap(err, "getting failed bucket")
 	}
 
 	if err := srcBucket.MoveObjects(ctx, failedBucket, keys, keys); err != nil {
+		grip.Debug(message.Fields{
+			"message": "chayaMtesting in moveObjectKeysToFailedBucket 4321",
+		})
 		return errors.Wrap(err, "moving objects to failed bucket")
 	}
 
@@ -4323,20 +4333,14 @@ func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *ever
 	if err != nil {
 		return errors.Wrap(err, "getting regular test log bucket")
 	}
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveTestLogsToFailedBucket 4327",
-	})
 	logService := log.NewLogServiceV0(srcBucket)
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveTestLogsToFailedBucket 4331",
-	})
 	logNames := getLogNames(*task, []string{"*"}, output.TestLogs.ID())
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveTestLogsToFailedBucket 4335",
-	})
 	keys, err := logService.GetChunkKeys(ctx, logNames)
 	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveTestLogsToFailedBucket 4339",
+		"message":  "chayaMtesting in MoveTestLogsToFailedBucket 4339",
+		"keys":     keys,
+		"err":      err,
+		"logNames": logNames,
 	})
 	if err != nil {
 		grip.Debug(message.Fields{
@@ -4344,6 +4348,9 @@ func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *ever
 		})
 		return errors.Wrap(err, "getting test log chunk keys")
 	}
+	grip.Debug(message.Fields{
+		"message": "chayaMtesting in MoveTestLogsToFailedBucket before moveObjectKeysToFailedBucket 4341",
+	})
 	err = task.moveObjectKeysToFailedBucket(ctx, settings, &output.TestLogs.BucketConfig, output.TestLogs.AWSCredentials, keys, &task.TaskOutputInfo.TestLogs.BucketConfig)
 	if err != nil {
 		grip.Debug(message.Fields{
@@ -4351,6 +4358,9 @@ func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *ever
 		})
 		return err
 	}
+	grip.Debug(message.Fields{
+		"message": "chayaMtesting in MoveTestLogsToFailedBucket 4353",
+	})
 	return nil
 }
 

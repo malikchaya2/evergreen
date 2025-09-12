@@ -11,7 +11,9 @@ import (
 
 	"github.com/evergreen-ci/pail"
 	"github.com/jpillora/longestcommon"
+	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/level"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -269,13 +271,23 @@ func (s *logServiceV0) getParser(logName string) LineParser {
 func (s *logServiceV0) GetChunkKeys(ctx context.Context, logNames []string) ([]string, error) {
 	chunkGroups, _, _, err := s.getLogChunks(ctx, logNames)
 	if err != nil {
+		grip.Debug(message.Fields{
+			"message": "chayaMtesting in GetChunkKeys 275",
+			"err":     err,
+		})
 		return nil, err
 	}
+	grip.Debug(message.Fields{
+		"message": "chayaMtesting in GetChunkKeys 281",
+	})
 	var keys []string
 	for _, group := range chunkGroups {
 		for _, chunk := range group.chunks {
 			keys = append(keys, chunk.key)
 		}
 	}
+	grip.Debug(message.Fields{
+		"message": "chayaMtesting in GetChunkKeys 290",
+	})
 	return keys, nil
 }
