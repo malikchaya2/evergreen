@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"go.opentelemetry.io/otel/attribute"
 
 	"github.com/evergreen-ci/evergreen"
@@ -4291,58 +4290,23 @@ func (t *Task) GetEstimatedCost(ctx context.Context) (TaskCost, error) {
 	return CalculateTaskCost(runtimeSeconds, costData, financeConfig), nil
 }
 
-// moveObjectKeysToFailedBucket moves the given keys from the source bucket to the failed bucket.
-// If successful, it updates the provided output bucket config pointer to the failed bucket config.
-func (t *Task) moveObjectKeysToFailedBucket(ctx context.Context, settings *evergreen.Settings, srcCfg *evergreen.BucketConfig, creds aws.CredentialsProvider, keys []string, outputCfg *evergreen.BucketConfig) error {
-	grip.Debug(message.Fields{
-		"message":   "chayaMtesting in moveObjectKeysToFailedBucket 4298",
-		"len(keys)": len(keys),
-	})
-	if len(keys) == 0 {
-		return nil
-	}
-
-	srcBucket, err := newBucket(ctx, *srcCfg, creds)
-	if err != nil {
-		return errors.Wrap(err, "getting source bucket")
-	}
-
-	failedCfg := settings.Buckets.LogBucketFailedTasks
-	failedBucket, err := newBucket(ctx, failedCfg, creds)
-	if err != nil {
-		return errors.Wrap(err, "getting failed bucket")
-	}
-
-	if err := srcBucket.MoveObjects(ctx, failedBucket, keys, keys); err != nil {
-		return errors.Wrap(err, "moving objects to failed bucket")
-	}
-
-	*outputCfg = failedCfg
-	return nil
-}
-
 // MoveTestLogsToFailedBucket moves all test logs from the regular bucket to the failed bucket for a failed task.
 func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings, output *TaskOutput) error {
 	srcBucket, err := newBucket(ctx, output.TestLogs.BucketConfig, output.TestLogs.AWSCredentials)
 	if err != nil {
 		return errors.Wrap(err, "getting regular test log bucket")
 	}
+	failedCfg := settings.Buckets.LogBucketFailedTasks
+	failedBucket, err := newBucket(ctx, failedCfg, output.TestLogs.AWSCredentials)
+	if err != nil {
+		return errors.Wrap(err, "getting failed bucket")
+	}
 	logService := log.NewLogServiceV0(srcBucket)
-	test_log_name := fmt.Sprintf("%s/%s/%d/%s", task.Project, task.Id, task.Execution, output.TestLogs.ID())
-	keys, err := logService.GetChunkKeys(ctx, []string{test_log_name})
-	grip.Debug(message.Fields{
-		"message":       "chayaMtesting in MoveTestLogsToFailedBucket 4339",
-		"keys":          keys,
-		"test_log_name": test_log_name,
-		"err":           err,
-	})
-	if err != nil {
-		return errors.Wrap(err, "getting test log chunk keys")
+	testLogName := fmt.Sprintf("%s/%s/%d/%s", task.Project, task.Id, task.Execution, output.TestLogs.ID())
+	if err := logService.MoveLogsByNamesToBucket(ctx, []string{testLogName}, failedBucket); err != nil {
+		return errors.Wrap(err, "moving test log chunks to failed bucket")
 	}
-	err = task.moveObjectKeysToFailedBucket(ctx, settings, &output.TestLogs.BucketConfig, output.TestLogs.AWSCredentials, keys, &task.TaskOutputInfo.TestLogs.BucketConfig)
-	if err != nil {
-		return err
-	}
+	task.TaskOutputInfo.TestLogs.BucketConfig = failedCfg
 	return nil
 }
 
@@ -4352,25 +4316,22 @@ func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *ever
 	if err != nil {
 		return errors.Wrap(err, "getting regular task log bucket")
 	}
+	failedCfg := settings.Buckets.LogBucketFailedTasks
+	failedBucket, err := newBucket(ctx, failedCfg, output.TaskLogs.AWSCredentials)
+	if err != nil {
+		return errors.Wrap(err, "getting failed bucket")
+	}
 	logService := log.NewLogServiceV0(srcBucket)
+	// Move all logs associated with the task (agent, system, task)
 	var logNames []string
 	for _, logType := range []TaskLogType{TaskLogTypeAgent, TaskLogTypeSystem, TaskLogTypeTask} {
 		logNames = append(logNames, getLogName(*task, logType, output.TaskLogs.ID()))
 	}
-	keys, err := logService.GetChunkKeys(ctx, logNames)
-	if err != nil {
-		return errors.Wrap(err, "getting task log chunk keys")
+	// Move all objects for these log names in one call
+	if err := logService.MoveLogsByNamesToBucket(ctx, logNames, failedBucket); err != nil {
+		return errors.Wrap(err, "moving all task logs to failed bucket")
 	}
-	grip.Debug(message.Fields{
-		"message":  "chayaMtesting in MoveTaskLogsToFailedBucket 4361",
-		"err":      err,
-		"logNames": logNames,
-		"keys":     keys,
-	})
-	err = task.moveObjectKeysToFailedBucket(ctx, settings, &output.TaskLogs.BucketConfig, output.TaskLogs.AWSCredentials, keys, &task.TaskOutputInfo.TaskLogs.BucketConfig)
-	if err != nil {
-		return err
-	}
+	task.TaskOutputInfo.TaskLogs.BucketConfig = failedCfg
 	return nil
 }
 

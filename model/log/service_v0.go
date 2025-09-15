@@ -20,6 +20,19 @@ type logServiceV0 struct {
 	bucket pail.Bucket
 }
 
+// MoveLogsByNamesToBucket moves all log chunks for the given log names from this log service's bucket to the destination bucket.
+// It gets all chunk keys for the log names and moves them in one call.
+func (s *logServiceV0) MoveLogsByNamesToBucket(ctx context.Context, logNames []string, destBucket pail.Bucket) error {
+	keys, err := s.GetChunkKeys(ctx, logNames)
+	if err != nil {
+		return errors.Wrap(err, "getting chunk keys for log names")
+	}
+	if len(keys) == 0 {
+		return nil
+	}
+	return s.MoveObjectsToBucket(ctx, keys, destBucket)
+}
+
 // NewLogServiceV0 returns a new V0 Evergreen log service.
 func NewLogServiceV0(bucket pail.Bucket) *logServiceV0 {
 	return &logServiceV0{bucket: bucket}
@@ -278,4 +291,28 @@ func (s *logServiceV0) GetChunkKeys(ctx context.Context, logNames []string) ([]s
 		}
 	}
 	return keys, nil
+}
+
+// MoveObjectsToBucket moves all objects with the given keys from this log service's bucket to the destination bucket.
+// It returns an error if any object cannot be moved.
+func (s *logServiceV0) MoveObjectsToBucket(ctx context.Context, objectKeys []string, destBucket pail.Bucket) error {
+	if len(objectKeys) == 0 {
+		return nil // nothing to move
+	}
+
+	for _, key := range objectKeys {
+		r, err := s.bucket.Get(ctx, key)
+		if err != nil {
+			return errors.Wrapf(err, "reading object '%s' from source bucket", key)
+		}
+		if err := destBucket.Put(ctx, key, r); err != nil {
+			r.Close()
+			return errors.Wrapf(err, "writing object '%s' to destination bucket", key)
+		}
+		r.Close()
+		if err := s.bucket.Remove(ctx, key); err != nil {
+			return errors.Wrapf(err, "removing object '%s' from source bucket after move", key)
+		}
+	}
+	return nil
 }
