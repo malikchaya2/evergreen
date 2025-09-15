@@ -657,6 +657,38 @@ tasks:
           binary: make
           args: ["verify-mod-tidy"]
           include_expansions_in_env: ["GOROOT", "github_token"]
+  - name: write_random_test_logs
+    commands:
+      - command: shell.exec
+        params:
+          script: |
+            cat >> ${workdir}/build/TestLogs/log_spec.yaml <<EOF
+            {
+              "format": "text-timestamp"
+            }
+            EOF
+            echo "1257894000000000000 I am test log.\n1257894003000000000 I should get ingested automatically by the agent.\n" > ${workdir}/build/TestLogs/julian-test
+            echo "1257894001000000000 I another test log.\n1257894002000000000 I should get merged.\n" > ${workdir}/build/TestLogs/to-merge
+            cat >> ${workdir}/julian_results.json <<EOF
+            {
+              "results": [
+                {
+                  "test_file": "julian-test-result",
+                  "status": "pass",
+                  "log_info": {
+                    "log_name": "julian-test",
+                    "logs_to_merge": ["to-merge"]
+                  }
+                }
+              ]
+            }
+            EOF
+      - command: attach.results
+        params:
+          file_location: ${workdir}/julian_results.json
+      - command: shell.exec
+        params:
+          script: exit 1
   - name: verify-merge-function-update
     tags: ["linter"]
     patch_only: true
@@ -846,6 +878,7 @@ buildvariants:
       - name: generate-api-docs
       - name: write-downstream-expansions-for-pine
       - name: generate-graphql-merged-schema
+      - name: write_random_test_logs
 
   - name: race-detector
     display_name: Race Detector

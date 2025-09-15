@@ -11,7 +11,9 @@ import (
 
 	"github.com/evergreen-ci/pail"
 	"github.com/jpillora/longestcommon"
+	"github.com/mongodb/grip"
 	"github.com/mongodb/grip/level"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -24,6 +26,11 @@ type logServiceV0 struct {
 // It gets all chunk keys for the log names and moves them in one call.
 func (s *logServiceV0) MoveLogsByNamesToBucket(ctx context.Context, logNames []string, destBucket pail.Bucket) error {
 	keys, err := s.GetChunkKeys(ctx, logNames)
+	grip.Debug(message.Fields{
+		"message":  "chayaMtesting in MoveLogsByNamesToBucket 30",
+		"keys":     keys,
+		"logNames": logNames,
+	})
 	if err != nil {
 		return errors.Wrap(err, "getting chunk keys for log names")
 	}
@@ -296,6 +303,10 @@ func (s *logServiceV0) GetChunkKeys(ctx context.Context, logNames []string) ([]s
 // MoveObjectsToBucket moves all objects with the given keys from this log service's bucket to the destination bucket.
 // It returns an error if any object cannot be moved.
 func (s *logServiceV0) MoveObjectsToBucket(ctx context.Context, objectKeys []string, destBucket pail.Bucket) error {
+	grip.Debug(message.Fields{
+		"message":    "chayaMtesting in MoveObjectsToBucket 302",
+		"objectKeys": objectKeys,
+	})
 	if len(objectKeys) == 0 {
 		return nil // nothing to move
 	}
