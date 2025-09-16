@@ -118,7 +118,15 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) ([]c
 	// To reduce potentially expensive list calls, use the LCP of the
 	// given log names when calling `bucket.List`. Key names that do not
 	// have one of the log names as a prefix will get filtered out.
+
 	prefix := longestcommon.Prefix(logNames)
+	grip.Debug(message.Fields{
+		"message": "chayaMtesting in getLogChunks 122",
+		// prefix: 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9c88d319f1c0007a7993c_25_09_16_20_29_12/0/task_logs/agent
+		"prefix": prefix,
+		// logNames: 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9c88d319f1c0007a7993c_25_09_16_20_29_12/0/task_logs/agent
+		"logNames": logNames,
+	})
 	match := func(key string) bool {
 		for _, name := range logNames {
 			if strings.HasPrefix(key, name) {
@@ -129,6 +137,11 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) ([]c
 		return false
 	}
 
+	grip.Debug(message.Fields{
+		"message":  "chayaMtesting in getLogChunks 139",
+		"prefix":   prefix,
+		"logNames": logNames,
+	})
 	it, err := s.bucket.List(ctx, prefix)
 	if err != nil {
 		return nil, 0, 0, errors.Wrap(err, "listing log chunks")
@@ -138,10 +151,22 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) ([]c
 	logChunks := map[string][]chunkInfo{}
 	for it.Next(ctx) {
 		chunkKey := it.Item().Name()
+		grip.Debug(message.Fields{
+			"message":           "chayaMtesting in getLogChunks 153",
+			"prefix":            prefix,
+			"chunkKey":          chunkKey,
+			"!match(chunkKey) ": !match(chunkKey),
+		})
 		if !match(chunkKey) {
 			continue
 		}
 
+		grip.Debug(message.Fields{
+			"message": "chayaMtesting in getLogChunks 162",
+			"prefix":  prefix,
+			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9c88d319f1c0007a7993c_25_09_16_20_29_12/0/test_logs/to-merge/0_1257894001000000000_1257894002000000000_2_1758054629218095192
+			"chunkKey": chunkKey,
+		})
 		// Strip any prefix from the key and set it as the log's name;
 		// callers may pass in prefixes that contain multiple logical
 		// logs.
@@ -150,6 +175,22 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) ([]c
 			logName = chunkKey[:lastIdx]
 			chunkKey = chunkKey[lastIdx+1:]
 		}
+
+		grip.Debug(message.Fields{
+			"message": "chayaMtesting in getLogChunks 177",
+			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9d2df37f6200007e4afab_25_09_16_21_13_32/0/test_logs
+			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9d2df37f6200007e4afab_25_09_16_21_13_32/0/task_logs
+			"prefix": prefix,
+			//  0_1257894001000000000_1257894002000000000_2_1758057429589387658
+			// 0_1758057384247440171_1758057429700568414_152_1758057429700662066
+			"chunkKey": chunkKey,
+			// true
+			// true
+			"!match(chunkKey) ": !match(chunkKey),
+			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9d2df37f6200007e4afab_25_09_16_21_13_32/0/test_logs/to-merge
+			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9d2df37f6200007e4afab_25_09_16_21_13_32/0/task_logs/agent
+			"logName": logName,
+		})
 
 		chunk, err := s.parseChunkKey(logName, chunkKey)
 		if err != nil {
@@ -301,6 +342,11 @@ func (s *logServiceV0) getParser(logName string) LineParser {
 // GetChunkKeys returns all log chunk keys for the given log names.
 func (s *logServiceV0) GetChunkKeys(ctx context.Context, logNames []string) ([]string, error) {
 	chunkGroups, _, _, err := s.getLogChunks(ctx, logNames)
+	grip.Debug(message.Fields{
+		"message":     "chayaMtesting in GetChunkKeys 305",
+		"chunkGroups": chunkGroups,
+		"logNames":    logNames,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -308,8 +354,17 @@ func (s *logServiceV0) GetChunkKeys(ctx context.Context, logNames []string) ([]s
 	for _, group := range chunkGroups {
 		for _, chunk := range group.chunks {
 			keys = append(keys, chunk.key)
+			grip.Debug(message.Fields{
+				"message":   "chayaMtesting in GetChunkKeys 317",
+				"chunk.key": chunk.key,
+			})
 		}
 	}
+	// why is test by itself but task has all three? does it need to be separate?
+	grip.Debug(message.Fields{
+		"message": "chayaMtesting in GetChunkKeys 323",
+		"keys":    keys,
+	})
 	return keys, nil
 }
 
@@ -324,19 +379,14 @@ func (s *logServiceV0) MoveObjectsToBucket(ctx context.Context, objectKeys []str
 		return nil // nothing to move
 	}
 
-	for _, key := range objectKeys {
-		r, err := s.bucket.Get(ctx, key)
-		if err != nil {
-			return errors.Wrapf(err, "reading object '%s' from source bucket", key)
-		}
-		if err := destBucket.Put(ctx, key, r); err != nil {
-			r.Close()
-			return errors.Wrapf(err, "writing object '%s' to destination bucket", key)
-		}
-		r.Close()
-		if err := s.bucket.Remove(ctx, key); err != nil {
-			return errors.Wrapf(err, "removing object '%s' from source bucket after move", key)
-		}
+	// Use the bucket's bulk MoveObjects implementation for efficiency.
+	if err := s.bucket.MoveObjects(ctx, destBucket, objectKeys, objectKeys); err != nil {
+		return errors.Wrap(err, "bulk moving log chunk objects")
 	}
+	grip.Debug(message.Fields{
+		"message":        "completed MoveObjectsToBucket",
+		"num_objects":    len(objectKeys),
+		"destination_ok": true,
+	})
 	return nil
 }

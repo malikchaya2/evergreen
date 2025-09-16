@@ -4290,47 +4290,6 @@ func (t *Task) GetEstimatedCost(ctx context.Context) (TaskCost, error) {
 	return CalculateTaskCost(runtimeSeconds, costData, financeConfig), nil
 }
 
-// MoveTestLogsToFailedBucket moves all test logs from the regular bucket to the failed bucket for a failed task.
-// func (task *Task) MoveTestLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings, output *TaskOutput) error {
-// 	srcBucket, err := newBucket(ctx, output.TestLogs.BucketConfig, output.TestLogs.AWSCredentials)
-// 	if err != nil {
-// 		return errors.Wrap(err, "getting regular test log bucket")
-// 	}
-// 	failedCfg := settings.Buckets.LogBucketFailedTasks
-// 	failedBucket, err := newBucket(ctx, failedCfg, output.TestLogs.AWSCredentials)
-// 	if err != nil {
-// 		return errors.Wrap(err, "getting failed bucket")
-// 	}
-// 	logService := log.NewLogServiceV0(srcBucket)
-// 	testLogName := fmt.Sprintf("%s/%s/%d/%s", task.Project, task.Id, task.Execution, output.TestLogs.ID())
-// 	if err := logService.MoveLogsByNamesToBucket(ctx, []string{testLogName}, failedBucket); err != nil {
-// 		return errors.Wrap(err, "moving test log chunks to failed bucket")
-// 	}
-// 	task.TaskOutputInfo.TestLogs.BucketConfig = failedCfg
-// 	return nil
-// }
-
-// MoveTaskLogsToFailedBucket moves all logs from the regular bucket to the failed bucket for a failed task.
-// func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings, output *TaskOutput) error {
-// 	srcBucket, err := newBucket(ctx, output.TaskLogs.BucketConfig, output.TaskLogs.AWSCredentials)
-// 	if err != nil {
-// 		return errors.Wrap(err, "getting regular task log bucket")
-// 	}
-// 	failedCfg := settings.Buckets.LogBucketFailedTasks
-// 	failedBucket, err := newBucket(ctx, failedCfg, output.TaskLogs.AWSCredentials)
-// 	if err != nil {
-// 		return errors.Wrap(err, "getting failed bucket")
-// 	}
-// 	logService := log.NewLogServiceV0(srcBucket)
-
-// 	// Move all logs to the failed bucket
-// 	if err := logService.MoveLogsByNamesToBucket(ctx, task, []TaskLogType{TaskLogTypeAgent, TaskLogTypeSystem, TaskLogTypeTask}, failedBucket); err != nil {
-// 		return errors.Wrap(err, "moving all task logs to failed bucket")
-// 	}
-// 	task.TaskOutputInfo.TaskLogs.BucketConfig = failedCfg
-// 	return nil
-// }
-
 func (task *Task) MoveLogsByNamesToBucket(ctx context.Context, settings *evergreen.Settings, output *TaskOutput) error {
 	if output.TestLogs.BucketConfig != output.TaskLogs.BucketConfig {
 		// test logs and task logs will always be in the same bucket
@@ -4351,10 +4310,26 @@ func (task *Task) MoveLogsByNamesToBucket(ctx context.Context, settings *evergre
 		}
 		allKeys = append(allKeys, keys...)
 		grip.Debug(message.Fields{
-			"message": "chayaMtesting in MoveLogsByNamesToBucket 30",
+			"message": "chayaMtesting in MoveLogsByNamesToBucket 4313",
 			"allKeys": allKeys,
 			"keys":    keys,
 		})
+
+		if logType == TaskLogTypeAgent {
+			keys_with_agent, _ := logService.GetChunkKeys(ctx, []string{fmt.Sprintf("%s/%s/%d/%s/agent", task.Project, task.Id, task.Execution, output.TaskLogs.ID())})
+			keys_with_agent_slash, _ := logService.GetChunkKeys(ctx, []string{fmt.Sprintf("%s/%s/%d/%s/agent/", task.Project, task.Id, task.Execution, output.TaskLogs.ID())})
+
+			keysWithAll, _ := logService.GetChunkKeys(ctx, []string{fmt.Sprintf("%s/%s/%d/%s/", task.Project, task.Id, task.Execution, output.TaskLogs.ID())})
+			keysWithAllNoSlash, _ := logService.GetChunkKeys(ctx, []string{fmt.Sprintf("%s/%s/%d/%s", task.Project, task.Id, task.Execution, output.TaskLogs.ID())})
+			grip.Debug(message.Fields{
+				"message":               "--------- chayaMtesting in MoveLogsByNamesToBucket For Agent Logs 4320 --------",
+				"keys":                  keys,
+				"keysWithAll":           keysWithAll,
+				"keys_with_agent":       keys_with_agent,
+				"keysWithAllNoSlash":    keysWithAllNoSlash,
+				"keys_with_agent_slash": keys_with_agent_slash,
+			})
+		}
 	}
 
 	//todo: cleanup - this is duplicate of above
@@ -4365,12 +4340,12 @@ func (task *Task) MoveLogsByNamesToBucket(ctx context.Context, settings *evergre
 	}
 	allKeys = append(allKeys, keys...)
 	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveLogsByNamesToBucket 30",
+		"message": "chayaMtesting in MoveLogsByNamesToBucket 4334",
 		"allKeys": allKeys,
 	})
 
 	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveLogsByNamesToBucket 30",
+		"message": "chayaMtesting in MoveLogsByNamesToBucket 4339",
 		"keys":    allKeys,
 	})
 

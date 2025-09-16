@@ -1089,6 +1089,9 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 	}
 
 	grip.Infof("Sending final task status: '%s'.", detail.Status)
+	//todo: remove
+	time.Sleep(30 * time.Second)
+
 	resp, err := a.comm.EndTask(ctx, detail, tc.task)
 	if err != nil {
 		return nil, errors.Wrap(err, "marking task complete")
