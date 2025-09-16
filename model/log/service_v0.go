@@ -24,21 +24,34 @@ type logServiceV0 struct {
 
 // MoveLogsByNamesToBucket moves all log chunks for the given log names from this log service's bucket to the destination bucket.
 // It gets all chunk keys for the log names and moves them in one call.
-func (s *logServiceV0) MoveLogsByNamesToBucket(ctx context.Context, logNames []string, destBucket pail.Bucket) error {
-	keys, err := s.GetChunkKeys(ctx, logNames)
-	grip.Debug(message.Fields{
-		"message":  "chayaMtesting in MoveLogsByNamesToBucket 30",
-		"keys":     keys,
-		"logNames": logNames,
-	})
-	if err != nil {
-		return errors.Wrap(err, "getting chunk keys for log names")
-	}
-	if len(keys) == 0 {
-		return nil
-	}
-	return s.MoveObjectsToBucket(ctx, keys, destBucket)
-}
+// func (s *logServiceV0) MoveLogsByNamesToBucket(ctx context.Context, task *Task, destBucket pail.Bucket) error {
+// 	// Move all logs associated with the task (agent, system, task)
+// 	var allKeys []string
+// 	for _, logType := range []TaskLogType{TaskLogTypeAgent, TaskLogTypeSystem, TaskLogTypeTask} {
+// 		logNames := getLogName(*task, logType, output.TaskLogs.ID())
+// 		keys, err := s.GetChunkKeys(ctx, logNames)
+// 		if err != nil {
+// 			return errors.Wrap(err, "getting chunk keys for log names")
+// 		}
+// 		allKeys = append(allKeys, keys...)
+// 		grip.Debug(message.Fields{
+// 			"message":  "chayaMtesting in MoveLogsByNamesToBucket 30",
+// 			"allKeys":  allKeys,
+// 			"keys":     keys,
+// 			"logNames": logNames,
+// 		})
+// 	}
+
+// 	grip.Debug(message.Fields{
+// 		"message": "chayaMtesting in MoveLogsByNamesToBucket 30",
+// 		"keys":    allKeys,
+// 	})
+
+// 	if len(allKeys) == 0 {
+// 		return nil
+// 	}
+// 	return s.MoveObjectsToBucket(ctx, allKeys, destBucket)
+// }
 
 // NewLogServiceV0 returns a new V0 Evergreen log service.
 func NewLogServiceV0(bucket pail.Bucket) *logServiceV0 {
