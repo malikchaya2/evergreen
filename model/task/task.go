@@ -4324,9 +4324,9 @@ func (task *Task) MoveTaskLogsToFailedBucket(ctx context.Context, settings *ever
 	logService := log.NewLogServiceV0(srcBucket)
 	// Move all logs associated with the task (agent, system, task)
 	var logNames []string
-	for _, logType := range []TaskLogType{TaskLogTypeAgent, TaskLogTypeSystem, TaskLogTypeTask} {
-		logNames = append(logNames, getLogName(*task, logType, output.TaskLogs.ID()))
-	}
+       for _, logType := range []TaskLogType{TaskLogTypeAgent, TaskLogTypeSystem, TaskLogTypeTask} {
+	       logNames = append(logNames, getLogName(*task, logType, output.TaskLogs.ID()) + "/")
+       }
 	// Move all objects for these log names in one call
 	if err := logService.MoveLogsByNamesToBucket(ctx, logNames, failedBucket); err != nil {
 		return errors.Wrap(err, "moving all task logs to failed bucket")
