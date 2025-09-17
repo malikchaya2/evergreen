@@ -1203,6 +1203,8 @@ func setNextTask(t *task.Task, response *apimodels.NextTaskResponse) {
 	response.Build = t.BuildId
 }
 
+//todo: move to rest/route/agent.go
+
 // POST /rest/v2/task/{task_id}/move_failed_logs
 type moveFailedLogs struct {
 	env    evergreen.Environment
@@ -1230,6 +1232,16 @@ func (h *moveFailedLogs) Run(ctx context.Context) gimlet.Responder {
 	if err := t.MoveTestAndTaskLogsToFailedBucket(ctx, h.env.Settings()); err != nil {
 		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "moving task and test logs to failed bucket"))
 	}
+
+	grip.Info(message.Fields{
+		"message":   "chayaMtesting Moving files for failed task to failed bucket",
+		"task_id":   t.Id,
+		"execution": t.Execution,
+		"operation": "move failed logs",
+		"status":    t.Status,
+		"path":      fmt.Sprintf("rest/v2/task/%s/move_failed_logs", t.Id),
+	})
+
 	return gimlet.NewJSONResponse(struct {
 		Moved bool `json:"moved"`
 	}{Moved: true})

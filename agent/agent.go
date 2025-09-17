@@ -429,6 +429,14 @@ func (a *Agent) finishPrevTask(ctx context.Context, nextTask *apimodels.NextTask
 	if tc.taskConfig != nil {
 		taskDirectory = tc.taskConfig.WorkDir
 	}
+	grip.Info(message.Fields{
+		"message":              "chayaMTesting finishing previous task",
+		"task_id":              tc.task.ID,
+		"tc != nil ":           tc != nil,
+		"tc.task.ID != empty ": tc.task.ID != "",
+		"status":               tc.getFinalTaskStatus(),
+		"path":                 fmt.Sprintf("rest/v2/task/%s/finish", tc.task.ID),
+	})
 
 	if shouldRunSetupGroup(nextTask, tc) {
 		shouldSetupGroup = true

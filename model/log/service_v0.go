@@ -360,21 +360,12 @@ func (s *logServiceV0) GetChunkKeys(ctx context.Context, logNames []string) ([]s
 			})
 		}
 	}
-	// why is test by itself but task has all three? does it need to be separate?
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in GetChunkKeys 323",
-		"keys":    keys,
-	})
 	return keys, nil
 }
 
 // MoveObjectsToBucket moves all objects with the given keys from this log service's bucket to the destination bucket.
 // It returns an error if any object cannot be moved.
 func (s *logServiceV0) MoveObjectsToBucket(ctx context.Context, objectKeys []string, destBucket pail.Bucket) error {
-	grip.Debug(message.Fields{
-		"message":    "chayaMtesting in MoveObjectsToBucket 302",
-		"objectKeys": objectKeys,
-	})
 	if len(objectKeys) == 0 {
 		return nil // nothing to move
 	}

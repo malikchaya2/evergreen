@@ -4309,27 +4309,7 @@ func (task *Task) MoveLogsByNamesToBucket(ctx context.Context, settings *evergre
 			return errors.Wrap(err, "getting chunk keys for log names")
 		}
 		allKeys = append(allKeys, keys...)
-		grip.Debug(message.Fields{
-			"message": "chayaMtesting in MoveLogsByNamesToBucket 4313",
-			"allKeys": allKeys,
-			"keys":    keys,
-		})
 
-		if logType == TaskLogTypeAgent {
-			keys_with_agent, _ := logService.GetChunkKeys(ctx, []string{fmt.Sprintf("%s/%s/%d/%s/agent", task.Project, task.Id, task.Execution, output.TaskLogs.ID())})
-			keys_with_agent_slash, _ := logService.GetChunkKeys(ctx, []string{fmt.Sprintf("%s/%s/%d/%s/agent/", task.Project, task.Id, task.Execution, output.TaskLogs.ID())})
-
-			keysWithAll, _ := logService.GetChunkKeys(ctx, []string{fmt.Sprintf("%s/%s/%d/%s/", task.Project, task.Id, task.Execution, output.TaskLogs.ID())})
-			keysWithAllNoSlash, _ := logService.GetChunkKeys(ctx, []string{fmt.Sprintf("%s/%s/%d/%s", task.Project, task.Id, task.Execution, output.TaskLogs.ID())})
-			grip.Debug(message.Fields{
-				"message":               "--------- chayaMtesting in MoveLogsByNamesToBucket For Agent Logs 4320 --------",
-				"keys":                  keys,
-				"keysWithAll":           keysWithAll,
-				"keys_with_agent":       keys_with_agent,
-				"keysWithAllNoSlash":    keysWithAllNoSlash,
-				"keys_with_agent_slash": keys_with_agent_slash,
-			})
-		}
 	}
 
 	//todo: cleanup - this is duplicate of above
@@ -4339,15 +4319,6 @@ func (task *Task) MoveLogsByNamesToBucket(ctx context.Context, settings *evergre
 		return errors.Wrap(err, "getting chunk keys for test log name")
 	}
 	allKeys = append(allKeys, keys...)
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveLogsByNamesToBucket 4334",
-		"allKeys": allKeys,
-	})
-
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in MoveLogsByNamesToBucket 4339",
-		"keys":    allKeys,
-	})
 
 	failedCfg := settings.Buckets.LogBucketFailedTasks
 	failedBucket, err := newBucket(ctx, failedCfg, output.TestLogs.AWSCredentials)
@@ -4385,6 +4356,15 @@ func (task *Task) SetLogBucketConfigsToFailed(ctx context.Context, failedCfg eve
 }
 
 func (t *Task) MoveTestAndTaskLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings) error {
+
+	grip.Info(message.Fields{
+		"message":   "chayaMtesting MoveTestAndTaskLogsToFailedBucket",
+		"task_id":   t.Id,
+		"execution": t.Execution,
+		"operation": "move failed logs",
+		"status":    t.Status,
+		"path":      fmt.Sprintf("rest/v2/task/%s/move_failed_logs", t.Id),
+	})
 	if t.UsesLongRetentionBucket(settings) {
 		return nil
 	}
