@@ -120,13 +120,7 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) ([]c
 	// have one of the log names as a prefix will get filtered out.
 
 	prefix := longestcommon.Prefix(logNames)
-	grip.Debug(message.Fields{
-		"message": "chayaMtesting in getLogChunks 122",
-		// prefix: 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9c88d319f1c0007a7993c_25_09_16_20_29_12/0/task_logs/agent
-		"prefix": prefix,
-		// logNames: 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9c88d319f1c0007a7993c_25_09_16_20_29_12/0/task_logs/agent
-		"logNames": logNames,
-	})
+
 	match := func(key string) bool {
 		for _, name := range logNames {
 			if strings.HasPrefix(key, name) {
@@ -137,11 +131,6 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) ([]c
 		return false
 	}
 
-	grip.Debug(message.Fields{
-		"message":  "chayaMtesting in getLogChunks 139",
-		"prefix":   prefix,
-		"logNames": logNames,
-	})
 	it, err := s.bucket.List(ctx, prefix)
 	if err != nil {
 		return nil, 0, 0, errors.Wrap(err, "listing log chunks")
@@ -151,22 +140,11 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) ([]c
 	logChunks := map[string][]chunkInfo{}
 	for it.Next(ctx) {
 		chunkKey := it.Item().Name()
-		grip.Debug(message.Fields{
-			"message":           "chayaMtesting in getLogChunks 153",
-			"prefix":            prefix,
-			"chunkKey":          chunkKey,
-			"!match(chunkKey) ": !match(chunkKey),
-		})
+
 		if !match(chunkKey) {
 			continue
 		}
 
-		grip.Debug(message.Fields{
-			"message": "chayaMtesting in getLogChunks 162",
-			"prefix":  prefix,
-			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9c88d319f1c0007a7993c_25_09_16_20_29_12/0/test_logs/to-merge/0_1257894001000000000_1257894002000000000_2_1758054629218095192
-			"chunkKey": chunkKey,
-		})
 		// Strip any prefix from the key and set it as the log's name;
 		// callers may pass in prefixes that contain multiple logical
 		// logs.
@@ -175,22 +153,6 @@ func (s *logServiceV0) getLogChunks(ctx context.Context, logNames []string) ([]c
 			logName = chunkKey[:lastIdx]
 			chunkKey = chunkKey[lastIdx+1:]
 		}
-
-		grip.Debug(message.Fields{
-			"message": "chayaMtesting in getLogChunks 177",
-			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9d2df37f6200007e4afab_25_09_16_21_13_32/0/test_logs
-			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9d2df37f6200007e4afab_25_09_16_21_13_32/0/task_logs
-			"prefix": prefix,
-			//  0_1257894001000000000_1257894002000000000_2_1758057429589387658
-			// 0_1758057384247440171_1758057429700568414_152_1758057429700662066
-			"chunkKey": chunkKey,
-			// true
-			// true
-			"!match(chunkKey) ": !match(chunkKey),
-			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9d2df37f6200007e4afab_25_09_16_21_13_32/0/test_logs/to-merge
-			// 61001dc69dbe3213a7cf7711/sandbox_ubuntu2004_write_random_test_logs_patch_e4039a5e6184fabc94cf87ee1cdb22c442f156c9_68c9d2df37f6200007e4afab_25_09_16_21_13_32/0/task_logs/agent
-			"logName": logName,
-		})
 
 		chunk, err := s.parseChunkKey(logName, chunkKey)
 		if err != nil {
