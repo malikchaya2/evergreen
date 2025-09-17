@@ -67,7 +67,26 @@ type taskContext struct {
 	// metadata tag payload, which can be appended to the final list of failure
 	// metadata tags in the end task response.
 	addMetadataTagResp *triggerAddMetadataTagResp
+	// finalTaskStatus stores the final status of the previously-run task. This is
+	// set at the end of task completion and used at the beginning of the next
+	// task lifecycle (e.g. to decide whether to move logs to a failed bucket).
+	finalTaskStatus string
 	sync.RWMutex
+}
+
+// setLastTaskStatus records the final status of the most recently completed task.
+func (tc *taskContext) setFinalTaskStatus(status string) {
+    tc.Lock()
+    defer tc.Unlock()
+	tc.finalTaskStatus = status
+}
+
+// getLastTaskStatus returns the previously recorded task status. Empty string
+// indicates no prior task has finished in this agent session.
+func (tc *taskContext) getFinalTaskStatus() string {
+    tc.RLock()
+    defer tc.RUnlock()
+	return tc.finalTaskStatus
 }
 
 func (tc *taskContext) getPostErrored() bool {

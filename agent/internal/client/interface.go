@@ -134,6 +134,9 @@ type SharedCommunicator interface {
 
 	// S3Credentials returns the S3 credentials for the task when uploading to devprod owned buckets.
 	S3Credentials(ctx context.Context, td TaskData, bucket string) (*apimodels.AWSCredentials, error)
+
+	// MoveLogsToFailedBucket moves the task's test and task logs to the failed bucket if applicable.
+	MoveLogsToFailedBucket(ctx context.Context, td TaskData) error
 }
 
 // TaskData contains the taskData.ID and taskData.Secret. It must be set for

@@ -219,6 +219,8 @@ func (c *Mock) GetDistroAMI(context.Context, string, string, TaskData) (string, 
 	return "ami-mock", nil
 }
 
+func (c *Mock) MoveLogsToFailedBucket(ctx context.Context, td TaskData) error { return nil }
+
 // GetProject returns the mock project. If an explicit GetProjectResponse is
 // specified, it will return that. Otherwise, by default, it will load data from
 // the agent's testdata directory, which contains project YAML files for

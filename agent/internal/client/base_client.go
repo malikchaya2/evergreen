@@ -842,6 +842,28 @@ func (c *baseCommunicator) CreateInstallationTokenForClone(ctx context.Context, 
 	return token.Token, nil
 }
 
+// MoveLogsToFailedBucket is a no-op for the base communicator. Implemented on host communicator.
+func (c *baseCommunicator) MoveLogsToFailedBucket(ctx context.Context, td TaskData) error {
+
+	info := requestInfo{
+		method:   http.MethodPost,
+		taskData: &td,
+		path:     fmt.Sprintf("task/%s/move_failed_logs", td.ID),
+	}
+	resp, err := c.retryRequest(ctx, info, nil)
+	if err != nil {
+		return util.RespError(resp, errors.Wrap(err, "moving logs to failed bucket").Error())
+	}
+
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return util.RespError(resp, "moving logs to failed bucket")
+	}
+
+	return nil
+}
+
 func (c *baseCommunicator) CreateGitHubDynamicAccessToken(ctx context.Context, td TaskData, owner, repo string, permissions *github.InstallationPermissions) (string, *github.InstallationPermissions, error) {
 	info := requestInfo{
 		method:   http.MethodPost,

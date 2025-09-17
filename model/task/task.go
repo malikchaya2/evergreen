@@ -4358,10 +4358,30 @@ func (task *Task) MoveLogsByNamesToBucket(ctx context.Context, settings *evergre
 	if err = logService.MoveObjectsToBucket(ctx, allKeys, failedBucket); err != nil {
 		return errors.Wrap(err, "moving logs to failed bucket")
 	}
+	return task.SetLogBucketConfigsToFailed(ctx, failedCfg)
+
+}
+
+// SetLogBucketConfigsToFailed updates the task's task and test log bucket configs
+// in-memory and persists them to the database after moving logs to the failed bucket.
+func (task *Task) SetLogBucketConfigsToFailed(ctx context.Context, failedCfg evergreen.BucketConfig) error {
+	if task.TaskOutputInfo == nil {
+		return errors.New("task output info is nil while persisting failed log bucket configs")
+	}
 	task.TaskOutputInfo.TaskLogs.BucketConfig = failedCfg
 	task.TaskOutputInfo.TestLogs.BucketConfig = failedCfg
-	return nil
 
+	if err := UpdateOne(
+		ctx,
+		bson.M{IdKey: task.Id},
+		bson.M{"$set": bson.M{
+			bsonutil.GetDottedKeyName(TaskOutputInfoKey, "task_logs", "bucket_config"): failedCfg,
+			bsonutil.GetDottedKeyName(TaskOutputInfoKey, "test_logs", "bucket_config"): failedCfg,
+		}},
+	); err != nil {
+		return errors.Wrap(err, "persisting failed log bucket configs")
+	}
+	return nil
 }
 
 func (t *Task) MoveTestAndTaskLogsToFailedBucket(ctx context.Context, settings *evergreen.Settings) error {

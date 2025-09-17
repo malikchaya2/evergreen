@@ -97,6 +97,7 @@ func AttachHandler(app *gimlet.APIApp, opts HandlerOpts) {
 	app.AddRoute("/task/{task_id}/set_results_info").Version(2).Post().Wrap(requireTask).RouteHandler(makeSetTaskResultsInfoHandler())
 	app.AddRoute("/task/{task_id}/start").Version(2).Post().Wrap(requireTask, requirePodOrHost).RouteHandler(makeStartTask(env))
 	app.AddRoute("/task/{task_id}/test_logs").Version(2).Post().Wrap(requireTask, requirePodOrHost).RouteHandler(makeAttachTestLog(settings))
+	app.AddRoute("/task/{task_id}/move_failed_logs").Version(2).Post().Wrap(requireTask, requirePodOrHost).RouteHandler(makeMoveFailedLogs(env))
 	app.AddRoute("/task/{task_id}/test_results").Version(2).Post().Wrap(requireTask, requirePodOrHost).RouteHandler(makeAttachTestResults(env))
 	app.AddRoute("/task/{task_id}/patch").Version(2).Get().Wrap(requireTask).RouteHandler(makeServePatch())
 	app.AddRoute("/task/{task_id}/version").Version(2).Get().Wrap(requireTask).RouteHandler(makeServeVersion())

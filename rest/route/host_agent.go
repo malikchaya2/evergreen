@@ -1203,6 +1203,38 @@ func setNextTask(t *task.Task, response *apimodels.NextTaskResponse) {
 	response.Build = t.BuildId
 }
 
+// POST /rest/v2/task/{task_id}/move_failed_logs
+type moveFailedLogs struct {
+	env    evergreen.Environment
+	taskID string
+}
+
+func makeMoveFailedLogs(env evergreen.Environment) gimlet.RouteHandler {
+	return &moveFailedLogs{env: env}
+}
+func (h *moveFailedLogs) Factory() gimlet.RouteHandler { return &moveFailedLogs{env: h.env} }
+func (h *moveFailedLogs) Parse(ctx context.Context, r *http.Request) error {
+	if h.taskID = gimlet.GetVars(r)["task_id"]; h.taskID == "" {
+		return errors.New("missing task ID")
+	}
+	return nil
+}
+func (h *moveFailedLogs) Run(ctx context.Context) gimlet.Responder {
+	t, err := task.FindOneId(ctx, h.taskID)
+	if err != nil {
+		return gimlet.MakeJSONInternalErrorResponder(errors.Wrapf(err, "finding task '%s'", h.taskID))
+	}
+	if t == nil {
+		return gimlet.MakeJSONErrorResponder(gimlet.ErrorResponse{StatusCode: http.StatusNotFound, Message: fmt.Sprintf("task '%s' not found", h.taskID)})
+	}
+	if err := t.MoveTestAndTaskLogsToFailedBucket(ctx, h.env.Settings()); err != nil {
+		return gimlet.MakeJSONInternalErrorResponder(errors.Wrap(err, "moving task and test logs to failed bucket"))
+	}
+	return gimlet.NewJSONResponse(struct {
+		Moved bool `json:"moved"`
+	}{Moved: true})
+}
+
 // POST /rest/v2/hosts/{host_id}/task/{task_id}/end
 
 type hostAgentEndTask struct {
@@ -1343,12 +1375,12 @@ func (h *hostAgentEndTask) Run(ctx context.Context) gimlet.Responder {
 		}
 	}
 
-	// Move logs to failed bucket after marking task complete if the task failed and it should be moved
-	if details.Status == evergreen.TaskFailed && !t.UsesLongRetentionBucket(h.env.Settings()) {
-		if err := t.MoveTestAndTaskLogsToFailedBucket(ctx, h.env.Settings()); err != nil {
-			grip.Error(errors.Wrap(err, "moving logs to failed bucket"))
-		}
-	}
+	// // Move logs to failed bucket after marking task complete if the task failed and it should be moved
+	// if details.Status == evergreen.TaskFailed && !t.UsesLongRetentionBucket(h.env.Settings()) {
+	// 	if err := t.MoveTestAndTaskLogsToFailedBucket(ctx, h.env.Settings()); err != nil {
+	// 		grip.Error(errors.Wrap(err, "moving logs to failed bucket"))
+	// 	}
+	// }
 
 	err = model.MarkEnd(ctx, h.env.Settings(), t, evergreen.APIServerTaskActivator, finishTime, details)
 	if err != nil {

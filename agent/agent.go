@@ -390,6 +390,7 @@ func (a *Agent) processNextTask(ctx context.Context, nt *apimodels.NextTaskRespo
 			noTaskToRun: true,
 		}, nil
 	}
+	// chayaMtesting here
 	shouldSetupGroup, taskDirectory := a.finishPrevTask(ctx, nt, tc)
 
 	tc, shouldExit, err := a.runTask(ctx, nil, nt, shouldSetupGroup, taskDirectory)
@@ -436,6 +437,19 @@ func (a *Agent) finishPrevTask(ctx context.Context, nextTask *apimodels.NextTask
 	}
 	if tc.logger != nil {
 		grip.Error(errors.Wrap(tc.logger.Close(), "closing the previous logger producer"))
+	}
+	// Attempt to move task and test logs to failed bucket if the previous task finished unsuccessfully
+	if tc != nil && tc.task.ID != "" {
+		finalTaskStatus := tc.getFinalTaskStatus()
+		if finalTaskStatus != "" && finalTaskStatus != evergreen.TaskSucceeded {
+			if err := a.comm.MoveLogsToFailedBucket(ctx, tc.task); err != nil {
+				grip.Warning(message.WrapError(err, message.Fields{
+					"message":     "failed to move logs to failed bucket",
+					"task_id":     tc.task.ID,
+					"prev_status": finalTaskStatus,
+				}))
+			}
+		}
 	}
 	a.jasper.Clear(ctx)
 	return shouldSetupGroup, taskDirectory
@@ -1098,6 +1112,8 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 	}
 	grip.Infof("Successfully sent final task status: '%s'.", detail.Status)
 
+	tc.setFinalTaskStatus(detail.Status)
+
 	err = a.upsertCheckRun(ctx, tc)
 	if err != nil {
 		grip.Error(errors.Wrap(err, "upserting check run"))
@@ -1124,7 +1140,6 @@ func (a *Agent) finishTask(ctx context.Context, tc *taskContext, status string, 
 	if detail.Description != "" {
 		span.SetAttributes(attribute.String(evergreen.TaskDescriptionOtelAttribute, detail.Description))
 	}
-
 	return resp, nil
 }
 
