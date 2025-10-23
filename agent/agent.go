@@ -1286,6 +1286,10 @@ func (a *Agent) endTaskResponse(ctx context.Context, tc *taskContext, status str
 	if tc.taskConfig != nil {
 		detail.Modules.Prefixes = tc.taskConfig.ModulePaths
 	}
+
+	// Collect system resource information
+	detail.SystemInfo = message.CollectSystemInfo().(*message.SystemInfo)
+
 	return detail
 }
 
@@ -1453,3 +1457,5 @@ func (a *Agent) logPanic(tc *taskContext, pErr, originalErr error, op string) er
 
 	return catcher.Resolve()
 }
+
+

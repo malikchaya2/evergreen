@@ -11,6 +11,7 @@ import (
 	"github.com/evergreen-ci/utility"
 	"github.com/google/go-github/v70/github"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -74,10 +75,11 @@ type TaskEndDetail struct {
 	TimedOut             bool             `bson:"timed_out,omitempty" json:"timed_out,omitempty"`
 	TimeoutType          string           `bson:"timeout_type,omitempty" json:"timeout_type,omitempty"`
 	TimeoutDuration      time.Duration    `bson:"timeout_duration,omitempty" json:"timeout_duration,omitempty" swaggertype:"primitive,integer"`
-	OOMTracker           *OOMTrackerInfo  `bson:"oom_killer,omitempty" json:"oom_killer,omitempty"`
-	Modules              ModuleCloneInfo  `bson:"modules,omitempty" json:"modules"`
-	TraceID              string           `bson:"trace_id,omitempty" json:"trace_id,omitempty"`
-	DiskDevices          []string         `bson:"disk_devices,omitempty" json:"disk_devices,omitempty"`
+	OOMTracker       *OOMTrackerInfo     `bson:"oom_killer,omitempty" json:"oom_killer,omitempty"`
+	Modules          ModuleCloneInfo     `bson:"modules,omitempty" json:"modules"`
+	TraceID          string              `bson:"trace_id,omitempty" json:"trace_id,omitempty"`
+	DiskDevices      []string            `bson:"disk_devices,omitempty" json:"disk_devices,omitempty"`
+	SystemInfo       *message.SystemInfo `bson:"system_info,omitempty" json:"system_info,omitempty"`
 }
 
 // FailingCommand represents a command that failed in a task.
@@ -103,6 +105,9 @@ type DisableInfo struct {
 type ModuleCloneInfo struct {
 	Prefixes map[string]string `bson:"prefixes,omitempty" json:"prefixes,omitempty"`
 }
+
+
+// TaskEndDetail contains data sent from the agent to the API server after each task run.
 
 type TaskEndDetails struct {
 	TimeoutStage string `bson:"timeout_stage,omitempty" json:"timeout_stage,omitempty"`

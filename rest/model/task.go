@@ -13,6 +13,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 )
 
@@ -191,11 +192,12 @@ type ApiTaskEndDetail struct {
 	// did not cause the task to fail.
 	OtherFailingCommands []APIFailingCommand `json:"other_failing_commands,omitempty"`
 	// Whether this task ended in a timeout.
-	TimedOut    bool              `json:"timed_out"`
-	TimeoutType *string           `json:"timeout_type"`
-	OOMTracker  APIOomTrackerInfo `json:"oom_tracker_info"`
-	TraceID     *string           `json:"trace_id"`
-	DiskDevices []string          `json:"disk_devices"`
+	TimedOut    bool                 `json:"timed_out"`
+	TimeoutType *string              `json:"timeout_type"`
+	OOMTracker  APIOomTrackerInfo    `json:"oom_tracker_info"`
+	TraceID     *string              `json:"trace_id"`
+	DiskDevices []string             `json:"disk_devices"`
+	SystemInfo  *message.SystemInfo  `json:"system_info,omitempty"`
 }
 
 func (at *ApiTaskEndDetail) BuildFromService(t apimodels.TaskEndDetail) error {
@@ -223,6 +225,7 @@ func (at *ApiTaskEndDetail) BuildFromService(t apimodels.TaskEndDetail) error {
 	at.OOMTracker = apiOomTracker
 	at.TraceID = utility.ToStringPtr(t.TraceID)
 	at.DiskDevices = t.DiskDevices
+	at.SystemInfo = t.SystemInfo
 
 	return nil
 }
@@ -245,6 +248,7 @@ func (ad *ApiTaskEndDetail) ToService() apimodels.TaskEndDetail {
 		OOMTracker:           ad.OOMTracker.ToService(),
 		TraceID:              utility.FromStringPtr(ad.TraceID),
 		DiskDevices:          ad.DiskDevices,
+		SystemInfo:           ad.SystemInfo,
 	}
 }
 
@@ -287,6 +291,8 @@ func (ad *APIOomTrackerInfo) ToService() *apimodels.OOMTrackerInfo {
 		Pids:     ad.Pids,
 	}
 }
+
+
 
 // BuildPreviousExecutions adds the given previous executions to the given API task.
 func (at *APITask) BuildPreviousExecutions(ctx context.Context, tasks []task.Task, logURL, parsleyURL string) error {
