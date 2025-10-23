@@ -162,8 +162,12 @@ func (a *Agent) runCommandOrFunc(ctx context.Context, tc *taskContext, commandIn
 
 	var functionSpan trace.Span
 	if commandInfo.Function != "" {
+		functionSpanName := commandInfo.DisplayName
+		if functionSpanName == "" {
+			functionSpanName = commandInfo.Function
+		}
 		ctx, functionSpan = a.tracer.Start(ctx, "function", trace.WithAttributes(
-			attribute.String(functionNameAttribute, commandInfo.Function),
+			attribute.String(functionNameAttribute, functionSpanName),
 		))
 		defer functionSpan.End()
 	}
@@ -179,8 +183,12 @@ func (a *Agent) runCommandOrFunc(ctx context.Context, tc *taskContext, commandIn
 		}
 
 		tc.logger.Task().Infof("Running command %s.", cmd.FullDisplayName())
+		commandSpanName := commandInfo.DisplayName
+		if commandSpanName == "" {
+			commandSpanName = cmd.Name()
+		}
 
-		ctx, commandSpan := a.tracer.Start(ctx, cmd.Name(), trace.WithAttributes(
+		ctx, commandSpan := a.tracer.Start(ctx, commandSpanName, trace.WithAttributes(
 			attribute.String(commandNameAttribute, cmd.Name()),
 			attribute.String(commandDisplayNameAttribute, cmd.FullDisplayName()),
 		))
