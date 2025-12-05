@@ -919,11 +919,6 @@ tasks:
         script: |
            echo "this is going to timeout"
            ./run.py timeout
-modules:
-- name: render-module
-  repo: git@github.com:evergreen-ci/render.git
-  prefix: modules
-  branch: main
 
 buildvariants:
 - name: osx-108
@@ -946,7 +941,7 @@ buildvariants:
   - name: task_group
 - name: ubuntu
   display_name: Ubuntu
-  modules: ["render-module"]
+  modules: ~
   run_on:
   - ubuntu1404-test
   expansions:
@@ -958,6 +953,7 @@ buildvariants:
   - name: timeout_test`
 	require.NoError(t, db.ClearCollections(serviceModel.ParserProjectCollection, serviceModel.ProjectRefCollection, patch.Collection, evergreen.ConfigCollection, task.Collection, serviceModel.VersionCollection, build.Collection))
 	require.NoError(t, db.CreateCollections(serviceModel.ParserProjectCollection, build.Collection, task.Collection, serviceModel.VersionCollection, serviceModel.ParserProjectCollection, manifest.Collection))
+	require.NoError(t, db.EnsureIndex(task.Collection, mongo.IndexModel{Keys: task.TaskHistoricalDataIndex}))
 	settings := testutil.TestConfig()
 	testutil.ConfigureIntegrationTest(t, settings)
 	require.NoError(t, settings.Set(ctx))
@@ -1007,6 +1003,7 @@ buildvariants:
 	assert.NoError(t, err)
 	assert.NoError(t, handler.Parse(ctx, req))
 	resp := handler.Run(ctx)
+	require.Equal(t, http.StatusOK, resp.Status(), "Expected OK status but got: %v", resp.Data())
 	respVersion := resp.Data().(restModel.APIVersion)
 	assert.Equal(t, unfinalized.Id.Hex(), *respVersion.Id)
 	assert.Equal(t, description, *respVersion.Message)
@@ -1043,6 +1040,7 @@ buildvariants:
 	assert.NoError(t, err)
 	assert.NoError(t, handler.Parse(ctx, req))
 	resp = handler.Run(ctx)
+	require.Equal(t, http.StatusOK, resp.Status(), "Expected OK status but got: %v", resp.Data())
 	respVersion = resp.Data().(restModel.APIVersion)
 	assert.Equal(t, unfinalized.Id.Hex(), *respVersion.Id)
 	assert.Equal(t, description, *respVersion.Message)
@@ -1100,6 +1098,7 @@ buildvariants:
 	assert.NoError(t, err)
 	assert.NoError(t, handler.Parse(ctx, req))
 	resp = handler.Run(ctx)
+	require.Equal(t, http.StatusOK, resp.Status(), "Expected OK status but got: %v", resp.Data())
 	respVersion = resp.Data().(restModel.APIVersion)
 	assert.Equal(t, patch2.Id.Hex(), *respVersion.Id)
 	assert.Equal(t, "", *respVersion.Message)
@@ -1133,6 +1132,7 @@ buildvariants:
 	assert.NoError(t, err)
 	assert.NoError(t, handler.Parse(ctx, req))
 	resp = handler.Run(ctx)
+	require.Equal(t, http.StatusOK, resp.Status(), "Expected OK status but got: %v", resp.Data())
 	respVersion = resp.Data().(restModel.APIVersion)
 	assert.Equal(t, patch3.Id.Hex(), *respVersion.Id)
 	assert.Equal(t, "", *respVersion.Message)
@@ -1417,6 +1417,7 @@ tasks:
 	assert.NoError(t, err)
 	assert.NoError(t, handler.Parse(ctx, req))
 	resp := handler.Run(ctx)
+	require.Equal(t, http.StatusOK, resp.Status(), "Expected OK status but got: %v", resp.Data())
 	respVersion := resp.Data().(restModel.APIVersion)
 	assert.Equal(t, unfinalized.Id.Hex(), *respVersion.Id)
 	assert.Equal(t, description, *respVersion.Message)
@@ -1449,6 +1450,7 @@ tasks:
 	assert.NoError(t, err)
 	assert.NoError(t, handler.Parse(ctx, req))
 	resp = handler.Run(ctx)
+	require.Equal(t, http.StatusOK, resp.Status(), "Expected OK status but got: %v", resp.Data())
 	respVersion = resp.Data().(restModel.APIVersion)
 	assert.Equal(t, unfinalized.Id.Hex(), *respVersion.Id)
 	assert.Equal(t, description, *respVersion.Message)

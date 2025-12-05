@@ -33,6 +33,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/suite"
 	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/mongo"
 )
 
 type PatchIntentUnitsSuite struct {
@@ -111,6 +112,10 @@ func (s *PatchIntentUnitsSuite) SetupTest() {
 		model.ParserProjectCollection, model.VersionCollection, user.Collection, model.ProjectRefCollection,
 		model.ProjectAliasCollection, patch.Collection, patch.IntentCollection, event.SubscriptionsCollection, distro.Collection))
 	s.NoError(db.ClearGridCollections(patch.GridFSPrefix))
+
+	// Create the TaskHistoricalDataIndex to prevent "hint provided does not correspond to an existing index" warnings
+	_, err = evergreen.GetEnvironment().DB().Collection(task.Collection).Indexes().CreateOne(s.ctx, mongo.IndexModel{Keys: task.TaskHistoricalDataIndex})
+	s.NoError(err)
 
 	s.NoError((&model.ProjectRef{
 		Owner:            "evergreen-ci",

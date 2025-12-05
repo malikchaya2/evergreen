@@ -259,7 +259,7 @@ func TestBuildRestart(t *testing.T) {
 			}
 			So(taskTwo.Insert(t.Context()), ShouldBeNil)
 
-			So(RestartBuild(ctx, b, []string{"task1", "task2"}, true, ""), ShouldBeNil)
+			So(RestartBuild(ctx, b, []string{"task1", "task2"}, true, "test-user"), ShouldBeNil)
 			var err error
 			b, err = build.FindOne(ctx, build.ById(b.Id))
 			So(err, ShouldBeNil)
@@ -489,7 +489,7 @@ func TestBuildMarkAborted(t *testing.T) {
 				// aborting the build should mark only the two abortable tasks
 				// with the correct build id as aborted
 
-				So(AbortBuild(ctx, b.Id, ""), ShouldBeNil)
+				So(AbortBuild(ctx, b.Id, "test-user"), ShouldBeNil)
 
 				abortedTasks, err := task.Find(ctx, task.ByAborted(true))
 				So(err, ShouldBeNil)
