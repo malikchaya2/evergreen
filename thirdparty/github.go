@@ -431,8 +431,9 @@ func getInstallationTokenWithDefaultOwnerRepo(ctx context.Context, opts *github.
 }
 
 // GetGithubCommits returns a slice of GithubCommit objects from
-// the given commitsURL when provided a valid oauth token
-func GetGithubCommits(ctx context.Context, owner, repo, ref string, until time.Time, commitPage int) ([]*github.RepositoryCommit, int, error) {
+// the given commitsURL when provided a valid oauth token.
+// If providedToken is empty, it will use Evergreen's internal GitHub app token.
+func GetGithubCommits(ctx context.Context, owner, repo, ref string, until time.Time, commitPage int, providedToken string) ([]*github.RepositoryCommit, int, error) {
 	caller := "GetGithubCommits"
 	ctx, span := tracer.Start(ctx, caller, trace.WithAttributes(
 		attribute.String(githubEndpointAttribute, caller),
@@ -442,9 +443,14 @@ func GetGithubCommits(ctx context.Context, owner, repo, ref string, until time.T
 	))
 	defer span.End()
 
-	token, err := getInstallationToken(ctx, owner, repo, nil)
-	if err != nil {
-		return nil, 0, errors.Wrap(err, "getting installation token")
+	token := providedToken
+	if token == "" {
+		// No token provided - fall back to Evergreen's internal app
+		var err error
+		token, err = getInstallationToken(ctx, owner, repo, nil)
+		if err != nil {
+			return nil, 0, errors.Wrap(err, "getting installation token")
+		}
 	}
 
 	githubClient := getGithubClient(token, caller, retryConfig{retry: true})
@@ -684,7 +690,9 @@ func getCommitComparison(ctx context.Context, owner, repo, baseRevision, current
 // the commit data doesn't change.
 var ghCommitCache = ttlcache.WithOtel(ttlcache.NewWeakInMemory[github.RepositoryCommit](), "github-get-commit-event")
 
-func GetCommitEvent(ctx context.Context, owner, repo, githash string) (*github.RepositoryCommit, error) {
+// GetCommitEvent fetches a specific commit from GitHub.
+// If providedToken is empty, it will use Evergreen's internal GitHub app token.
+func GetCommitEvent(ctx context.Context, owner, repo, githash string, providedToken string) (*github.RepositoryCommit, error) {
 	caller := "GetCommitEvent"
 	ctx, span := tracer.Start(ctx, caller, trace.WithAttributes(
 		attribute.String(githubEndpointAttribute, caller),
@@ -701,10 +709,14 @@ func GetCommitEvent(ctx context.Context, owner, repo, githash string) (*github.R
 		return commit, nil
 	}
 
-	var err error
-	token, err := getInstallationToken(ctx, owner, repo, nil)
-	if err != nil {
-		return nil, errors.Wrap(err, "getting installation token")
+	token := providedToken
+	if token == "" {
+		// No token provided - fall back to Evergreen's internal app
+		var err error
+		token, err = getInstallationToken(ctx, owner, repo, nil)
+		if err != nil {
+			return nil, errors.Wrap(err, "getting installation token")
+		}
 	}
 
 	githubClient := getGithubClient(token, caller, retryConfig{retry: true})

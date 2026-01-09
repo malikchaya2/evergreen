@@ -17,6 +17,8 @@ import (
 	"github.com/evergreen-ci/evergreen/util"
 	"github.com/evergreen-ci/utility"
 	"github.com/mongodb/anser/bsonutil"
+	"github.com/mongodb/grip"
+	"github.com/mongodb/grip/message"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/bson"
 )
@@ -801,6 +803,30 @@ func constructManifest(ctx context.Context, v *Version, projectRef *ProjectRef, 
 		}
 	}
 
+	// Try to get project's GitHub app token to reduce load on Evergreen's internal app
+	var githubToken string
+	githubAppAuth, err := projectRef.GetGitHubAppAuth(ctx)
+	if err == nil && githubAppAuth != nil {
+		// Project has a GitHub app - try to generate token
+		githubToken, _, err = githubAppAuth.CreateCachedInstallationToken(
+			ctx,
+			projectRef.Owner,
+			projectRef.Repo,
+			time.Hour, // 1 hour should be sufficient for manifest creation
+			nil,
+		)
+		if err != nil {
+			// Log warning but don't fail - we'll fall back to Evergreen's app
+			grip.Warning(message.WrapError(err, message.Fields{
+				"message": "failed to create token from project GitHub app, will fall back to Evergreen app",
+				"project": projectRef.Id,
+				"owner":   projectRef.Owner,
+				"repo":    projectRef.Repo,
+			}))
+			githubToken = ""
+		}
+	}
+
 	modules := map[string]*manifest.Module{}
 	for _, module := range moduleList {
 		if shouldUseBaseRevision && !module.AutoUpdate && baseManifest != nil {
@@ -810,7 +836,7 @@ func constructManifest(ctx context.Context, v *Version, projectRef *ProjectRef, 
 			}
 		}
 
-		mfstModule, err := getManifestModule(ctx, projectRef, module, v.Requester, v.Revision)
+		mfstModule, err := getManifestModule(ctx, projectRef, module, v.Requester, v.Revision, githubToken)
 		if err != nil {
 			return nil, errors.Wrapf(err, "module '%s'", module.Name)
 		}
@@ -821,7 +847,7 @@ func constructManifest(ctx context.Context, v *Version, projectRef *ProjectRef, 
 	return newManifest, nil
 }
 
-func getManifestModule(ctx context.Context, projectRef *ProjectRef, module Module, requester, revision string) (*manifest.Module, error) {
+func getManifestModule(ctx context.Context, projectRef *ProjectRef, module Module, requester, revision, githubToken string) (*manifest.Module, error) {
 	owner, repo, err := module.GetOwnerAndRepo()
 	if err != nil {
 		return nil, errors.Wrapf(err, "getting owner and repo for '%s'", module.Name)
@@ -837,7 +863,7 @@ func getManifestModule(ctx context.Context, projectRef *ProjectRef, module Modul
 		// If this is a periodic build, retrieve the module's commit from the time of the periodic build.
 		// Otherwise, retrieve the module's commit from the time of the patch creation.
 		if !evergreen.IsPatchRequester(requester) && requester != evergreen.AdHocRequester {
-			commit, err := thirdparty.GetCommitEvent(ghCtx, projectRef.Owner, projectRef.Repo, revision)
+			commit, err := thirdparty.GetCommitEvent(ghCtx, projectRef.Owner, projectRef.Repo, revision, githubToken)
 			if err != nil {
 				return nil, errors.Wrapf(err, "can't get commit '%s' on '%s/%s'", revision, projectRef.Owner, projectRef.Repo)
 			}
@@ -847,7 +873,7 @@ func getManifestModule(ctx context.Context, projectRef *ProjectRef, module Modul
 			revisionTime = commit.Commit.Committer.GetDate().Time
 		}
 
-		branchCommits, _, err := thirdparty.GetGithubCommits(ghCtx, owner, repo, module.Branch, revisionTime, 0)
+		branchCommits, _, err := thirdparty.GetGithubCommits(ghCtx, owner, repo, module.Branch, revisionTime, 0, githubToken)
 		if err != nil {
 			return nil, errors.Wrapf(err, "retrieving git branch for module '%s'", module.Name)
 		}
@@ -870,7 +896,7 @@ func getManifestModule(ctx context.Context, projectRef *ProjectRef, module Modul
 	defer cancel()
 
 	sha := module.Ref
-	gitCommit, err := thirdparty.GetCommitEvent(ghCtx, owner, repo, module.Ref)
+	gitCommit, err := thirdparty.GetCommitEvent(ghCtx, owner, repo, module.Ref, githubToken)
 	if err != nil {
 		return nil, errors.Wrapf(err, "retrieving getting git commit for module '%s' with hash '%s'", module.Name, module.Ref)
 	}

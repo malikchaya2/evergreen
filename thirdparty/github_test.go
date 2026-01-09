@@ -283,11 +283,11 @@ func (s *githubSuite) TestGetGithubFile() {
 }
 
 func (s *githubSuite) TestGetCommitEvent() {
-	commit, err := GetCommitEvent(s.ctx, "evergreen-ci", "evergreen", "nope")
+	commit, err := GetCommitEvent(s.ctx, "evergreen-ci", "evergreen", "nope", "")
 	s.Error(err)
 	s.Nil(commit)
 
-	commit, err = GetCommitEvent(s.ctx, "evergreen-ci", "evergreen", "ddf48e044c307e3f8734279be95f2d9d7134410f")
+	commit, err = GetCommitEvent(s.ctx, "evergreen-ci", "evergreen", "ddf48e044c307e3f8734279be95f2d9d7134410f", "")
 	s.NoError(err)
 
 	s.NotPanics(func() {

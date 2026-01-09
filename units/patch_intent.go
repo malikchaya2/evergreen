@@ -894,7 +894,7 @@ func (j *patchIntentProcessor) buildCliPatchDoc(ctx context.Context, patchDoc *p
 	defer cancel()
 
 	commit, err := thirdparty.GetCommitEvent(ctx, projectRef.Owner,
-		projectRef.Repo, patchDoc.Githash)
+		projectRef.Repo, patchDoc.Githash, "")
 	if err != nil {
 		return errors.Wrapf(err, "finding base revision '%s' for project '%s'",
 			patchDoc.Githash, projectRef.Id)

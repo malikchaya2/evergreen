@@ -947,7 +947,7 @@ func prefetchAutoUpdateModuleRevisions(ctx context.Context, p *patch.Patch, proj
 	autoUpdateRevisions := make(map[string]string)
 	for _, module := range projectModulesOnly.Modules {
 		if module.AutoUpdate {
-			mfstModule, err := getManifestModule(ctx, projectRef, module, evergreen.PatchVersionRequester, p.Githash)
+			mfstModule, err := getManifestModule(ctx, projectRef, module, evergreen.PatchVersionRequester, p.Githash, "")
 			if err != nil {
 				grip.Warning(message.WrapError(err, message.Fields{
 					"message":     "failed to get revision for module",

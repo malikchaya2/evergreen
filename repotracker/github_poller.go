@@ -78,6 +78,7 @@ func (gRepoPoller *GithubRepositoryPoller) GetChangedFiles(ctx context.Context, 
 		projectRef.Owner,
 		projectRef.Repo,
 		commitRevision,
+		"",
 	)
 	if err != nil {
 		return nil, errors.Wrapf(err, "error loading commit '%v'", commitRevision)
@@ -111,7 +112,7 @@ func (gRepoPoller *GithubRepositoryPoller) GetRevisionsSince(ctx context.Context
 	for len(revisions) < maxRevisionsToSearch {
 		var err error
 		commits, commitPage, err = thirdparty.GetGithubCommits(ctx, gRepoPoller.ProjectRef.Owner,
-			gRepoPoller.ProjectRef.Repo, gRepoPoller.ProjectRef.Branch, time.Time{}, commitPage)
+			gRepoPoller.ProjectRef.Repo, gRepoPoller.ProjectRef.Branch, time.Time{}, commitPage, "")
 		if err != nil {
 			return nil, err
 		}
@@ -199,6 +200,7 @@ func (gRepoPoller *GithubRepositoryPoller) GetRevisionsSince(ctx context.Context
 			gRepoPoller.ProjectRef.Owner,
 			gRepoPoller.ProjectRef.Repo,
 			baseRevision,
+			"",
 		)
 		if err != nil {
 			return nil, errors.Wrapf(err, "loading base commit '%s'", baseRevision)
@@ -249,7 +251,7 @@ func (gRepoPoller *GithubRepositoryPoller) GetRecentRevisions(maxRevisions int) 
 		var repoCommits []*github.RepositoryCommit
 		repoCommits, commitPage, err = thirdparty.GetGithubCommits(ctx, gRepoPoller.ProjectRef.Owner,
 			gRepoPoller.ProjectRef.Repo, gRepoPoller.ProjectRef.Branch,
-			time.Time{}, commitPage)
+			time.Time{}, commitPage, "")
 		if err != nil {
 			return nil, err
 		}
