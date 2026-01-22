@@ -20,6 +20,7 @@ import (
 	"github.com/evergreen-ci/evergreen/model/manifest"
 	"github.com/evergreen-ci/evergreen/model/patch"
 	"github.com/evergreen-ci/evergreen/model/pod"
+	"github.com/evergreen-ci/evergreen/model/s3lifecycle"
 	"github.com/evergreen-ci/evergreen/model/task"
 	"github.com/evergreen-ci/evergreen/model/testlog"
 	"github.com/evergreen-ci/evergreen/model/testresult"
@@ -638,6 +639,8 @@ func (h *attachFilesHandler) Run(ctx context.Context) gimlet.Responder {
 		})
 	}
 
+	discoverBucketLifecycleRules(ctx, t, h.files)
+
 	entry := &artifact.Entry{
 		TaskId:          t.Id,
 		TaskDisplayName: t.DisplayName,
@@ -653,6 +656,35 @@ func (h *attachFilesHandler) Run(ctx context.Context) gimlet.Responder {
 		return gimlet.MakeJSONInternalErrorResponder(errors.New(message))
 	}
 	return gimlet.NewJSONResponse(fmt.Sprintf("Artifact files for task %s successfully attached", t.Id))
+}
+
+// discoverBucketLifecycleRules triggers on-demand discovery for uncached buckets.
+// This is best-effort and will not fail the file upload if discovery fails.
+func discoverBucketLifecycleRules(ctx context.Context, t *task.Task, files []artifact.File) {
+	bucketsToDiscover := make(map[string]*artifact.File)
+	for i := range files {
+		file := &files[i]
+		if file.Bucket == "" {
+			continue
+		}
+
+		if _, exists := bucketsToDiscover[file.Bucket]; !exists {
+			bucketsToDiscover[file.Bucket] = file
+		}
+	}
+
+	client := cloud.NewS3LifecycleClient()
+
+	for bucketName, file := range bucketsToDiscover {
+		region := evergreen.DefaultS3Region
+
+		var roleARN *string
+		if file.AWSRoleARN != "" {
+			roleARN = &file.AWSRoleARN
+		}
+
+		s3lifecycle.DiscoverAndCacheProjectBucket(ctx, bucketName, region, roleARN, t.Project, client)
+	}
 }
 
 // POST /rest/v2/task/{task_id}/set_results_info
