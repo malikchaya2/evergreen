@@ -95,14 +95,14 @@ func DiscoverAdminManagedBuckets(ctx context.Context, settings *evergreen.Settin
 	return buckets, nil
 }
 
-// DiscoverAndCacheProjectBucket discovers lifecycle rules for a bucket if not already cached.
-// Returns true if discovery was triggered (bucket was uncached), false if already cached.
+// DiscoverAndCacheProjectBucket checks if we have lifecycle rules cached for a bucket and fetches them if not.
+// It returns true if discovery was triggered (bucket was uncached), false if already cached.
 // This is best-effort - errors are logged but not returned to avoid failing file uploads.
 func DiscoverAndCacheProjectBucket(ctx context.Context, bucketName, region string, roleARN *string, projectID string, client cloud.S3LifecycleClient) bool {
 	existingRules, err := FindAllRulesForBucket(ctx, bucketName)
 	if err != nil {
 		grip.Warning(message.WrapError(err, message.Fields{
-			"message": "error checking for existing rules",
+			"message": "error checking for existing bucket lifecycle rules",
 			"bucket":  bucketName,
 		}))
 		return false

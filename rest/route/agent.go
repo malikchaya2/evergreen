@@ -658,8 +658,9 @@ func (h *attachFilesHandler) Run(ctx context.Context) gimlet.Responder {
 	return gimlet.NewJSONResponse(fmt.Sprintf("Artifact files for task %s successfully attached", t.Id))
 }
 
-// discoverBucketLifecycleRules triggers on-demand discovery for uncached buckets.
-// This is best-effort and will not fail the file upload if discovery fails.
+// discoverBucketLifecycleRules will look at all the buckets that the files are being uploaded
+// to and check if we have lifecycle rules cached for them. If not, it will attempt to discover
+// and cache them. This is best-effort and will not fail the file upload if discovery fails.
 func discoverBucketLifecycleRules(ctx context.Context, t *task.Task, files []artifact.File) {
 	bucketsToDiscover := make(map[string]*artifact.File)
 	for i := range files {
@@ -673,8 +674,7 @@ func discoverBucketLifecycleRules(ctx context.Context, t *task.Task, files []art
 		}
 	}
 
-	client := cloud.NewS3LifecycleClient()
-
+	cachedBuckets := []string{}
 	for bucketName, file := range bucketsToDiscover {
 		region := evergreen.DefaultS3Region
 
@@ -683,7 +683,20 @@ func discoverBucketLifecycleRules(ctx context.Context, t *task.Task, files []art
 			roleARN = &file.AWSRoleARN
 		}
 
-		s3lifecycle.DiscoverAndCacheProjectBucket(ctx, bucketName, region, roleARN, t.Project, client)
+		wasCached := s3lifecycle.DiscoverAndCacheProjectBucket(ctx, bucketName, region, roleARN, t.Project, cloud.NewS3LifecycleClient())
+		if wasCached {
+			cachedBuckets = append(cachedBuckets, bucketName)
+		}
+	}
+
+	if len(cachedBuckets) > 0 {
+		grip.Info(message.Fields{
+			"message":        "successfully cached bucket lifecycle rules",
+			"buckets":        cachedBuckets,
+			"task_id":        t.Id,
+			"project":        t.Project,
+			"num_cached":     len(cachedBuckets),
+		})
 	}
 }
 
