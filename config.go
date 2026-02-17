@@ -37,7 +37,11 @@ var (
 
 	// Agent version to control agent rollover. The format is the calendar date
 	// (YYYY-MM-DD).
+<<<<<<< HEAD
 	AgentVersion = "2026-03-05"
+=======
+	AgentVersion = "2026-02-17"
+>>>>>>> f3d12241c (DEVPROD-25592: Track S3 PUT requests for user file artifacts)
 )
 
 const (
