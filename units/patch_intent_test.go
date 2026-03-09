@@ -379,7 +379,7 @@ func (s *PatchIntentUnitsSuite) TestCantFinalizePatchWithDisabledCommitQueue() {
 		Org:        &org,
 		Repo:       &repo,
 	}
-	intent, err := patch.NewGithubMergeIntent("id", "auto", &mge)
+	intent, err := patch.NewGithubMergeIntent(s.ctx, "id", "auto", &mge)
 
 	s.NoError(err)
 	s.Require().NotNil(intent)
@@ -1149,7 +1149,7 @@ func (s *PatchIntentUnitsSuite) TestProcessMergeGroupIntent() {
 		Org:        &org,
 		Repo:       &repo,
 	}
-	intent, err := patch.NewGithubMergeIntent("id", "auto", &mge)
+	intent, err := patch.NewGithubMergeIntent(s.ctx, "id", "auto", &mge)
 
 	s.NoError(err)
 	s.Require().NotNil(intent)
@@ -2225,6 +2225,49 @@ func (s *PatchIntentUnitsSuite) TestFilterOutIgnoredVariants() {
 			expectedVariantsTasks:   1,
 			expectedBuildVariants:   1,
 			expectedTasks:           1,
+		},
+		{
+			name: "MergeQueueWithDisabledMergeQueuePathFiltering",
+			patchDoc: &patch.Patch{
+				Id:      mgobson.NewObjectId(),
+				Project: s.project,
+				Author:  s.user,
+				Githash: s.hash,
+				GithubMergeData: thirdparty.GithubMergeGroup{
+					Org:        "owner",
+					Repo:       "repo",
+					HeadBranch: "gh-readonly-queue/main/pr-123-abc123",
+					HeadSHA:    "abc123",
+				},
+				Patches: []patch.ModulePatch{
+					{
+						PatchSet: patch.PatchSet{
+							Summary: []thirdparty.Summary{
+								{Name: "unrelated/file.txt", Additions: 1, Deletions: 0},
+							},
+						},
+					},
+				},
+				VariantsTasks: []patch.VariantTasks{
+					{Variant: "backend", Tasks: []string{"backend-test"}},
+					{Variant: "frontend", Tasks: []string{"frontend-test"}},
+				},
+				BuildVariants: []string{"backend", "frontend"},
+				Tasks:         []string{"backend-test", "frontend-test"},
+			},
+			project: &model.Project{
+				Identifier:                     s.project,
+				DisableMergeQueuePathFiltering: true,
+				BuildVariants: model.BuildVariants{
+					{Name: "backend", Paths: []string{"src/**"}},
+					{Name: "frontend", Paths: []string{"frontend/**"}},
+				},
+			},
+			// All variants should be kept because DisableMergeQueuePathFiltering is true.
+			expectedIgnoredVariants: []string{},
+			expectedVariantsTasks:   2,
+			expectedBuildVariants:   2,
+			expectedTasks:           2,
 		},
 	}
 

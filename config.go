@@ -33,11 +33,11 @@ var (
 
 	// ClientVersion is the commandline version string used to control updating
 	// the CLI. The format is the calendar date (YYYY-MM-DD).
-	ClientVersion = "2026-02-12"
+	ClientVersion = "2026-03-04a"
 
 	// Agent version to control agent rollover. The format is the calendar date
 	// (YYYY-MM-DD).
-	AgentVersion = "2026-02-17"
+	AgentVersion = "2026-03-04a"
 )
 
 const (
@@ -67,6 +67,7 @@ type Settings struct {
 	AmboyDB             AmboyDBConfig           `yaml:"amboy_db" bson:"amboy_db" json:"amboy_db" id:"amboy_db"`
 	Api                 APIConfig               `yaml:"api" bson:"api" json:"api" id:"api"`
 	AuthConfig          AuthConfig              `yaml:"auth" bson:"auth" json:"auth" id:"auth"`
+	OktaServiceConfig   OktaServiceConfig       `yaml:"okta_service" bson:"okta_service" json:"okta_service" id:"okta_service"`
 	AWSInstanceRole     string                  `yaml:"aws_instance_role" bson:"aws_instance_role" json:"aws_instance_role"`
 	Banner              string                  `bson:"banner" json:"banner" yaml:"banner"`
 	BannerTheme         BannerTheme             `bson:"banner_theme" json:"banner_theme" yaml:"banner_theme"`
@@ -105,7 +106,6 @@ type Settings struct {
 	PerfMonitoringKanopyURL string                    `yaml:"perf_monitoring_kanopy_url" bson:"perf_monitoring_kanopy_url" json:"perf_monitoring_kanopy_url"`
 	Plugins                 PluginConfig              `yaml:"plugins" bson:"plugins" json:"plugins"`
 	PluginsNew              util.KeyValuePairSlice    `yaml:"plugins_new" bson:"plugins_new" json:"plugins_new"`
-	PodLifecycle            PodLifecycleConfig        `yaml:"pod_lifecycle" bson:"pod_lifecycle" json:"pod_lifecycle" id:"pod_lifecycle"`
 	PprofPort               string                    `yaml:"pprof_port" bson:"pprof_port" json:"pprof_port"`
 	ProjectCreation         ProjectCreationConfig     `yaml:"project_creation" bson:"project_creation" json:"project_creation" id:"project_creation"`
 	Providers               CloudProviders            `yaml:"providers" bson:"providers" json:"providers" id:"providers"`

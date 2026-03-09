@@ -750,8 +750,9 @@ from running if a specified file has not changed. However, this does _not_ mean 
 be scheduled if a file in a specified path is changed. The tasks must still be manually selected to run through
 manual selection, alias, etc.
 
-_Merge queue behavior_: Build variant path filtering is supported for the merge queue. If testing multiple PRs
-in one merge queue patch, we will consider the full set of changed files to determine what tasks to run, but will
+_Merge queue behavior_: Build variant path filtering applies to the merge queue unless
+[explicitly disabled](#disabling-merge-queue-path-filtering). If testing multiple PRs in one merge queue patch,
+we will consider the full set of changed files to determine what tasks to run, but will
 not consider the changed files from other PRs in the merge group (i.e. paths changed in PRs that are ahead in the queue are not included).
 For PR patches and the merge queue, we will still send a successful check for ignored variants, to avoid blocking requirements.
 
@@ -789,6 +790,21 @@ When a build variant has `paths` defined:
 **Note: build variant path filtering is ignored on extremely large GitHub PRs with 3000+ files changed.** If a PR
 contains 3000+ changed files, `paths` will have no effect on the GitHub PR patch. The build variant will run its tasks
 even if `paths` doesn't match any of the changed files.
+
+###### Disabling Merge Queue Path Filtering
+
+If you want to disable path filtering specifically for merge queue versions while keeping it enabled for PR patches,
+you can set the `disable_merge_queue_path_filtering` top-level setting to `true`. When enabled, all build variants
+will run for merge queue versions regardless of their `paths` configuration, but path filtering will still apply
+to PR patches.
+
+This can be useful when you want more selective testing for PR patches but want to ensure comprehensive testing
+before merging to your main branch.
+
+```yaml
+disable_merge_queue_path_filtering: true
+buildvariants: ...
+```
 
 ### Expansions
 
@@ -979,9 +995,7 @@ inter-project dependency:
 The following expansions are available if a task was created with a [patch trigger alias](Project-and-Distro-Settings#patch-trigger-aliases):
 
 - `${parent_patch_id}` is the ID of the parent patch for this task
-- `${parent_github_org}` is the Github org for the parent patch
-- `${parent_github_repo}` is the Github repo for the parent patch
-- `${parent_github_branch}` is the branch tracked by the parent patch
+- `{parent_project_module}` is the name of the parent module in the downstream project (i.e. defined on the upstream project's Child Patch Trigger Alias as "module")
 
 The following expansions are available if a task has modules, where `<module_name>` represents the name defined in the project yaml for a
 given module:
@@ -1174,20 +1188,19 @@ oom_tracker: false
 
 ### Process Diagnostics: ps
 
-By default, Evergreen logs process information every 60 seconds during task execution using the ps expansion if defined (in distro settings, project variables, or in the project yaml) or `ps` as the default. This default behavior will be deprecated soon, and process logging will become opt-in (disabled by default unless explicitly configured and will no longer default to the ps expansion or `ps`).
+You can enable process logging by setting the `ps` field at multiple configuration levels. The specified command will run every 60 seconds during task execution to log process information.
 
-You can customize the process logging command by setting the `ps` field at multiple configuration levels. There is currently no option to opt out, but once default ps logging is deprecated, you will be able to disable process logging, by either not setting it anywhere (the default) or by setting `ps` to an empty string. When enabled, the specified command runs every 60 seconds.
+To disable process logging, either omit the `ps` field or set it to an empty string.
 
 The `ps` field follows a priority order (from highest to lowest):
 
 1. **Build variant task level** - Overrides all other settings
-2. **Project task level** - Overrides project-level and lower settings
-3. **Project level** - Overrides build variant expansions and default
-4. **Default** - Currently defaults to the ps expansion or `"ps"` (will be deprecated to no logging)
+2. **Project task level** - Overrides project-level settings
+3. **Project level** - Base configuration for all tasks
 
-**Note about distro and build variant expansions:** When the default ps logging behavior is deprecated (in the future), distro, project variable and build variant `ps` expansions will be ignored unless you have an explicit `ps` setting at the project, task, or build variant task level. To use an expansion, it would need to be explicitely referenced with `ps: "${my_custom_ps}"` at the desired level (as outlined above).
+To use an expansion, reference it with `ps: "${my_custom_ps}"` at the desired level.
 
-**Project level** (overrides build variant expansions and default):
+**Project level**:
 
 ```yaml
 ps: "ps -o pid" # Enable for all tasks
@@ -1200,7 +1213,7 @@ tasks:
           script: echo "Running with ps logging"
 ```
 
-**Task level** (overrides project level, build variant expansions, and default):
+**Task level** (overrides project level):
 
 ```yaml
 tasks:
@@ -1219,7 +1232,7 @@ tasks:
           script: echo "No ps logging"
 ```
 
-**Build variant task level** (highest priority, overrides task level, project level, build variant expansions, and default):
+**Build variant task level** (highest priority, overrides task level and project level):
 
 ```yaml
 ps: "ps -o pid" # Project-level

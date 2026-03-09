@@ -294,6 +294,23 @@ func (s *AdminSuite) TestAuthConfig() {
 	s.Equal(config, settings.AuthConfig)
 }
 
+func (s *AdminSuite) TestOktaServiceConfig() {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	config := OktaServiceConfig{
+		ClientID:     "service_id",
+		ClientSecret: "service_secret",
+	}
+
+	err := config.Set(ctx)
+	s.NoError(err)
+	settings, err := GetConfig(ctx)
+	s.NoError(err)
+	s.NotNil(settings)
+	s.Equal(config, settings.OktaServiceConfig)
+}
+
 func (s *AdminSuite) TestHostinitConfig() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -326,24 +343,6 @@ func (s *AdminSuite) TestJiraConfig() {
 	s.NoError(err)
 	s.NotNil(settings)
 	s.Equal(config, settings.Jira)
-}
-
-func (s *AdminSuite) TestPodLifecycleConfig() {
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-
-	config := PodLifecycleConfig{
-		MaxParallelPodRequests:      1000,
-		MaxPodDefinitionCleanupRate: 100,
-		MaxSecretCleanupRate:        100,
-	}
-
-	err := config.Set(ctx)
-	s.Require().NoError(err)
-	settings, err := GetConfig(ctx)
-	s.Require().NoError(err)
-	s.Require().NotNil(settings)
-	s.Equal(config, settings.PodLifecycle)
 }
 
 func (s *AdminSuite) TestParameterStoreConfig() {

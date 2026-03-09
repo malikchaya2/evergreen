@@ -27,6 +27,8 @@ import (
 	"github.com/mongodb/grip/sometimes"
 	"github.com/pkg/errors"
 	"go.mongodb.org/mongo-driver/mongo"
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/trace"
 )
 
 const (
@@ -1104,6 +1106,20 @@ func (j *patchIntentProcessor) buildGithubMergeDoc(ctx context.Context, patchDoc
 		}))
 	}()
 
+	githubHeadPRURL := thirdparty.BuildGithubHeadPRURL(patchDoc.GithubMergeData.Org, patchDoc.GithubMergeData.Repo, patchDoc.GithubMergeData.HeadBranch)
+
+	baseAttrs := patch.BuildMergeQueueSpanAttributes(
+		patchDoc.GithubMergeData.Org,
+		patchDoc.GithubMergeData.Repo,
+		patchDoc.GithubMergeData.BaseBranch,
+		patchDoc.GithubMergeData.HeadSHA,
+		githubHeadPRURL,
+	)
+	baseAttrs = append(baseAttrs, attribute.String(patch.MergeQueueAttrPatchID, patchDoc.Id.Hex()))
+	ctx, span := tracer.Start(ctx, patch.MergeQueuePatchProcessingSpan,
+		trace.WithAttributes(baseAttrs...))
+	defer span.End()
+
 	projectRef, err := model.FindOneProjectRefWithCommitQueueByOwnerRepoAndBranch(ctx, patchDoc.GithubMergeData.Org,
 		patchDoc.GithubMergeData.Repo, patchDoc.GithubMergeData.BaseBranch)
 	if err != nil {
@@ -1116,6 +1132,8 @@ func (j *patchIntentProcessor) buildGithubMergeDoc(ctx context.Context, patchDoc
 		return errors.Errorf("project ref for repo '%s/%s' with branch '%s' and merge queue enabled not found",
 			patchDoc.GithubMergeData.Org, patchDoc.GithubMergeData.Repo, patchDoc.GithubMergeData.BaseBranch)
 	}
+
+	span.SetAttributes(attribute.String(patch.MergeQueueAttrProjectID, projectRef.Identifier))
 
 	j.user, err = findEvergreenUserForGithubMergeGroup(ctx)
 	if err != nil {
@@ -1513,7 +1531,7 @@ func (j *patchIntentProcessor) getEvergreenRulesForStatuses(ctx context.Context,
 // and returns the list of ignored variant names.
 func (j *patchIntentProcessor) filterOutIgnoredVariants(ctx context.Context, patchDoc *patch.Patch, patchedProject *model.Project) []string {
 	ignoredVariants := []string{}
-	if j.skipFilteringIgnoredVariants(ctx, patchDoc) {
+	if j.skipFilteringIgnoredVariants(ctx, patchDoc, patchedProject) {
 		return ignoredVariants
 	}
 
@@ -1569,11 +1587,16 @@ func (j *patchIntentProcessor) filterOutIgnoredVariants(ctx context.Context, pat
 
 // skipFilteringIgnoredVariants verifies that the patch should apply filtering, i.e. there are changed files,
 // this is a PR or merge queue patch, and path filtering for the merge queue is enabled.
-func (j *patchIntentProcessor) skipFilteringIgnoredVariants(ctx context.Context, patchDoc *patch.Patch) bool {
+func (j *patchIntentProcessor) skipFilteringIgnoredVariants(ctx context.Context, patchDoc *patch.Patch, patchedProject *model.Project) bool {
 	if !patchDoc.IsGithubPRPatch() && !patchDoc.IsMergeQueuePatch() {
 		return true
 	}
 	if patchDoc.IsMergeQueuePatch() {
+		// Check project-level setting first.
+		if patchedProject != nil && patchedProject.DisableMergeQueuePathFiltering {
+			return true
+		}
+		// Check global service flag.
 		flags, err := evergreen.GetServiceFlags(ctx)
 		if err != nil {
 			grip.Debug(message.WrapError(err, message.Fields{
@@ -1584,11 +1607,6 @@ func (j *patchIntentProcessor) skipFilteringIgnoredVariants(ctx context.Context,
 			return true
 		}
 		if flags.UseMergeQueuePathFilteringDisabled {
-			grip.Info(message.Fields{
-				"message":  "merge queue path filtering is disabled",
-				"patch_id": patchDoc.Id.Hex(),
-				"job":      j.ID(),
-			})
 			return true
 		}
 	}
