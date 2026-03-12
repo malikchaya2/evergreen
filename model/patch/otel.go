@@ -14,9 +14,10 @@ var tracer = otel.GetTracerProvider().Tracer(packageName)
 
 // OpenTelemetry span names for merge queue lifecycle events.
 const (
-	MergeQueueIntentCreatedSpan   = "merge_queue.intent_created"
-	MergeQueuePatchProcessingSpan = "merge_queue.patch_processing"
-	MergeQueuePatchCompletedSpan  = "merge_queue.patch_completed"
+	MergeQueueIntentCreatedSpan      = "merge_queue.intent_created"
+	MergeQueuePatchProcessingSpan    = "merge_queue.patch_processing"
+	MergeQueuePatchCompletedSpan     = "merge_queue.patch_completed"
+	MergeQueueDestroyedSpan = "merge_queue.destroyed"
 )
 
 // OpenTelemetry attribute keys for merge queue metrics.
