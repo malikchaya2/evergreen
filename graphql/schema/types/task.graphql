@@ -99,6 +99,12 @@ type Task {
   generatedBy: String
   generatedByName: String
   generateTask: Boolean
+  """
+  Raw JSON documents posted by the generate.tasks command for this task execution, if any.
+  Each element is one JSON file exactly as submitted by the agent (not merged into the project).
+  Empty when the task never posted generate.tasks data or it is no longer stored.
+  """
+  generateTasksJson: [String!]
   generator: Task
   hasTestResults: Boolean!
   hostId: String

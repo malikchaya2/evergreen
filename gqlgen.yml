@@ -879,6 +879,8 @@ models:
         resolver: true
       executionTasksFull:
         resolver: true
+      generateTasksJson:
+        resolver: true
       patchMetadata:
         resolver: true
       projectIdentifier:

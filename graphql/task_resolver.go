@@ -502,6 +502,30 @@ func (r *taskResolver) GeneratedByName(ctx context.Context, obj *restModel.APITa
 	return &name, nil
 }
 
+// GenerateTasksJSON is the field resolver for the generateTasksJson field.
+func (r *taskResolver) GenerateTasksJSON(ctx context.Context, obj *restModel.APITask) ([]string, error) {
+	if obj == nil || obj.Id == nil {
+		return nil, nil
+	}
+	taskID := utility.FromStringPtr(obj.Id)
+	exec := obj.Execution
+	dbTask, err := task.FindByIdExecution(ctx, taskID, &exec)
+	if err != nil {
+		return nil, InternalServerError.Send(ctx, fmt.Sprintf("finding task '%s' execution %d: %s", taskID, exec, err.Error()))
+	}
+	if dbTask == nil {
+		return nil, nil
+	}
+	files, err := task.GeneratedJSONFind(ctx, evergreen.GetEnvironment().Settings(), dbTask)
+	if err != nil {
+		return nil, InternalServerError.Send(ctx, fmt.Sprintf("loading generate.tasks JSON for task '%s': %s", taskID, err.Error()))
+	}
+	if len(files) == 0 {
+		return []string{}, nil
+	}
+	return files, nil
+}
+
 // Generator is the resolver for the generator field.
 func (r *taskResolver) Generator(ctx context.Context, obj *restModel.APITask) (*restModel.APITask, error) {
 	if obj.GeneratedBy == "" {
